@@ -1,0 +1,27 @@
+{
+  "name": "universal-geo-converter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Universal GIS / Geomatics / Survey / CAD / Mining conversion suite as a Chrome MV3 extension.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite build --watch --mode development",
+    "build": "vite build",
+    "package": "node scripts/package-extension.mjs",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^22.10.2",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.9"
+  }
+}
