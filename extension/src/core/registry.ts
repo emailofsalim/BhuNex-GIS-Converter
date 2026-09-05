@@ -786,6 +786,9 @@ export const FORMATS: FormatDef[] = [
     category: 'gis',
     dataKind: 'vector',
     support: { import: 'adapter', export: 'adapter' },
+    // FlatGeobuf is FlatBuffers-encoded; decoding it needs a generated schema
+    // reader that is not part of this build.
+    requiresWasm: T,
     supports2D: T,
     supports3D: T,
     supportsZ: T,

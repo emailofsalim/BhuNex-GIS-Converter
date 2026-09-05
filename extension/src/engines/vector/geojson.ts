@@ -111,10 +111,17 @@ export function readGeoJson(text: string, source: SourceInfo, options: ReadGeoJs
   const pushFeature = (raw: any, index: number): void => {
     if (!raw || typeof raw !== 'object') return;
     if (raw.type === 'Feature') {
+      const properties = raw.properties && typeof raw.properties === 'object' ? { ...raw.properties } : {};
       features.push({
         id: raw.id ?? index,
         geometry: readGeometry(raw.geometry, warnings),
-        properties: raw.properties && typeof raw.properties === 'object' ? { ...raw.properties } : {},
+        properties,
+        // Restore the CAD provenance this writer emits, so a DXF -> GeoJSON ->
+        // DXF trip keeps its layers, entity types and handles rather than
+        // collapsing onto one default layer.
+        sourceLayer: typeof properties._layer === 'string' ? properties._layer : undefined,
+        sourceEntity: typeof properties._srcEntity === 'string' ? properties._srcEntity : undefined,
+        sourceHandle: typeof properties._srcHandle === 'string' ? properties._srcHandle : undefined,
       });
       return;
     }

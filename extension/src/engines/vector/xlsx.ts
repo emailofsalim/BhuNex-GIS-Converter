@@ -195,6 +195,14 @@ export async function writeXlsx(dataset: CirDataset, options: WriteXlsxOptions):
   const decimals = options.precision.mode === 'full' ? 15 : geographic ? options.precision.geographicDecimals : options.precision.linearDecimals;
   const elevationDecimals = options.precision.mode === 'full' ? 15 : options.precision.elevationDecimals;
 
+  // A table converted to a table passes through verbatim. Routing it via point
+  // geometry would silently drop every column that is not a coordinate.
+  if (dataset.layers.length === 0 && dataset.table) {
+    const header = dataset.table.columns.map((column) => column.name);
+    const rows: (string | number | null)[][] = dataset.table.hasHeader ? [header, ...dataset.table.rows] : [header, ...dataset.table.rows];
+    return { bytes: await buildXlsxPackage(options.sheetName ?? 'Coordinates', rows), warnings };
+  }
+
   const features = dataset.layers.flatMap((layer) => layer.features);
   const allFields = deriveFields(features);
   const fields = options.fields ? allFields.filter((field) => options.fields!.includes(field.name)) : allFields;

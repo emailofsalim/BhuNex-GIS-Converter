@@ -1,0 +1,847 @@
+/**
+ * The conversion pipeline — the one place readers and writers are dispatched.
+ *
+ *   INGEST -> DETECT -> READ (CIR) -> TRANSFORM -> WRITE -> RE-IMPORT -> QA
+ *
+ * Every reader returns a CirDataset and every writer consumes one, so adding a
+ * format means adding two entries here and nothing else. Keeping the dispatch in
+ * one module is also what makes the honesty rules enforceable: the CRS gate, the
+ * decimation notice and the QA re-import all sit on the single path that every
+ * conversion takes.
+ */
+
+import {
+  collapseWarnings,
+  warn,
+  type CirDataset,
+  type CrsRef,
+  type SourceInfo,
+  type Warning,
+} from './cir';
+import { detectFormat, type DetectionResult } from './detect';
+import { ConversionError, asConversionError } from './errors';
+import { featuresBounds } from './geometry';
+import { sha256Hex } from './hash';
+import { buildOutputName, extensionOf, type NamingOptions } from './naming';
+import { SURVEY_DEFAULT_PRECISION, type PrecisionPolicy } from './precision';
+import { getFormat, type FormatDef } from './registry';
+import { crsLabel, planTransform, resolveSourceCrs, suggestCrs, transformDataset } from '../crs/transform';
+import { readZip, writeZip, type ZipInput } from '../engines/archives/zip';
+import { readDxf, type ReadDxfOptions } from '../engines/cad/dxf-read';
+import { DEFAULT_DXF_OPTIONS, writeDxf, type WriteDxfOptions } from '../engines/cad/dxf-write';
+import { applyDecimation, type DecimationSettings, type PointFilter } from '../engines/pointcloud/decimate';
+import { DEFAULT_LAS_OPTIONS, readLas, writeLas, type WriteLasOptions } from '../engines/pointcloud/las';
+import {
+  DEFAULT_TEXT_CLOUD_OPTIONS,
+  readPly,
+  readPts,
+  readXyzCloud,
+  writePly,
+  writePts,
+  writeXyzCloud,
+  type WriteTextCloudOptions,
+} from '../engines/pointcloud/text';
+import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
+import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
+import { readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
+import { decodeText, encodeText, sourceInfo } from '../engines/shared';
+import { DEFAULT_CSV_OPTIONS, readCsvTable, tableToPoints, writeCsv, type WriteCsvOptions } from '../engines/vector/csv';
+import { readGeoJson, writeGeoJson } from '../engines/vector/geojson';
+import { readGml, writeGml } from '../engines/vector/gml';
+import { DEFAULT_GPX_OPTIONS, readGpx, writeGpx, type WriteGpxOptions } from '../engines/vector/gpx';
+import { DEFAULT_KML_OPTIONS, readKml, readKmz, writeKml, writeKmz, type WriteKmlOptions } from '../engines/vector/kml';
+import { readLandXml, writeLandXml } from '../engines/vector/landxml';
+import { readMifMid, writeMifMid } from '../engines/vector/mifmid';
+import { readOsm } from '../engines/vector/osm';
+import { readShapefile, writeShapefileZip, type WriteShapefileOptions } from '../engines/vector/shapefile';
+import { readSurpacStr, writeSurpacStr } from '../engines/vector/surpac';
+import { readTopoJson, writeTopoJson } from '../engines/vector/topojson';
+import { readWkb, writeWkb } from '../engines/vector/wkb';
+import { readWkt, writeWkt } from '../engines/vector/wkt';
+import { readXlsx, writeXlsx } from '../engines/vector/xlsx';
+import { parsePrj, buildPrj } from '../crs/wkt';
+import {
+  compareVector,
+  comparePointCloud,
+  compareRaster,
+  notValidated,
+  type FidelityReport,
+} from '../qa/fidelity';
+import { DEFAULT_REPAIR_OPTIONS, repairTopology, type RepairOptions } from '../qa/topology';
+
+/** One file, with any companions the grouper attached. */
+export interface ConversionInput {
+  fileName: string;
+  bytes: Uint8Array;
+  mimeType?: string;
+  /** Extension -> bytes, e.g. 'dbf', 'prj', 'shx', 'mid', 'tfw'. */
+  companions?: Map<string, Uint8Array>;
+  siblingExtensions?: string[];
+}
+
+export interface ConversionSettings {
+  precision: PrecisionPolicy;
+  /** Source CRS the user selected, used only when the file declares none. */
+  sourceCrs?: CrsRef | null;
+  targetCrs?: CrsRef | null;
+  preserveZ: boolean;
+  naming: NamingOptions;
+  repair: RepairOptions;
+  runQa: boolean;
+  arcTolerance?: number;
+  decimation?: DecimationSettings;
+  pointFilter?: PointFilter;
+  dxf?: Partial<WriteDxfOptions>;
+  kml?: Partial<WriteKmlOptions>;
+  gpx?: Partial<WriteGpxOptions>;
+  csv?: Partial<WriteCsvOptions>;
+  shapefile?: Partial<WriteShapefileOptions>;
+  las?: Partial<WriteLasOptions>;
+  textCloud?: Partial<WriteTextCloudOptions>;
+  /** Attach a provenance record to the output package. */
+  embedMetadata?: boolean;
+}
+
+export const DEFAULT_SETTINGS: ConversionSettings = {
+  precision: SURVEY_DEFAULT_PRECISION,
+  preserveZ: true,
+  naming: { pattern: 'converted-to' },
+  repair: DEFAULT_REPAIR_OPTIONS,
+  runQa: true,
+};
+
+export interface OutputFile {
+  name: string;
+  bytes: Uint8Array;
+  mimeType: string;
+}
+
+export interface ConversionResult {
+  input: ConversionInput;
+  detection: DetectionResult;
+  sourceDataset: CirDataset;
+  outputs: OutputFile[];
+  warnings: Warning[];
+  qa: FidelityReport;
+  provenance: {
+    sourceFile: string;
+    sha256: string;
+    sourceFormat: string;
+    detectionConfidence: number;
+    sourceCrs: string;
+    targetCrs: string;
+    targetFormat: string;
+    engineVersion: string;
+    startedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    featureCount: number;
+  };
+}
+
+const ENGINE_VERSION = '1.0.0';
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  geojson: 'application/geo+json',
+  json: 'application/json',
+  geojsonl: 'application/geo+json-seq',
+  topojson: 'application/json',
+  kml: 'application/vnd.google-earth.kml+xml',
+  kmz: 'application/vnd.google-earth.kmz',
+  gpx: 'application/gpx+xml',
+  gml: 'application/gml+xml',
+  dxf: 'image/vnd.dxf',
+  csv: 'text/csv',
+  txt: 'text/plain',
+  xyz: 'text/plain',
+  pts: 'text/plain',
+  ply: 'application/octet-stream',
+  las: 'application/octet-stream',
+  wkt: 'text/plain',
+  wkb: 'application/octet-stream',
+  asc: 'text/plain',
+  zip: 'application/zip',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  str: 'text/plain',
+  xml: 'application/xml',
+  prj: 'text/plain',
+  points: 'text/csv',
+};
+
+/** Extension a writer produces for a format id. */
+export function outputExtensionFor(formatId: string): string {
+  const format = getFormat(formatId);
+  if (!format) return 'dat';
+  if (format.packaging === 'zip' && format.id !== 'kmz') return 'zip';
+  return format.extensions[0];
+}
+
+// ---------------------------------------------------------------------- read
+
+/**
+ * Reads a source file into the CIR.
+ *
+ * Companion bytes are passed through to the readers that need them, which is why
+ * the grouper runs before this and not inside it.
+ */
+export async function readSource(input: ConversionInput, detection: DetectionResult, settings: ConversionSettings): Promise<CirDataset> {
+  const info: SourceInfo = {
+    ...sourceInfo(input.fileName, input.bytes.length, detection.formatId, detection.formatName, detection.confidence),
+    companions: input.companions ? [...input.companions.keys()] : undefined,
+  };
+  const companion = (extension: string): Uint8Array | undefined => input.companions?.get(extension);
+  const companionText = (extension: string): string | undefined => {
+    const bytes = companion(extension);
+    return bytes ? decodeText(bytes) : undefined;
+  };
+
+  switch (detection.formatId) {
+    case 'geojson':
+      return readGeoJson(decodeText(input.bytes), info);
+    case 'geojsonseq':
+      return readGeoJson(decodeText(input.bytes), info, { sequence: true });
+    case 'topojson':
+      return readTopoJson(decodeText(input.bytes), info);
+    case 'kml':
+      return readKml(decodeText(input.bytes), info);
+    case 'kmz':
+      return readKmz(input.bytes, info);
+    case 'gpx':
+      return readGpx(decodeText(input.bytes), info);
+    case 'gml':
+      return readGml(decodeText(input.bytes), info);
+    case 'osm':
+      return readOsm(decodeText(input.bytes), info);
+    case 'landxml':
+      return readLandXml(decodeText(input.bytes), info);
+    case 'wkt':
+      return readWkt(decodeText(input.bytes), info);
+    case 'wkb':
+      return readWkb(input.bytes, info);
+    case 'surpac-str':
+      return readSurpacStr(decodeText(input.bytes), info);
+    case 'mifmid':
+      return readMifMid(decodeText(input.bytes), companionText('mid'), info);
+    case 'shapefile':
+      return readShapefile(
+        { shp: input.bytes, dbf: companion('dbf'), shx: companion('shx'), prj: companionText('prj'), cpg: companionText('cpg') },
+        info
+      );
+    case 'dxf':
+      return readDxf(decodeText(input.bytes), info, {
+        arcTolerance: settings.arcTolerance,
+      } satisfies ReadDxfOptions);
+    case 'csv':
+      return readCsvTable(decodeText(input.bytes), info);
+    case 'xlsx':
+      return readXlsx(input.bytes, info);
+    case 'las':
+      return readLas(input.bytes, info, { prjText: companionText('prj') });
+    case 'laz':
+      // The LAS reader recognises the compression flag and refuses with the
+      // header intact; routing here keeps that single honest failure path.
+      return readLas(input.bytes, info, { prjText: companionText('prj') });
+    case 'xyz':
+      return readXyzCloud(input.bytes, info);
+    case 'pts':
+      return readPts(input.bytes, info);
+    case 'ply':
+      return readPly(input.bytes, info);
+    case 'asciigrid':
+      return readAsciiGrid(input.bytes, info, companionText('prj'));
+    case 'geotiff':
+      return readGeoTiff(input.bytes, info, {
+        worldFileText: companionText('tfw') ?? companionText('wld'),
+        prjText: companionText('prj'),
+      });
+    case 'prj': {
+      const parsed = parsePrj(decodeText(input.bytes));
+      return {
+        kind: 'sidecar',
+        name: input.fileName,
+        source: info,
+        crs: parsed.crs,
+        crsOrigin: parsed.crs ? 'declared' : 'unknown',
+        units: null,
+        axisOrder: 'xy',
+        vertical: { kind: 'unknown' },
+        layers: [],
+        warnings: parsed.crs
+          ? []
+          : [
+              warn('PRJ_UNRESOLVED', 'The projection file could not be resolved to a known CRS.', {
+                reason: 'Its WKT names a projection outside the bundled set.',
+                action: 'Use the CRS panel to enter an EPSG code or a PROJ string instead.',
+              }),
+            ],
+        metadata: { wkt: parsed.wkt },
+      };
+    }
+    case 'gcp-points': {
+      const { gcps, warnings } = readGcpPoints(decodeText(input.bytes));
+      return {
+        kind: 'vector',
+        name: input.fileName,
+        source: info,
+        crs: null,
+        crsOrigin: 'unknown',
+        units: null,
+        axisOrder: 'xy',
+        vertical: { kind: 'unknown' },
+        layers: [
+          {
+            name: 'Ground control points',
+            fields: [],
+            geometryTypes: ['Point'],
+            features: gcps.map((gcp, index) => ({
+              id: index + 1,
+              geometry: { type: 'Point' as const, coordinates: [gcp.mapX, gcp.mapY], dimension: 2 as const },
+              properties: { pixel_x: gcp.pixelX, pixel_y: gcp.pixelY, enabled: gcp.enabled },
+            })),
+          },
+        ],
+        warnings,
+      };
+    }
+    case 'zip':
+      throw new ConversionError({
+        code: 'ARCHIVE_NEEDS_EXPANSION',
+        what: 'A ZIP archive cannot be converted directly.',
+        why: 'It may hold several datasets, each needing its own target format.',
+        action: 'Use "Expand archive" in the queue to add its contents as separate items.',
+      });
+    case 'dwg':
+    case 'dgn':
+    case 'geopackage':
+    case 'flatgeobuf':
+    case 'geoparquet':
+    case 'filegdb':
+    case 'e57': {
+      const format = getFormat(detection.formatId)!;
+      throw new ConversionError({
+        code: 'FORMAT_REQUIRES_ADAPTER',
+        what: `${format.name} needs an engine that is not bundled with the extension.`,
+        why: format.requiresNative
+          ? 'It requires the local native helper, which is either not installed or not reachable.'
+          : 'It requires a WebAssembly engine that is not part of this build.',
+        action: format.id === 'dwg' ? 'Install the native helper (see docs/NATIVE_HOST.md), or convert the DWG to DXF first.' : 'Convert the file with QGIS or GDAL, then bring the result here.',
+      });
+    }
+    default:
+      throw new ConversionError({
+        code: 'FORMAT_NOT_READABLE',
+        what: `No reader is available for "${detection.formatName}".`,
+        why: detection.formatId === 'unknown' ? 'The file did not match any known format signature.' : 'This format is registered but has no import engine.',
+        action: 'Confirm the format in the inspector, or convert the file to GeoJSON, DXF, CSV or Shapefile first.',
+      });
+  }
+}
+
+// --------------------------------------------------------------------- write
+
+interface WriteOutcome {
+  files: OutputFile[];
+  warnings: Warning[];
+}
+
+async function writeTarget(dataset: CirDataset, targetId: string, baseName: string, settings: ConversionSettings): Promise<WriteOutcome> {
+  const precision = settings.precision;
+  const extension = outputExtensionFor(targetId);
+  const name = `${baseName}.${extension}`;
+  const mime = MIME_BY_EXTENSION[extension] ?? 'application/octet-stream';
+  const text = (body: string): OutputFile => ({ name, bytes: encodeText(body), mimeType: mime });
+  const binary = (bytes: Uint8Array): OutputFile => ({ name, bytes, mimeType: mime });
+
+  switch (targetId) {
+    case 'geojson': {
+      const { text: body, warnings } = writeGeoJson(dataset, { precision, indent: 2, includeCrsMember: true });
+      return { files: [text(body)], warnings };
+    }
+    case 'geojsonseq': {
+      const { text: body, warnings } = writeGeoJson(dataset, { precision, sequence: true });
+      return { files: [text(body)], warnings };
+    }
+    case 'topojson': {
+      const { text: body, warnings } = writeTopoJson(dataset, { precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'kml': {
+      const { text: body, warnings } = writeKml(dataset, { ...DEFAULT_KML_OPTIONS, ...settings.kml, precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'kmz': {
+      const { bytes, warnings } = await writeKmz(dataset, { ...DEFAULT_KML_OPTIONS, ...settings.kml, precision });
+      return { files: [binary(bytes)], warnings };
+    }
+    case 'gpx': {
+      const { text: body, warnings } = writeGpx(dataset, { ...DEFAULT_GPX_OPTIONS, ...settings.gpx, precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'gml': {
+      const { text: body, warnings } = writeGml(dataset, { precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'landxml': {
+      const { text: body, warnings } = writeLandXml(dataset, { precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'wkt': {
+      const { text: body, warnings } = writeWkt(dataset, { precision, includeSrid: true });
+      return { files: [text(body)], warnings };
+    }
+    case 'wkb': {
+      const { bytes, warnings } = writeWkb(dataset, { precision, includeSrid: true });
+      return { files: [binary(bytes)], warnings };
+    }
+    case 'surpac-str': {
+      const { text: body, warnings } = writeSurpacStr(dataset, { precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'dxf': {
+      const { text: body, warnings } = writeDxf(dataset, {
+        ...DEFAULT_DXF_OPTIONS,
+        unit: (dataset.units as WriteDxfOptions['unit']) ?? 'm',
+        preserveZ: settings.preserveZ,
+        ...settings.dxf,
+        precision,
+      });
+      return { files: [text(body)], warnings };
+    }
+    case 'csv': {
+      const { text: body, warnings } = writeCsv(dataset, { ...DEFAULT_CSV_OPTIONS, ...settings.csv, precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'xlsx': {
+      const { bytes, warnings } = await writeXlsx(dataset, { precision });
+      return { files: [binary(bytes)], warnings };
+    }
+    case 'shapefile': {
+      const { bytes, warnings } = await writeShapefileZip(dataset, {
+        layerName: baseName,
+        preserveZ: settings.preserveZ,
+        encoding: 'utf-8',
+        ...settings.shapefile,
+        precision,
+      });
+      return { files: [binary(bytes)], warnings };
+    }
+    case 'mifmid': {
+      const { mif, mid, warnings } = writeMifMid(dataset, { precision, layerName: baseName });
+      const bytes = await writeZip([
+        { name: `${baseName}.mif`, bytes: encodeText(mif) },
+        { name: `${baseName}.mid`, bytes: encodeText(mid) },
+      ]);
+      return { files: [binary(bytes)], warnings };
+    }
+    case 'las': {
+      const { bytes, warnings } = writeLas(dataset, { ...DEFAULT_LAS_OPTIONS, ...settings.las });
+      return { files: [binary(bytes)], warnings };
+    }
+    case 'xyz': {
+      const { text: body, warnings } = writeXyzCloud(dataset, { ...DEFAULT_TEXT_CLOUD_OPTIONS, ...settings.textCloud, precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'pts': {
+      const { text: body, warnings } = writePts(dataset, { ...DEFAULT_TEXT_CLOUD_OPTIONS, ...settings.textCloud, precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'ply': {
+      const { text: body, warnings } = writePly(dataset, { ...DEFAULT_TEXT_CLOUD_OPTIONS, ...settings.textCloud, precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'asciigrid': {
+      const { text: body, warnings } = writeAsciiGrid(dataset, { precision });
+      return { files: [text(body)], warnings };
+    }
+    case 'worldfile': {
+      const geotransform = dataset.raster?.geotransform;
+      if (!geotransform) {
+        throw new ConversionError({
+          code: 'WORLDFILE_NO_GEOREFERENCE',
+          what: 'No world file could be written.',
+          why: 'The source raster carries no georeference, so there is no affine transform to write.',
+          action: 'Georeference the image in QGIS first, or supply ground control points.',
+        });
+      }
+      const { buildWorldFile } = await import('../engines/raster/worldfile');
+      return { files: [text(buildWorldFile(geotransform))], warnings: [] };
+    }
+    case 'gcp-points': {
+      const gcps = dataset.layers
+        .flatMap((layer) => layer.features)
+        .filter((feature) => feature.geometry?.type === 'Point')
+        .map((feature, index) => ({
+          mapX: (feature.geometry!.coordinates as number[])[0],
+          mapY: (feature.geometry!.coordinates as number[])[1],
+          pixelX: Number(feature.properties?.pixel_x ?? index),
+          pixelY: Number(feature.properties?.pixel_y ?? 0),
+          enabled: feature.properties?.enabled !== false,
+        }));
+      return { files: [text(writeGcpPoints(gcps))], warnings: [] };
+    }
+    case 'prj': {
+      const wkt = buildPrj(dataset.crs);
+      if (!wkt) {
+        throw new ConversionError({
+          code: 'PRJ_NO_CRS',
+          what: 'No projection file could be written.',
+          why: 'The dataset has no declared CRS, and writing a .prj for an unknown CRS would assert a projection the data may not use.',
+          action: 'Select a source or target CRS first.',
+        });
+      }
+      return { files: [text(wkt)], warnings: [] };
+    }
+    default: {
+      const format = getFormat(targetId);
+      throw new ConversionError({
+        code: 'TARGET_NOT_WRITABLE',
+        what: `No writer is available for "${format?.name ?? targetId}".`,
+        why: format?.support.export === 'adapter' ? 'This format needs an engine that is not bundled.' : 'This format is registered for import only.',
+        action: 'Choose GeoJSON, DXF, Shapefile, KML, CSV or LAS as the target.',
+      });
+    }
+  }
+}
+
+// -------------------------------------------------------------------- convert
+
+/**
+ * Prepares a source dataset for a target: resolves the CRS, applies decimation
+ * and repair, and turns a coordinate table into geometry when the target needs
+ * it. Extracted so QA's re-import path can reuse it exactly.
+ */
+function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSettings): { dataset: CirDataset; warnings: Warning[] } {
+  const warnings: Warning[] = [];
+  let working = dataset;
+
+  // A coordinate table only becomes geometry once its columns are mapped.
+  if (working.kind === 'table' && target.dataKind === 'vector') {
+    const converted = tableToPoints(working);
+    working = converted.dataset;
+    warnings.push(...converted.warnings);
+  }
+
+  if (working.pointcloud && (settings.decimation || settings.pointFilter)) {
+    const decimated = applyDecimation(working, settings.decimation ?? { mode: 'none' }, settings.pointFilter);
+    working = decimated.dataset;
+    warnings.push(...decimated.warnings);
+  }
+
+  if (working.layers.length > 0) {
+    const repaired = repairTopology(working, settings.repair);
+    working = repaired.dataset;
+    warnings.push(...repaired.warnings);
+  }
+
+  // CRS gate. An unknown source CRS blocks a transform rather than guessing one
+  // (rule R4); a conversion that keeps the source CRS is allowed to proceed.
+  if (settings.targetCrs) {
+    const suggestion = working.crs ? undefined : suggestCrs(featuresBounds(working.layers.flatMap((layer) => layer.features)));
+    const resolved = resolveSourceCrs({ declared: working.crs, user: settings.sourceCrs, suggestion });
+    if (resolved.blocked) {
+      throw new ConversionError({
+        code: 'CRS_REQUIRED',
+        what: `A transform to ${crsLabel(settings.targetCrs)} was requested, but the source CRS is unknown.`,
+        why: resolved.message ?? 'The file declares no CRS and the coordinates are ambiguous.',
+        action: 'Choose the source CRS in the CRS panel. The extension will not guess it — the same easting is valid in every UTM zone.',
+      });
+    }
+    if (resolved.origin === 'user' || resolved.origin === 'inferred') {
+      working = { ...working, crs: resolved.crs, crsOrigin: resolved.origin };
+      warnings.push(
+        warn('CRS_SELECTED', `Source CRS was not declared by the file; ${crsLabel(resolved.crs)} was used (${resolved.origin}).`, {
+          severity: 'info',
+          reason: resolved.origin === 'user' ? 'You selected this CRS in the conversion settings.' : 'It was inferred from the coordinate ranges.',
+          action: 'This selection is recorded in the conversion manifest.',
+        })
+      );
+    }
+    const plan = planTransform(working.crs, settings.targetCrs);
+    if (!plan.identity) {
+      working = transformDataset(working, settings.targetCrs);
+      warnings.push(...plan.warnings);
+      warnings.push(
+        warn('CRS_TRANSFORMED', `Coordinates were transformed from ${crsLabel(plan.from)} to ${crsLabel(plan.to)}.`, {
+          severity: 'info',
+          reason: 'A target CRS was set in the conversion settings.',
+        })
+      );
+    }
+  } else if (settings.sourceCrs && !working.crs) {
+    working = { ...working, crs: settings.sourceCrs, crsOrigin: 'user' };
+  }
+
+  // KML and GPX are WGS 84 by definition; converting to them without a target
+  // CRS would write projected metres into a lat/lon container.
+  if ((target.id === 'kml' || target.id === 'kmz' || target.id === 'gpx') && working.crs && working.crs.kind !== 'geographic') {
+    throw new ConversionError({
+      code: 'TARGET_REQUIRES_WGS84',
+      what: `${target.name} stores WGS 84 longitude and latitude, but the data is in ${crsLabel(working.crs)}.`,
+      why: 'Writing projected coordinates into a geographic container would place the geometry in the wrong part of the world.',
+      action: 'Set the target CRS to WGS 84 (EPSG:4326) in the CRS panel, then convert again.',
+    });
+  }
+
+  return { dataset: working, warnings };
+}
+
+export interface ConvertOptions {
+  input: ConversionInput;
+  targetFormatId: string;
+  settings?: Partial<ConversionSettings>;
+  /** Overrides detection when the user confirmed a different format. */
+  forcedSourceFormatId?: string;
+}
+
+export async function convert(options: ConvertOptions): Promise<ConversionResult> {
+  const settings: ConversionSettings = { ...DEFAULT_SETTINGS, ...options.settings };
+  const startedAt = new Date();
+  const { input } = options;
+
+  const detection = options.forcedSourceFormatId
+    ? {
+        formatId: options.forcedSourceFormatId,
+        formatName: getFormat(options.forcedSourceFormatId)?.name ?? options.forcedSourceFormatId,
+        confidence: 1,
+        evidence: [{ layer: 'user', weight: 1, note: 'Format confirmed by the user.' }],
+        alternatives: [],
+        requiresConfirmation: false,
+      }
+    : detectFormat({
+        fileName: input.fileName,
+        bytes: input.bytes,
+        mimeType: input.mimeType,
+        siblings: input.siblingExtensions,
+      });
+
+  if (detection.requiresConfirmation) {
+    throw new ConversionError({
+      code: 'FORMAT_UNCONFIRMED',
+      what: `The source format could not be identified with confidence (best guess: ${detection.formatName}, ${(detection.confidence * 100).toFixed(0)}%).`,
+      why: 'Detection combines extension, signature, header and content evidence; none of them agreed strongly enough here.',
+      action: 'Pick the source format in the inspector to confirm it, then convert again.',
+    });
+  }
+
+  const target = getFormat(options.targetFormatId);
+  if (!target) {
+    throw new ConversionError({
+      code: 'TARGET_UNKNOWN',
+      what: `"${options.targetFormatId}" is not a known target format.`,
+      why: 'It is not present in the format registry.',
+      action: 'Choose a target from the format picker.',
+    });
+  }
+
+  const warnings: Warning[] = [];
+  let sourceDataset: CirDataset;
+  try {
+    sourceDataset = await readSource(input, detection, settings);
+  } catch (error) {
+    throw asConversionError(error, {
+      code: 'SOURCE_READ_FAILED',
+      action: 'Check the file in the inspector, or confirm the source format if detection was wrong.',
+    });
+  }
+  warnings.push(...sourceDataset.warnings);
+
+  const prepared = prepare(sourceDataset, target, settings);
+  warnings.push(...prepared.warnings);
+
+  const baseName = buildOutputName(input.fileName, target.id, '', settings.naming).replace(/\.$/, '');
+  const written = await writeTarget(prepared.dataset, target.id, baseName, settings);
+  warnings.push(...written.warnings);
+
+  // ---- QA: re-import the bytes just written and compare.
+  let qa: FidelityReport;
+  if (!settings.runQa) {
+    qa = notValidated('QA was switched off in the conversion settings.');
+  } else {
+    qa = await runQa(prepared.dataset, written.files, target, settings);
+  }
+
+  const finishedAt = new Date();
+  const outputs = [...written.files];
+
+  if (settings.embedMetadata) {
+    outputs.push({
+      name: `${baseName}.provenance.json`,
+      bytes: encodeText(
+        JSON.stringify(
+          {
+            sourceFile: input.fileName,
+            sourceFormat: detection.formatName,
+            detectionConfidence: Number(detection.confidence.toFixed(3)),
+            sourceCrs: crsLabel(sourceDataset.crs),
+            targetCrs: crsLabel(prepared.dataset.crs),
+            targetFormat: target.name,
+            engineVersion: ENGINE_VERSION,
+            convertedAt: finishedAt.toISOString(),
+            qaVerdict: qa.verdict,
+            warnings: collapseWarnings(warnings).map((warning) => ({ code: warning.code, message: warning.message, count: warning.count })),
+          },
+          null,
+          2
+        )
+      ),
+      mimeType: 'application/json',
+    });
+  }
+
+  return {
+    input,
+    detection,
+    sourceDataset,
+    outputs,
+    warnings: collapseWarnings(warnings),
+    qa,
+    provenance: {
+      sourceFile: input.fileName,
+      sha256: await sha256Hex(input.bytes),
+      sourceFormat: detection.formatName,
+      detectionConfidence: detection.confidence,
+      sourceCrs: crsLabel(sourceDataset.crs),
+      targetCrs: crsLabel(prepared.dataset.crs),
+      targetFormat: target.name,
+      engineVersion: ENGINE_VERSION,
+      startedAt: startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      durationMs: finishedAt.getTime() - startedAt.getTime(),
+      featureCount: prepared.dataset.layers.reduce((sum, layer) => sum + layer.features.length, 0),
+    },
+  };
+}
+
+/**
+ * Re-imports the written output and compares it with the source.
+ *
+ * A packaged target (Shapefile, MIF/MID) is unzipped first so the reader sees
+ * the same files a recipient would.
+ */
+async function runQa(
+  source: CirDataset,
+  files: OutputFile[],
+  target: FormatDef,
+  settings: ConversionSettings
+): Promise<FidelityReport> {
+  if (target.support.import === 'none' || target.support.import === 'adapter') {
+    return notValidated(`${target.name} has no reader in this build, so the output could not be re-imported and checked.`);
+  }
+
+  try {
+    const primary = files[0];
+    let reimportInput: ConversionInput;
+
+    if (target.packaging === 'zip' && target.id !== 'kmz') {
+      const entries = await readZip(primary.bytes);
+      const main = entries.find((entry) => entry.name.toLowerCase().endsWith(`.${target.extensions[0]}`));
+      if (!main) return notValidated('The output package did not contain a readable primary file.');
+      const companions = new Map<string, Uint8Array>();
+      for (const entry of entries) {
+        if (entry === main) continue;
+        companions.set(extensionOf(entry.name), entry.bytes);
+      }
+      reimportInput = { fileName: main.name, bytes: main.bytes, companions };
+    } else {
+      reimportInput = { fileName: primary.name, bytes: primary.bytes };
+    }
+
+    const detection = detectFormat({ fileName: reimportInput.fileName, bytes: reimportInput.bytes });
+    // Trust the target id over detection here: the file was just written by this
+    // very writer, so its identity is known even if the sniffer is unsure.
+    const reimported = await readSource(reimportInput, { ...detection, formatId: target.id, formatName: target.name, confidence: 1, requiresConfirmation: false }, settings);
+
+    if (source.pointcloud) return comparePointCloud(source, reimported);
+    if (source.raster) return compareRaster(source, reimported);
+    const prepared = source.kind === 'table' ? tableToPoints(source).dataset : source;
+    return compareVector(prepared, reimported, {
+      coordinateTolerance: settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.linearDecimals, 6),
+      // Shapefile splits mixed geometry across files, so the count legitimately
+      // differs on re-import of the primary one.
+      allowFeatureCountChange: target.id === 'shapefile' || target.id === 'csv' || target.id === 'xlsx',
+    });
+  } catch (error) {
+    return notValidated(`Re-import failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** Bundles a batch's outputs into one ZIP alongside its manifest. */
+export async function packageBatch(results: ConversionResult[]): Promise<{ zip: Uint8Array; manifestCsv: string; manifestJson: string }> {
+  const files: ZipInput[] = [];
+  const used = new Set<string>();
+  for (const result of results) {
+    for (const output of result.outputs) {
+      let name = output.name;
+      let index = 2;
+      while (used.has(name)) {
+        const dot = output.name.lastIndexOf('.');
+        name = dot > 0 ? `${output.name.slice(0, dot)}_${index}${output.name.slice(dot)}` : `${output.name}_${index}`;
+        index++;
+      }
+      used.add(name);
+      files.push({ name, bytes: output.bytes });
+    }
+  }
+
+  const columns = [
+    'source_file',
+    'source_format',
+    'detection_confidence',
+    'target_file',
+    'target_format',
+    'source_crs',
+    'target_crs',
+    'features',
+    'output_bytes',
+    'status',
+    'qa_verdict',
+    'warnings',
+    'engine_version',
+    'sha256',
+    'converted_at',
+    'duration_ms',
+  ];
+  const rows = results.map((result) => [
+    result.provenance.sourceFile,
+    result.provenance.sourceFormat,
+    result.provenance.detectionConfidence.toFixed(3),
+    result.outputs.map((output) => output.name).join(' | '),
+    result.provenance.targetFormat,
+    result.provenance.sourceCrs,
+    result.provenance.targetCrs,
+    String(result.provenance.featureCount),
+    String(result.outputs.reduce((sum, output) => sum + output.bytes.length, 0)),
+    'converted',
+    result.qa.verdict,
+    result.warnings.map((warning) => warning.code).join(' '),
+    result.provenance.engineVersion,
+    result.provenance.sha256,
+    result.provenance.finishedAt,
+    String(result.provenance.durationMs),
+  ]);
+
+  const quote = (value: string) => (value.includes(',') || value.includes('"') ? `"${value.replace(/"/g, '""')}"` : value);
+  const manifestCsv = [columns.join(','), ...rows.map((row) => row.map(quote).join(','))].join('\n') + '\n';
+  const manifestJson = JSON.stringify(
+    results.map((result) => ({ ...result.provenance, qa: result.qa.verdict, outputs: result.outputs.map((output) => output.name), warnings: result.warnings })),
+    null,
+    2
+  );
+
+  files.push({ name: 'conversion-manifest.csv', bytes: encodeText(manifestCsv) });
+  files.push({ name: 'conversion-manifest.json', bytes: encodeText(manifestJson) });
+
+  return { zip: await writeZip(files), manifestCsv, manifestJson };
+}
+
+/** Expands an archive into individual conversion inputs. */
+export async function expandArchive(input: ConversionInput): Promise<ConversionInput[]> {
+  const entries = await readZip(input.bytes);
+  return entries.map((entry) => ({
+    fileName: entry.name,
+    bytes: entry.bytes,
+    siblingExtensions: entries.map((sibling) => extensionOf(sibling.name)),
+  }));
+}
+
+export { rasterFootprint };

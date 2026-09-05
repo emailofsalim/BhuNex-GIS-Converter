@@ -9,6 +9,10 @@
 
 import { FORMATS, formatsForExtension, getFormat, type FormatDef } from './registry';
 import { extensionOf } from './naming';
+// Detection needs domain knowledge to tell a survey coordinate table from any
+// other delimited file, so it borrows the alias matcher rather than keeping a
+// second copy of the column-name vocabulary.
+import { matchHeaders } from '../engines/survey/schema';
 
 /** Computed once: the signature scan runs on every dropped file. */
 const FORMATS_WITH_MAGIC = FORMATS.filter((format) => format.magic);
@@ -41,17 +45,40 @@ export interface DetectionResult {
 export const CONFIRM_THRESHOLD = 0.6;
 export const AUTO_THRESHOLD = 0.9;
 
+/**
+ * Per-layer confidence that the layer alone is right.
+ *
+ * These are combined with noisy-OR (see `combine`) rather than summed, so
+ * independent agreeing layers reinforce without any layer being able to exceed
+ * certainty on its own. The values reflect real diagnostic strength: a verified
+ * binary header is close to conclusive, an extension is barely evidence at all.
+ */
 const WEIGHTS = {
-  extension: 0.2,
-  mime: 0.1,
-  magic: 0.45,
-  header: 0.4,
-  xmlRoot: 0.4,
-  jsonShape: 0.4,
-  binaryProbe: 0.35,
-  textHeuristic: 0.25,
-  companion: 0.15,
+  extension: 0.35,
+  mime: 0.2,
+  magic: 0.5,
+  header: 0.85,
+  xmlRoot: 0.8,
+  jsonShape: 0.85,
+  binaryProbe: 0.85,
+  textHeuristic: 0.55,
+  /** A delimited table whose header names survey coordinate columns. */
+  surveyHeader: 0.5,
+  companion: 0.25,
 } as const;
+
+/**
+ * Noisy-OR: P(any layer is right) = 1 - Π(1 - P(layer)).
+ *
+ * Two independent layers at 0.5 give 0.75, three give 0.875 — which is how
+ * agreeing evidence should behave. A linear sum would need an arbitrary
+ * normalisation constant and would let one strong layer saturate the score.
+ */
+function combine(weights: number[]): number {
+  let miss = 1;
+  for (const weight of weights) miss *= 1 - Math.max(0, Math.min(0.99, weight));
+  return 1 - miss;
+}
 
 /** Decodes the leading bytes as UTF-8 for the text layers. */
 function headText(bytes: Uint8Array, limit = 8192): string {
@@ -71,20 +98,30 @@ function matchesMagic(bytes: Uint8Array, format: FormatDef): boolean {
 
 interface Scores {
   add(formatId: string, weight: number, layer: string, note: string): void;
+  /**
+   * Rules a format out entirely, whatever the other layers said.
+   *
+   * Used where a structural test is conclusive in the negative: a `.json` file
+   * that parses but has no GeoJSON structure is definitively not GeoJSON, and
+   * the extension alone must not keep it in the running (instruction §5.5).
+   */
+  rule_out(formatId: string, reason: string): void;
 }
 
-function makeScores(): { scores: Map<string, number>; evidence: Map<string, DetectionEvidence[]>; api: Scores } {
-  const scores = new Map<string, number>();
+function makeScores(): { evidence: Map<string, DetectionEvidence[]>; excluded: Map<string, string>; api: Scores } {
   const evidence = new Map<string, DetectionEvidence[]>();
+  const excluded = new Map<string, string>();
   return {
-    scores,
     evidence,
+    excluded,
     api: {
       add(formatId, weight, layer, note) {
-        scores.set(formatId, (scores.get(formatId) ?? 0) + weight);
         const list = evidence.get(formatId) ?? [];
         list.push({ layer, weight, note });
         evidence.set(formatId, list);
+      },
+      rule_out(formatId, reason) {
+        excluded.set(formatId, reason);
       },
     },
   };
@@ -100,7 +137,7 @@ function probeBinary(bytes: Uint8Array, add: Scores): void {
   if (bytes.length >= 100 && view.getInt32(0, false) === 9994) {
     const declared = view.getInt32(24, false) * 2;
     const note = declared === bytes.length ? 'SHP magic 9994 and file length agree' : 'SHP magic 9994, declared length differs';
-    add.add('shapefile', declared === bytes.length ? WEIGHTS.magic + WEIGHTS.header : WEIGHTS.magic, 'binary-probe', note);
+    add.add('shapefile', declared === bytes.length ? WEIGHTS.binaryProbe : WEIGHTS.magic, 'binary-probe', note);
   }
 
   // LAS: 'LASF' plus a header size that matches a known version.
@@ -114,9 +151,9 @@ function probeBinary(bytes: Uint8Array, add: Scores): void {
     // file as LAS would produce fabricated coordinates (rule R5).
     const compressed = (pointFormat & 0x80) !== 0 || (pointFormat & 0x40) !== 0;
     if (compressed) {
-      add.add('laz', WEIGHTS.magic + WEIGHTS.header, 'binary-probe', `LASF header with compressed point format bit set (0x${pointFormat.toString(16)})`);
+      add.add('laz', WEIGHTS.binaryProbe, 'binary-probe', `LASF header with compressed point format bit set (0x${pointFormat.toString(16)})`);
     } else if (sane) {
-      add.add('las', WEIGHTS.magic + WEIGHTS.header, 'binary-probe', `LASF header, version ${major}.${minor}, header size ${headerSize}`);
+      add.add('las', WEIGHTS.binaryProbe, 'binary-probe', `LASF header, version ${major}.${minor}, header size ${headerSize}`);
     } else {
       add.add('las', WEIGHTS.magic, 'binary-probe', 'LASF signature present but header fields are out of range');
     }
@@ -128,7 +165,7 @@ function probeBinary(bytes: Uint8Array, add: Scores): void {
   if (le || be) {
     const version = view.getUint16(2, le);
     if (version === 42 || version === 43) {
-      add.add('geotiff', WEIGHTS.magic + WEIGHTS.header, 'binary-probe', version === 43 ? 'BigTIFF header' : 'TIFF header');
+      add.add('geotiff', WEIGHTS.binaryProbe, 'binary-probe', version === 43 ? 'BigTIFF header' : 'TIFF header');
     }
   }
 
@@ -145,22 +182,25 @@ function probeBinary(bytes: Uint8Array, add: Scores): void {
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const text = headText(bytes, 4096);
     if (text.includes('[Content_Types].xml') || text.includes('xl/workbook')) {
-      add.add('xlsx', WEIGHTS.magic + WEIGHTS.binaryProbe, 'binary-probe', 'OOXML workbook members present');
+      add.add('xlsx', WEIGHTS.binaryProbe, 'binary-probe', 'OOXML workbook members present');
     } else if (/doc\.kml|\.kml/i.test(text)) {
-      add.add('kmz', WEIGHTS.magic + WEIGHTS.binaryProbe, 'binary-probe', 'KML member present in ZIP');
+      add.add('kmz', WEIGHTS.binaryProbe, 'binary-probe', 'KML member present in ZIP');
     } else {
       add.add('zip', WEIGHTS.magic, 'binary-probe', 'ZIP local file header');
     }
   }
 
-  // WKB: byte-order flag 0/1 then a plausible geometry type code.
+  // WKB: byte-order flag 0/1 then a plausible geometry type code. The OGC
+  // dimension and SRID flags live in the high bits and must be masked off before
+  // the type is readable, otherwise an EWKB polygon reads as type 536870915.
   if (bytes.length >= 5 && (bytes[0] === 0 || bytes[0] === 1)) {
     const wkbLittle = bytes[0] === 1;
     const raw = view.getUint32(1, wkbLittle);
-    const base = raw % 1000;
-    const flavour = Math.floor(raw / 1000);
+    const withoutFlags = raw & ~0xe0000000;
+    const base = withoutFlags % 1000;
+    const flavour = Math.floor(withoutFlags / 1000);
     if (base >= 1 && base <= 7 && flavour <= 3) {
-      add.add('wkb', WEIGHTS.binaryProbe, 'binary-probe', `WKB geometry type ${raw}`);
+      add.add('wkb', WEIGHTS.binaryProbe, 'binary-probe', `WKB geometry type ${withoutFlags}${raw !== withoutFlags ? ' (with EWKB flags)' : ''}`);
     }
   }
 }
@@ -172,7 +212,7 @@ function probeText(text: string, add: Scores): void {
 
   // DXF: the group-code stream always opens with a 0/SECTION pair.
   if (/^\s*0\s*[\r\n]+\s*SECTION/i.test(head) || /[\r\n]\s*0\s*[\r\n]+\s*SECTION/i.test(head)) {
-    add.add('dxf', WEIGHTS.header + WEIGHTS.textHeuristic, 'text-heuristic', 'DXF group-code stream opens with 0/SECTION');
+    add.add('dxf', WEIGHTS.header, 'text-heuristic', 'DXF group-code stream opens with 0/SECTION');
   } else if (/AutoCAD Binary DXF/.test(head)) {
     add.add('dxf', WEIGHTS.magic, 'text-heuristic', 'Binary DXF sentinel');
   }
@@ -207,6 +247,12 @@ function probeText(text: string, add: Scores): void {
           ['Point', 'MultiPoint', 'LineString', 'MultiLineString', 'Polygon', 'MultiPolygon', 'GeometryCollection'].includes(type)
         ) {
           add.add('geojson', WEIGHTS.jsonShape, 'json-shape', `GeoJSON ${type}`);
+        } else {
+          // Valid JSON with no GeoJSON structure. This is conclusive: the
+          // document cannot be GeoJSON, so the .json extension must not keep it
+          // as a candidate.
+          add.rule_out('geojson', 'The document is valid JSON but has no FeatureCollection, Feature or geometry structure.');
+          add.rule_out('topojson', 'The document is valid JSON but is not a TopoJSON Topology.');
         }
       }
     } catch {
@@ -236,7 +282,7 @@ function probeText(text: string, add: Scores): void {
 
   // PLY.
   if (/^ply\s*[\r\n]+format\s+(ascii|binary_little_endian|binary_big_endian)/i.test(head)) {
-    add.add('ply', WEIGHTS.header + WEIGHTS.magic, 'text-heuristic', 'PLY header');
+    add.add('ply', WEIGHTS.header, 'text-heuristic', 'PLY header');
   }
 
   // WKT geometry (not a CRS WKT — those start with PROJCS/GEOGCS).
@@ -274,8 +320,23 @@ function probeText(text: string, add: Scores): void {
       const numericColumns = countNumericColumns(dataRows, delimiter);
       if (numericColumns >= 2) {
         const isWhitespaceXyz = label === 'whitespace' && columnCounts[0] >= 3 && numericColumns >= 3;
-        add.add(isWhitespaceXyz ? 'xyz' : 'csv', WEIGHTS.textHeuristic + 0.15, 'text-heuristic', `${label}-delimited table with ${numericColumns} numeric columns`);
+        add.add(isWhitespaceXyz ? 'xyz' : 'csv', WEIGHTS.textHeuristic, 'text-heuristic', `${label}-delimited table with ${numericColumns} numeric columns`);
         if (isWhitespaceXyz) add.add('csv', WEIGHTS.textHeuristic, 'text-heuristic', 'Whitespace table also readable as a coordinate table');
+
+        // A header naming coordinate columns is what separates a survey table
+        // from an arbitrary CSV, and it is strong independent evidence.
+        const headerCells = typeof delimiter === 'string' ? lines[0].split(delimiter) : lines[0].trim().split(delimiter);
+        const roles = new Set(matchHeaders(headerCells.map((cell) => cell.trim().replace(/^"|"$/g, ''))).map((match) => match.role));
+        const hasCoordinatePair =
+          (roles.has('easting') && roles.has('northing')) || (roles.has('latitude') && roles.has('longitude'));
+        if (hasCoordinatePair) {
+          add.add(
+            isWhitespaceXyz ? 'xyz' : 'csv',
+            WEIGHTS.surveyHeader,
+            'text-heuristic',
+            `Header names coordinate columns: ${[...roles].join(', ')}`
+          );
+        }
         break;
       }
     }
@@ -298,7 +359,7 @@ function countNumericColumns(rows: string[], delimiter: string | RegExp): number
 }
 
 export function detectFormat(input: DetectionInput): DetectionResult {
-  const { scores, evidence, api } = makeScores();
+  const { evidence, excluded, api } = makeScores();
   const extension = extensionOf(input.fileName);
 
   // L1 extension — weak on its own, and deliberately shared when several
@@ -317,7 +378,7 @@ export function detectFormat(input: DetectionInput): DetectionResult {
 
   // L3 registered magic signatures.
   for (const format of FORMATS_WITH_MAGIC) {
-    if (matchesMagic(input.bytes, format)) api.add(format.id, WEIGHTS.magic * 0.6, 'magic', `${format.name} signature`);
+    if (matchesMagic(input.bytes, format)) api.add(format.id, WEIGHTS.magic, 'magic', `${format.name} signature`);
   }
 
   // L4/L7 binary structure.
@@ -338,31 +399,32 @@ export function detectFormat(input: DetectionInput): DetectionResult {
     }
   }
 
-  if (scores.size === 0) {
+  const ranked = [...evidence.entries()]
+    .filter(([formatId]) => !excluded.has(formatId))
+    .map(([formatId, layers]) => ({ formatId, confidence: combine(layers.map((layer) => layer.weight)) }))
+    .sort((a, b) => b.confidence - a.confidence);
+
+  if (ranked.length === 0) {
     return {
       formatId: 'unknown',
       formatName: 'Unrecognised',
       confidence: 0,
-      evidence: [],
+      evidence: [...excluded.entries()].map(([formatId, note]) => ({ layer: 'ruled-out', weight: 0, note: `${formatId}: ${note}` })),
       alternatives: [],
       requiresConfirmation: true,
     };
   }
 
-  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
-  const [winnerId, rawScore] = ranked[0];
-  const winner = getFormat(winnerId);
-  // The score is a weighted sum whose theoretical maximum sits near 1.2 when
-  // several strong layers agree; clamping keeps the displayed percentage honest.
-  const confidence = Math.max(0, Math.min(1, rawScore / 1.05));
+  const winner = ranked[0];
+  const definition = getFormat(winner.formatId);
 
   return {
-    formatId: winnerId,
-    formatName: winner?.name ?? winnerId,
-    confidence,
-    evidence: evidence.get(winnerId) ?? [],
-    alternatives: ranked.slice(1, 4).map(([id, score]) => ({ formatId: id, confidence: Math.min(1, score / 1.05) })),
-    requiresConfirmation: confidence < CONFIRM_THRESHOLD,
+    formatId: winner.formatId,
+    formatName: definition?.name ?? winner.formatId,
+    confidence: winner.confidence,
+    evidence: evidence.get(winner.formatId) ?? [],
+    alternatives: ranked.slice(1, 4),
+    requiresConfirmation: winner.confidence < CONFIRM_THRESHOLD,
   };
 }
 

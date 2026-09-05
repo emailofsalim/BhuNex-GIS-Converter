@@ -6,6 +6,11 @@
  * the ±3° half-width of a UTM zone. That is the accuracy survey work needs, and
  * the round-trip is enforced by tests rather than asserted here.
  *
+ * The series is a truncation, so accuracy degrades outside the zone: at roughly
+ * 10° from the central meridian the error reaches metres. Data that far outside
+ * its own zone is misfiled rather than merely wide, so the engine does not
+ * silently extend the series to cover it.
+ *
  * All angles cross this module's boundary in degrees; radians only exist inside.
  */
 

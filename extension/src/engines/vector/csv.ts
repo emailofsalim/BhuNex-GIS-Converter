@@ -341,6 +341,16 @@ function quote(value: unknown, delimiter: Delimiter): string {
  */
 export function writeCsv(dataset: CirDataset, options: WriteCsvOptions): { text: string; warnings: Warning[] } {
   const warnings: Warning[] = [];
+
+  // A table converted to a table passes through verbatim. Routing it via point
+  // geometry would silently drop every column that is not a coordinate.
+  if (dataset.layers.length === 0 && dataset.table) {
+    const lines: string[] = [];
+    if (options.includeHeader) lines.push(dataset.table.columns.map((column) => quote(column.name, options.delimiter)).join(options.delimiter));
+    for (const row of dataset.table.rows) lines.push(row.map((cell) => quote(cell, options.delimiter)).join(options.delimiter));
+    return { text: lines.join('\n') + '\n', warnings };
+  }
+
   const geographic = dataset.crs?.kind === 'geographic';
   const format = coordinateFormatter(options.precision, geographic);
   const decimals = options.precision.mode === 'full' ? 15 : geographic ? options.precision.geographicDecimals : options.precision.linearDecimals;

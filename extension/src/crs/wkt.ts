@@ -183,7 +183,9 @@ export function parsePrj(text: string | null | undefined): ParsedPrj {
         const utmCode = (south ? 32700 : 32600) + zone;
         const entry = epsgEntry(utmCode);
         // Only claim the WGS 84 EPSG code when the datum really is WGS 84.
-        if (entry && /wgs[_\s]?84|d_wgs_1984/i.test(datum)) {
+        // The name arrives in many spellings — "WGS 84", "WGS_1984",
+        // "D_WGS_1984", "World Geodetic System 1984" — so match them all.
+        if (entry && /wgs[\s_]*(19)?84|world geodetic system 1984/i.test(datum)) {
           return { crs: { ...crsFromEpsg(utmCode)!, wkt: source }, wkt: source };
         }
         return {
@@ -229,11 +231,14 @@ export function buildPrj(crs: CrsRef | null): string {
   if (!crs) return '';
   if (crs.wkt) return crs.wkt;
 
-  const geogcs = (datum: string, spheroidName: string, a: number, invF: number, primeMeridian = 0) =>
-    `GEOGCS["${datum}",DATUM["D_${datum.replace(/\s+/g, '_')}",SPHEROID["${spheroidName}",${a},${invF}]],` +
+  // ESRI names the geographic CS "GCS_x" and its datum "D_x"; they are separate
+  // strings, not one derived from the other, and conflating them produces a
+  // datum name ("D_GCS_WGS_1984") that no reader recognises.
+  const geogcs = (geographicName: string, datumName: string, spheroidName: string, a: number, invF: number, primeMeridian = 0) =>
+    `GEOGCS["${geographicName}",DATUM["${datumName}",SPHEROID["${spheroidName}",${a},${invF}]],` +
     `PRIMEM["Greenwich",${primeMeridian}],UNIT["Degree",0.0174532925199433]]`;
 
-  const wgs84Geogcs = geogcs('GCS_WGS_1984', 'WGS_1984', 6378137.0, 298.257223563);
+  const wgs84Geogcs = geogcs('GCS_WGS_1984', 'D_WGS_1984', 'WGS_1984', 6378137.0, 298.257223563);
 
   if (crs.kind === 'geographic' || crs.epsg === 4326) {
     return `${wgs84Geogcs}${crs.epsg ? `` : ''}`;

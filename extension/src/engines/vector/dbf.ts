@@ -163,31 +163,38 @@ export interface DbfWritePlan {
   renames: Record<string, string>;
 }
 
-/** Truncates to 10 bytes and uppercases, keeping names unique. */
+/**
+ * Sanitises a field name to the DBF constraints, keeping names unique.
+ *
+ * Case is preserved. dBASE convention is uppercase, but the format does not
+ * require it and GDAL, QGIS and ArcGIS all read mixed case — so upper-casing
+ * would destroy information (a `plot_no` field coming back as `PLOT_NO` breaks
+ * every downstream join) for no compatibility gain. Uniqueness is therefore
+ * checked case-insensitively, since some readers do fold case.
+ */
 function safeFieldName(name: string, used: Set<string>): string {
   let base = name
     .normalize('NFKD')
     .replace(/[^\x20-\x7E]/g, '')
     .replace(/[^A-Za-z0-9_]/g, '_')
     .replace(/^(\d)/, '_$1')
-    .toUpperCase()
     .slice(0, 10);
   if (!base) base = 'FIELD';
-  if (!used.has(base)) {
-    used.add(base);
+  if (!used.has(base.toLowerCase())) {
+    used.add(base.toLowerCase());
     return base;
   }
   // Suffix with a counter, shrinking the stem so the result still fits in 10.
   for (let index = 1; index < 1000; index++) {
     const suffix = String(index);
     const candidate = `${base.slice(0, 10 - suffix.length)}${suffix}`;
-    if (!used.has(candidate)) {
-      used.add(candidate);
+    if (!used.has(candidate.toLowerCase())) {
+      used.add(candidate.toLowerCase());
       return candidate;
     }
   }
   const fallback = `F${Date.now() % 1e9}`.slice(0, 10);
-  used.add(fallback);
+  used.add(fallback.toLowerCase());
   return fallback;
 }
 
@@ -204,7 +211,7 @@ export function planDbfFields(fields: FieldDef[], records: Record<string, unknow
 
   for (const field of fields) {
     const written = safeFieldName(field.name, used);
-    if (written !== field.name.toUpperCase().slice(0, 10) || written !== field.name) renames[field.name] = written;
+    if (written !== field.name) renames[field.name] = written;
 
     let type: DbfField['type'] = 'C';
     let length = 0;

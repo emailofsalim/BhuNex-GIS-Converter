@@ -86,14 +86,25 @@ interface FeatureWithLayer {
   layer: string;
 }
 
-function resolveLayer(feature: CirFeature, options: WriteDxfOptions): string {
+/**
+ * Chooses the DXF layer for a feature.
+ *
+ * `_layer` is checked before the CIR layer name because it is the original CAD
+ * layer carried through the conversion. A GeoJSON produced from a DXF holds one
+ * CIR layer named after the file, so trusting the CIR name first would flatten
+ * a DXF -> GeoJSON -> DXF trip onto a single layer.
+ */
+function resolveLayer(feature: CirFeature, cirLayerName: string, options: WriteDxfOptions): string {
   if (options.layerSource === 'single') return sanitizeLayerName(options.singleLayerName ?? 'CONVERTED');
   if (options.layerSource === 'attribute' && options.layerAttribute) {
     const value = feature.properties?.[options.layerAttribute];
     if (value !== undefined && value !== null && String(value).trim() !== '') return sanitizeLayerName(String(value));
     return '0';
   }
-  return sanitizeLayerName(feature.sourceLayer ?? (feature.properties?._layer as string) ?? '0');
+  const carried = feature.properties?._layer;
+  if (typeof carried === 'string' && carried.trim() !== '') return sanitizeLayerName(carried);
+  if (feature.sourceLayer) return sanitizeLayerName(feature.sourceLayer);
+  return sanitizeLayerName(cirLayerName || '0');
 }
 
 export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text: string; warnings: Warning[] } {
@@ -108,10 +119,9 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
   for (const layer of dataset.layers) {
     for (const feature of layer.features) {
       if (!feature.geometry) continue;
-      items.push({ feature: { ...feature, sourceLayer: feature.sourceLayer ?? layer.name }, layer: '' });
+      items.push({ feature, layer: resolveLayer(feature, layer.name, options) });
     }
   }
-  for (const item of items) item.layer = resolveLayer(item.feature, options);
 
   const layerNames = [...new Set(items.map((item) => item.layer))];
   if (layerNames.length === 0) layerNames.push('0');

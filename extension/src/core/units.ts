@@ -118,7 +118,12 @@ export function insunitsFromLinearUnit(unit: LinearUnitId): number {
  */
 export function linearUnitFromWktName(name: string): LinearUnitId | null {
   const key = name.toLowerCase().replace(/[\s_-]+/g, '');
-  if (key.includes('ussurvey') || key === 'usft' || key === 'ussurveyfoot' || key === 'footussurvey') return 'us-ft';
+  // "US survey foot", "Foot_US", "US_survey_foot", "foot US survey" and
+  // "usft" all name the same unit. Test for the US marker beside a foot marker
+  // rather than enumerating the spellings, which is how the last one gets missed.
+  const mentionsFoot = key.includes('foot') || key.includes('feet') || key.includes('ft');
+  const mentionsUs = /(^|[^a-z])us([^a-z]|$)|ussurvey|survey/.test(key) || key.startsWith('us') || key.endsWith('us');
+  if (mentionsFoot && mentionsUs) return 'us-ft';
   if (key.startsWith('metre') || key.startsWith('meter') || key === 'm') return 'm';
   if (key.startsWith('foot') || key === 'ft') return 'ft';
   if (key.startsWith('kilo')) return 'km';
