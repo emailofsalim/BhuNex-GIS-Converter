@@ -44,7 +44,7 @@ import {
 } from '../engines/pointcloud/text';
 import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
-import { readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
+import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
 import { DEFAULT_CSV_OPTIONS, readCsvTable, tableToPoints, writeCsv, type WriteCsvOptions } from '../engines/vector/csv';
 import { readGeoJson, writeGeoJson } from '../engines/vector/geojson';
@@ -469,7 +469,6 @@ async function writeTarget(dataset: CirDataset, targetId: string, baseName: stri
           action: 'Georeference the image in QGIS first, or supply ground control points.',
         });
       }
-      const { buildWorldFile } = await import('../engines/raster/worldfile');
       return { files: [text(buildWorldFile(geotransform))], warnings: [] };
     }
     case 'gcp-points': {

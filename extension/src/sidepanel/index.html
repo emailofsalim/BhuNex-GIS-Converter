@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Universal Geo Converter — quick convert</title>
+    <link rel="stylesheet" href="../workspace/styles.css" />
+    <style>
+      body {
+        padding: 0;
+      }
+      .panel {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      .panel__body {
+        flex: 1 1 auto;
+        overflow: auto;
+        min-height: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <header class="topbar" style="height: 42px; padding: 0 12px">
+        <div class="brand">
+          <img class="brand__mark" src="../../icons/icon-32.png" alt="" />
+          <span style="font-size: 12px">Quick convert</span>
+        </div>
+        <div class="topbar__spacer"></div>
+        <button class="btn btn--ghost" id="openWorkspace" title="Open the full workspace">Workspace</button>
+      </header>
+
+      <div class="panel__body">
+        <div id="dropzone" class="dropzone dropzone--compact" tabindex="0" role="button" aria-label="Drop files here to convert">
+          <div class="dropzone__title" style="font-size: 14px">Drop files here</div>
+          <div class="dropzone__sub small">Convert beside the page you are working on</div>
+        </div>
+
+        <div class="section">
+          <h3 class="section__title">Output format</h3>
+          <select class="select" id="targetSelect" aria-label="Output format"></select>
+        </div>
+
+        <div class="section">
+          <div class="row wrap">
+            <button class="btn btn--primary" id="convertBtn" disabled>Convert all</button>
+            <button class="btn" id="downloadBtn" disabled>Download</button>
+          </div>
+        </div>
+
+        <div id="queue" class="queue"></div>
+      </div>
+
+      <div class="progress"><div class="progress__bar" id="progressBar"></div></div>
+    </div>
+
+    <input type="file" id="filePicker" multiple class="sr-only" aria-hidden="true" />
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

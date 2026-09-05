@@ -29,6 +29,12 @@
     "default_path": "src/sidepanel/index.html"
   },
   "options_page": "src/workspace/index.html",
+  "commands": {
+    "open-workspace": {
+      "suggested_key": { "default": "Ctrl+Shift+U", "mac": "Command+Shift+U" },
+      "description": "Open the Universal Geo Converter workspace"
+    }
+  },
   "permissions": ["storage", "unlimitedStorage", "downloads", "sidePanel", "nativeMessaging"],
   "optional_permissions": [],
   "host_permissions": [],

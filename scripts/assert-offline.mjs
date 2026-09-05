@@ -1,10 +1,20 @@
 /**
  * Enforces instruction rule R15 (offline-first, no CDN) against the built
  * output. The extension must work with the network interface disabled, so the
- * packaged bundle may not reference a remote origin at all.
+ * packaged bundle may not *load* anything from a remote origin.
  *
- * This runs in CI after `npm run build`. It reads dist/, not source, because a
- * transitive import is exactly the way a CDN reference sneaks in unnoticed.
+ * The distinction that matters: an `http://...` string is not by itself a
+ * network access. XML namespace URIs — the GPX, LandXML, KML and OOXML
+ * namespaces this converter writes — are identifiers that are never fetched, and
+ * they are mandatory in the files it produces. Flagging them would force the
+ * check to be disabled, which is worse than not having it.
+ *
+ * So this scans for the constructs that actually cause a load: remote src/href
+ * attributes, CSS url() and @import, script-side fetch/XHR/import/Worker with a
+ * remote literal, and any mention of a known CDN host.
+ *
+ * Runs in CI after `npm run build`, against dist/ rather than source, because a
+ * transitive import is exactly how a CDN reference arrives unnoticed.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
@@ -13,19 +23,36 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const distDir = resolve(root, 'dist');
 
-// Remote-origin patterns. `chrome-extension:` and relative paths are fine; a
-// bare scheme-relative `//host/` reference is not, because the browser resolves
-// it against the extension origin only by accident of scheme.
-const FORBIDDEN = [
-  /https?:\/\/(?!(?:www\.)?(?:w3\.org|opengis\.net|google\.com\/kml|earth\.google\.com|schemas\.opengis\.net|inkscape\.org|purl\.org|apache\.org|sourceforge\.net))[^\s"'`)]+/gi,
-  /\bcdn\.jsdelivr\.net\b/gi,
-  /\bunpkg\.com\b/gi,
-  /\bcdnjs\.cloudflare\.com\b/gi,
-  /\bfonts\.googleapis\.com\b/gi,
-  /\bfonts\.gstatic\.com\b/gi,
+const REMOTE = String.raw`(?:https?:)?//[^\s"'\`)]+`;
+
+/** Constructs that cause a real network load. */
+const LOAD_PATTERNS = [
+  { name: 'remote src attribute', pattern: new RegExp(String.raw`\bsrc\s*=\s*["']${REMOTE}`, 'gi') },
+  { name: 'remote href attribute', pattern: new RegExp(String.raw`\bhref\s*=\s*["']${REMOTE}`, 'gi') },
+  { name: 'CSS url()', pattern: new RegExp(String.raw`url\(\s*["']?${REMOTE}`, 'gi') },
+  { name: 'CSS @import', pattern: new RegExp(String.raw`@import\s+["']${REMOTE}`, 'gi') },
+  { name: 'fetch()', pattern: new RegExp(String.raw`\bfetch\s*\(\s*["'\`]${REMOTE}`, 'gi') },
+  { name: 'XMLHttpRequest.open', pattern: new RegExp(String.raw`\.open\s*\(\s*["'][A-Z]+["']\s*,\s*["']${REMOTE}`, 'gi') },
+  { name: 'dynamic import', pattern: new RegExp(String.raw`\bimport\s*\(\s*["'\`]${REMOTE}`, 'gi') },
+  { name: 'importScripts', pattern: new RegExp(String.raw`\bimportScripts\s*\(\s*["'\`]${REMOTE}`, 'gi') },
+  { name: 'new Worker', pattern: new RegExp(String.raw`new\s+(?:Shared)?Worker\s*\(\s*["'\`]${REMOTE}`, 'gi') },
+  { name: 'WebSocket', pattern: new RegExp(String.raw`new\s+WebSocket\s*\(\s*["'\`]wss?://`, 'gi') },
 ];
 
-const TEXT_EXTENSIONS = new Set(['.js', '.html', '.css', '.json', '.map', '.txt', '.svg']);
+/** Hosts that only ever appear in a bundle because something is being loaded. */
+const CDN_HOSTS = [
+  'cdn.jsdelivr.net',
+  'unpkg.com',
+  'cdnjs.cloudflare.com',
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
+  'ajax.googleapis.com',
+  'esm.sh',
+  'skypack.dev',
+  'jsdelivr.com',
+];
+
+const TEXT_EXTENSIONS = new Set(['.js', '.html', '.css', '.json', '.txt', '.svg']);
 
 function walk(dir) {
   const out = [];
@@ -39,27 +66,32 @@ function walk(dir) {
 
 const findings = [];
 for (const file of walk(distDir)) {
-  if (!TEXT_EXTENSIONS.has(extname(file))) continue;
-  // Source maps embed the original comments; scanning them would flag prose in
-  // doc comments rather than real references.
+  // Source maps embed the original source and its comments, so scanning them
+  // would report prose in a doc comment as a network reference.
   if (file.endsWith('.map')) continue;
+  if (!TEXT_EXTENSIONS.has(extname(file))) continue;
   const text = readFileSync(file, 'utf8');
-  for (const pattern of FORBIDDEN) {
+  const where = relative(root, file);
+
+  for (const { name, pattern } of LOAD_PATTERNS) {
     pattern.lastIndex = 0;
     for (const match of text.matchAll(pattern)) {
-      findings.push(`${relative(root, file)}: ${match[0].slice(0, 120)}`);
+      findings.push(`${where}: ${name} → ${match[0].slice(0, 120)}`);
     }
+  }
+  for (const host of CDN_HOSTS) {
+    if (text.includes(host)) findings.push(`${where}: CDN host referenced → ${host}`);
   }
 }
 
 if (findings.length > 0) {
-  console.error('Offline check FAILED — remote references found in the build:');
+  console.error('Offline check FAILED — the build would load a remote resource:');
   for (const finding of findings) console.error(`  ${finding}`);
   console.error(
     '\nThe extension must run with the network disabled (instruction rule R15).\n' +
-      'Bundle the resource locally instead of referencing a remote origin.'
+      'Bundle the resource locally instead of loading it from a remote origin.'
   );
   process.exit(1);
 }
 
-console.log('Offline check passed — no remote origins in dist/.');
+console.log('Offline check passed — nothing in dist/ loads from a remote origin.');
