@@ -25,6 +25,7 @@ import { sha256Hex } from './hash';
 import { buildOutputName, extensionOf, type NamingOptions } from './naming';
 import { SURVEY_DEFAULT_PRECISION, type PrecisionPolicy } from './precision';
 import { getFormat, type FormatDef } from './registry';
+import { readDwg } from '../adapters/native-messaging/client';
 import { crsLabel, planTransform, resolveSourceCrs, suggestCrs, transformDataset } from '../crs/transform';
 import { readZip, writeZip, type ZipInput } from '../engines/archives/zip';
 import { readDxf, type ReadDxfOptions } from '../engines/cad/dxf-read';
@@ -311,6 +312,11 @@ export async function readSource(input: ConversionInput, detection: DetectionRes
         action: 'Use "Expand archive" in the queue to add its contents as separate items.',
       });
     case 'dwg':
+      // The only format that leaves the extension: DWG goes to the local helper
+      // driving the user's own ODA File Converter, and comes back as DXF. If the
+      // helper is absent the adapter throws with install instructions rather
+      // than producing something that merely looks like DWG support (rule R7).
+      return readDwg(input.bytes, info, settings.arcTolerance);
     case 'dgn':
     case 'geopackage':
     case 'flatgeobuf':
