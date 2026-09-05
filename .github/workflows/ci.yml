@@ -44,6 +44,12 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Assert the format matrix matches the registry
+        # docs/FORMAT_MATRIX.md is generated. A stale support table is exactly
+        # the kind of inaccuracy rule R1 exists to prevent, so it is a build
+        # failure rather than a documentation chore.
+        run: npm run docs:check
+
       - name: Build extension
         run: npm run build
 

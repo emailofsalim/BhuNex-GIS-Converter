@@ -12,6 +12,8 @@
     "dev": "vite build --watch --mode development",
     "build": "vite build",
     "package": "node scripts/package-extension.mjs",
+    "docs": "node --experimental-strip-types scripts/format-matrix.mjs",
+    "docs:check": "node --experimental-strip-types scripts/format-matrix.mjs --check",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -20,15 +20,19 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
+| Tests | 116 across 4 suites, all green |
 
 ### Where the donated engines came from
-Ported/adapted from `Geo-Studio-Pro-main/src/lib/`:
-`formats.ts` (parsers/writers), `universalDataBridge.ts` (detection), `zip.ts`
-(DEFLATE + ZIP), `geodesy.ts` + `crsIdentity.ts` (UTM/CRS), `qa.ts`,
-`deduplication.ts`, `unitEngine.ts`, `parseClient.ts` (worker threshold = 2 MB),
-`workers/parseWorker.ts`.
-From `Universal-Conveter/Pakhar_CAD_GIS_Local_Server/`: `backend/services/dwg_converter.py`
-(ODA invocation + isolated job dirs + validation) → became the native messaging host.
+Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
+`universalDataBridge.ts` (detection), `zip.ts` (DEFLATE + ZIP), `geodesy.ts` +
+`crsIdentity.ts` (UTM/CRS), `qa.ts`, `deduplication.ts`, `unitEngine.ts`,
+`parseClient.ts` (worker threshold = 2 MB), `workers/parseWorker.ts`.
+From `Universal-Conveter/Pakhar_CAD_GIS_Local_Server/`:
+`backend/services/dwg_converter.py` (ODA invocation, isolated job dirs, output
+validation) → became `native-host/universal_geo_host.py`.
+
+The engines were **re-implemented against the CIR**, not copy-pasted: the originals
+were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model.
 
 ---
 
@@ -36,15 +40,16 @@ From `Universal-Conveter/Pakhar_CAD_GIS_Local_Server/`: `backend/services/dwg_co
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Repo scaffold, manifest, build/test config, instruction document | 🔄 in progress |
-| 1 | Foundation: CIR, registry, detector, ZIP, workers, state | ⛔ not started |
-| 2 | Core vector: CSV/survey tables, GeoJSON(+seq), KML/KMZ, GPX, WKT/WKB, Shapefile, DXF r/w, TopoJSON | ⛔ not started |
-| 3 | Survey/engineering: LandXML, Surpac STR, MIF/MID, GML, OSM, ASCII Grid, world files, QGIS GCP, XLSX | ⛔ not started |
+| 0 | Repo scaffold, manifest, build/test config, instruction document | ✅ done |
+| 1 | Foundation: CIR, registry, detector, companions, ZIP, workers, state | ✅ done |
+| 2 | Core vector: CSV/survey tables, GeoJSON(+seq), KML/KMZ, GPX, WKT/WKB, Shapefile, DXF r/w, TopoJSON | ✅ done |
+| 3 | Survey/engineering: LandXML, Surpac STR, MIF/MID, GML, OSM, ASCII Grid, world files, QGIS GCP, XLSX | ✅ done |
 | 4 | Raster: full GeoTIFF codec, resampling, reprojection, DEM products | ⛔ not started — GeoTIFF stays **metadata-only** until then |
-| 5 | Point cloud: LAS, LAZ codec, PLY, PTS, decimation | ⛔ not started |
-| 6 | Native/advanced: DWG via native host, DGN/E57/GPKG/FGB/Parquet adapters | ⛔ not started |
+| 5 | Point cloud: LAS ✅, LAZ codec ⛔, PLY ✅, PTS ✅, XYZ ✅, decimation ✅ | 🟡 partial |
+| 6 | Native/advanced: DWG via native host ✅; DGN/E57/GPKG/FGB/Parquet adapters ⛔ | 🟡 partial |
+| 7 | UI: workspace, side panel, popup, preview, QA report, batch | ✅ done |
 
-Legend: ✅ done · 🔄 in progress · 🟡 partial · ⛔ not started
+Legend: ✅ done · 🟡 partial · ⛔ not started
 
 > This board is rewritten at the end of every session. If it disagrees with the
 > tree, the tree wins — run `npm run verify` and correct the board.
@@ -53,57 +58,42 @@ Legend: ✅ done · 🔄 in progress · 🟡 partial · ⛔ not started
 
 ## What exists right now
 
-### Core (`extension/src/core/`)
-- `cir.ts` — canonical intermediate representation types + constructors
-- `registry.ts` — single source of truth for every format's capabilities
-- `detect.ts` — 9-layer detector with confidence scoring
-- `companions.ts` — basename grouping (shp/shx/dbf/prj/cpg, mif/mid, tif/tfw)
-- `units.ts` — linear/angular/area/volume namespaces, us-ft ≠ int-ft
-- `geometry.ts` — geometry ops, bounds, segmentization, ring orientation
-- `precision.ts`, `naming.ts`, `errors.ts`, `provenance.ts`, `hash.ts`
-- `pipeline.ts` — ingest → detect → parse → convert → QA → package orchestration
+**Core** (`extension/src/core/`) — `cir.ts`, `registry.ts`, `detect.ts` (9-layer,
+noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`,
+`naming.ts`, `errors.ts`, `hash.ts`, `pipeline.ts` (the single dispatch point).
 
-### CRS (`extension/src/crs/`)
-- `projection.ts` — Krueger-series Transverse Mercator, WGS 84, all UTM zones
-- `epsg.ts` — bundled EPSG subset (4326, 3857, 326xx/327xx, common Indian grids)
-- `wkt.ts` — WKT1 parse + build, `.prj`/`.qpj` handling
-- `transform.ts` — CRS transform pipeline + safety rules (never guess)
+**CRS** (`extension/src/crs/`) — `projection.ts` (Snyder TM, all UTM zones, Web
+Mercator, LCC), `epsg.ts` (bundled subset, Indian zones first), `wkt.ts`
+(recursive-descent WKT1, UTM recovery from the k0 fingerprint), `transform.ts`
+(refuses datum shifts it cannot perform).
 
-### Engines (`extension/src/engines/`)
-- `vector/`: `geojson.ts`, `topojson.ts`, `kml.ts`, `gpx.ts`, `wkt.ts`, `wkb.ts`,
-  `csv.ts`, `shapefile.ts`, `dbf.ts`, `gml.ts`, `osm.ts`, `mifmid.ts`,
-  `landxml.ts`, `surpac.ts`, `xlsx.ts`
-- `cad/`: `dxf-read.ts` (expanded entity coverage), `dxf-write.ts`
-- `raster/`: `asciigrid.ts` (full r/w), `worldfile.ts`, `geotiff.ts` (metadata-only),
-  `gcp.ts`
-- `pointcloud/`: `las.ts` (full r/w + honest LAZ refusal), `xyz.ts`, `ply.ts`, `pts.ts`,
-  `decimate.ts`
-- `survey/schema.ts` — PNEZD/PENZD/NEZ/ENZ alias detection + column mapping
-- `archives/zip.ts` — ZIP read/write, zip-bomb + traversal guards
+**Engines** — `vector/` (geojson, topojson, kml, gpx, wkt, wkb, csv, shapefile, dbf,
+gml, osm, mifmid, landxml, surpac, xlsx), `cad/` (dxf-read, dxf-write), `raster/`
+(asciigrid, worldfile, geotiff), `pointcloud/` (las, text, decimate),
+`survey/schema.ts`, `archives/zip.ts`, `xml.ts` (worker-safe XML reader).
 
-### QA (`extension/src/qa/`)
-- `fidelity.ts` — re-import comparison, PASS / PASS WITH WARNINGS / FAILED / NOT VALIDATED
-- `topology.ts` — self-intersection, rings, duplicates, orientation
+**QA** — `topology.ts`, `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists
+so an unreadable target can never show PASS).
 
-### UI (`extension/src/workspace|sidepanel|popup`, `ui/`)
-Framework-free TypeScript workspace: drop zone, queue, inspector, canvas preview,
-format picker with search/chips/cards, target-driven settings, QA report, log.
+**UI** — `workspace/` (full page), `sidepanel/`, `popup/`, `ui/preview.ts` (canvas,
+no tiles), `state/store.ts`, `workers/`.
 
-### Native host (`native-host/`)
-`universal_geo_host.py` (stdio length-prefixed JSON, ODA File Converter wrapper,
-isolated temp jobs, DWG magic-byte validation) + per-platform installers.
+**Native host** — `native-host/universal_geo_host.py` + `install.py`.
+
+**Docs** — instruction TXT, this file, `NATIVE_HOST.md`, `FORMAT_MATRIX.md`
+(generated from the registry; CI fails if stale).
 
 ---
 
 ## Known gaps — deliberate and documented, not bugs
 
-1. **GeoTIFF is metadata-only.** Georeference/structure are read; pixels are not
-   decoded. Registry level `metadata-only`, raster export disabled for such sources.
-   Closing this = Phase 4.
-2. **LAZ is refused, never mis-parsed.** No real codec is bundled, so the reader
-   reports the compressed payload honestly (Rule R5).
-3. **DWG requires the native host.** No browser-native DWG. Status states are
-   surfaced in the top bar.
+1. **GeoTIFF is metadata-only.** Georeference/structure read; pixels not decoded.
+   Registry level `metadata-only`; raster export from such a source is refused.
+   Closing this is Phase 4.
+2. **LAZ is refused, never mis-parsed.** No codec bundled, so the compressed
+   payload is reported honestly (rule R5).
+3. **DWG requires the native host.** No browser-native DWG; status states surface
+   in the top bar.
 4. **DGN / E57 / GeoPackage / FlatGeobuf / GeoParquet / vendor mining formats** are
    adapter contracts only.
 5. **Datum shifts beyond the WGS 84 family** and **geoid (orthometric↔ellipsoidal)**
@@ -111,15 +101,36 @@ isolated temp jobs, DWG magic-byte validation) + per-platform installers.
 
 ---
 
+## Defects found by the test suite (fixed — keep the tests)
+
+These were real bugs the round-trips caught. Do not "simplify" the tests that guard them.
+
+| Bug | Fix |
+|---|---|
+| Detection confidence was a linear sum ÷ magic constant; an unambiguous survey CSV scored 57% and was blocked | Noisy-OR over per-layer diagnostic strengths, plus a survey-header signal |
+| A valid JSON file with no GeoJSON structure was still called GeoJSON on its extension | Structural failure now rules the format out entirely |
+| WKB detection read EWKB flag bits as part of the geometry type | Mask `0xE0000000` before decoding the type |
+| DBF writer upper-cased field names (`plot_no` → `PLOT_NO`), breaking joins | Case preserved; uniqueness checked case-folded |
+| DXF writer preferred the synthetic CIR layer name over the carried CAD layer | `_layer` is checked first; GeoJSON reader restores `sourceLayer`/`sourceEntity`/`sourceHandle` |
+| Table→table conversions (CSV→XLSX) wrote a header and no rows | CSV and XLSX writers pass a `dataset.table` through verbatim |
+| `buildPrj` emitted datum `D_GCS_WGS_1984`, which no reader recognises | Geographic CS name and datum name are separate; datum regex widened |
+| FlatGeobuf was an adapter declaring neither `requiresNative` nor `requiresWasm` | Marked `requiresWasm` |
+
+---
+
 ## Next tasks, in order
 
-1. Phase 4 — real GeoTIFF codec (uncompressed + LZW + Deflate strips/tiles), then
-   raster reprojection and DEM products; flip registry to `full` **in the same commit
-   as its round-trip test**.
-2. Phase 5 — bundle a genuine LAZ decoder (WASM), then flip LAZ off `adapter`.
-3. Phase 6 — GeoPackage via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
-4. Preview: add classification colour ramps and raster band selection.
-5. Perf: add the measured performance test from instruction §14.2.
+1. **Phase 4 — GeoTIFF codec.** Uncompressed + LZW + Deflate, strips and tiles.
+   Flip the registry to `full` **in the same commit as its round-trip test**.
+2. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
+   `adapter`. Until then the honest refusal stays.
+3. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
+4. **Preview** — classification colour ramps, raster band selection, layer toggles
+   in the UI (the renderer already supports per-layer visibility).
+5. **Perf** — add the measured performance test from instruction §14.2 (targets are
+   to be measured, not claimed).
+6. **Batch** — pause/resume and retry-failed controls; the pipeline already isolates
+   errors per file.
 
 ---
 
@@ -127,4 +138,4 @@ isolated temp jobs, DWG magic-byte validation) + per-platform installers.
 
 | Date | Session | What landed |
 |---|---|---|
-| 2026-09-04 | initial build | Phases 1–3 complete, Phase 5 partial (LAS/PLY/PTS/XYZ), Phase 6 partial (DWG native host). Instruction doc, CI, tests, PR. |
+| 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
