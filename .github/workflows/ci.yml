@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, test, build, package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        # npm ci installs exactly what the lockfile pins and fails if the
+        # lockfile and package.json disagree, so two runs of the same commit
+        # can never resolve different toolchains.
+        run: npm ci
+
+      - name: Audit production dependencies
+        # The shipped extension has zero runtime dependencies, so this step must
+        # stay clean. If it ever fails, a runtime dependency crept in.
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Audit build tooling (informational)
+        run: npm audit --audit-level=low || true
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Assert the format matrix matches the registry
+        # docs/FORMAT_MATRIX.md is generated. A stale support table is exactly
+        # the kind of inaccuracy rule R1 exists to prevent, so it is a build
+        # failure rather than a documentation chore.
+        run: npm run docs:check
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Assert the build is offline-only
+        # Rule R15: no CDN, no remote script, style, font or fetch may appear in
+        # the packaged output. Grep is the cheapest possible enforcement and it
+        # catches an accidental import long before a reviewer would.
+        run: node scripts/assert-offline.mjs
+
+      - name: Package extension
+        run: npm run package
+
+      - name: Upload unpacked extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: universal-geo-converter-unpacked
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload packaged extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: universal-geo-converter-zip
+          path: dist-zip/*.zip
+          if-no-files-found: error

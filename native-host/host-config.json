@@ -1,0 +1,10 @@
+{
+  "_comment": "Point odaExecutable at your installed ODA File Converter. Leave it empty to let the helper search the default install locations. The UGC_ODA_EXECUTABLE environment variable overrides this file.",
+  "odaExecutable": "",
+  "odaOutputVersion": "ACAD2018",
+  "odaOutputType": "DXF",
+  "odaRecursive": "0",
+  "odaAudit": "1",
+  "conversionTimeoutSeconds": 180,
+  "maxInputMb": 400
+}

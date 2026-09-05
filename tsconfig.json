@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["chrome", "vite/client", "node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": false,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["extension/src/core/*"],
+      "@crs/*": ["extension/src/crs/*"],
+      "@engines/*": ["extension/src/engines/*"],
+      "@qa/*": ["extension/src/qa/*"],
+      "@ui/*": ["extension/src/ui/*"],
+      "@state/*": ["extension/src/state/*"],
+      "@adapters/*": ["extension/src/adapters/*"]
+    }
+  },
+  "include": ["extension/src", "extension/tests", "scripts", "vite.config.ts", "vitest.config.ts"]
+}

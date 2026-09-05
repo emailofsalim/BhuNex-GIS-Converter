@@ -1,0 +1,889 @@
+================================================================================
+UNIVERSAL GEO CONVERTER
+GIS / GEOMATICS / LAND SURVEY / CAD / LiDAR / MINE SURVEY CONVERSION SUITE
+CHROME MANIFEST V3 EXTENSION
+--------------------------------------------------------------------------------
+COMPLETE TECHNICAL IMPLEMENTATION INSTRUCTION
+Repository : emailofsalim/Universal-Converter
+Branch     : claude/gis-cad-chrome-converter-hk8uwg
+Base       : Universal-Conveter.zip (Pakhar CAD GIS Local Server prototype)
+Engines    : ported/adapted from Geo-Studio-Pro-main.zip
+Document   : v1.0  (authoritative build instruction - implementation grade)
+================================================================================
+
+HOW TO READ THIS DOCUMENT
+-------------------------
+Every numbered section is a binding instruction, not a suggestion.
+Words used with strict meaning:
+
+  MUST        mandatory, build is rejected without it
+  MUST NOT    prohibited, build is rejected if present
+  SHOULD      strongly expected, deviation requires a written note in docs/
+  OPTIONAL    may be deferred to a later phase but the contract MUST exist
+  ADAPTER     capability exposed through a declared interface that reports
+              NOT INSTALLED instead of pretending the capability exists
+
+This file is self-contained. A new engineer (or a new AI session) MUST be able
+to resume the build using only this file plus docs/BUILD_STATE.md.
+
+
+================================================================================
+0. PRODUCT DEFINITION
+================================================================================
+
+0.1 WHAT IS BEING BUILT
+Universal Geo Converter is a single Chrome MV3 extension that converts spatial
+and survey data between formats entirely on the user's own machine.
+
+Product identity, in priority order:
+  1. Land survey / geomatics
+  2. GIS
+  3. CAD (survey-grade CAD, not architectural BIM)
+  4. Mine survey / geology
+  5. LiDAR / point cloud
+  6. Raster / DEM
+It is NOT a generic office file converter and MUST NOT look like one.
+
+0.2 ONE-SENTENCE CONTRACT
+"Drop any survey, GIS, CAD, LiDAR, raster or mining file; the extension tells
+you exactly what it is, exactly what it can become, converts it locally, and
+proves the conversion was faithful."
+
+0.3 THE PIPELINE (invariant for every conversion)
+  INGEST -> DETECT -> INSPECT -> CIR -> TARGET SELECT -> CONFIGURE
+        -> CONVERT (worker/native) -> RE-IMPORT -> QA -> PACKAGE -> DELIVER
+
+0.4 WHY A CANONICAL INTERMEDIATE REPRESENTATION (CIR)
+N formats with point-to-point converters costs N*(N-1) code paths.
+With a CIR it costs 2N: one reader and one writer per format.
+Every reader produces CIR. Every writer consumes CIR. There are NO direct
+format-to-format shortcuts. This rule has no exceptions.
+
+
+================================================================================
+1. NON-NEGOTIABLE RULES (violation = build rejected)
+================================================================================
+
+R1   Never claim a format is supported unless a real reader/writer exists AND
+     its capability test passes. The registry flag is derived from tests, never
+     hand-written optimism.
+R2   Never fabricate coordinates, CRS, extents, elevations, feature counts or
+     point counts. Unknown is a first-class value and MUST be displayed.
+R3   Never silently drop geometry, Z, M, attributes or metadata. Any loss is
+     surfaced as a named, counted warning before and after conversion.
+R4   Never silently change CRS, axis order or units. A transform is an explicit,
+     recorded operation.
+R5   Never parse compressed LAZ as uncompressed LAS. Without a real LAZ codec,
+     LAZ reports "compressed payload - decoder not installed".
+R6   Never rename a file extension and call it a conversion.
+R7   Never present DWG as browser-native. DWG is an ADAPTER through the native
+     messaging host and shows its engine status honestly.
+R8   Processing is local by default. No network request carries user file bytes.
+     There is no telemetry in any conversion path.
+R9   Anything above the worker threshold runs off the UI thread. The UI never
+     freezes.
+R10  Full numeric precision is preserved internally. Rounding is an output
+     setting only, and display rounding never feeds back into computation.
+R11  Every conversion returns a QA summary. "Converted" alone is not a result.
+R12  Reused Geo-Studio engines MUST be ported into the shared conversion core
+     without breaking their original behaviour or their tests.
+R13  The ODA/DWG integration from the Universal Converter prototype is reused as
+     an ADAPTER, not as the architecture.
+R14  Mixed-format batch conversion is mandatory.
+R15  No CDN, no remote script, no remote stylesheet, no remote font, no runtime
+     download of engines. The packaged extension MUST work with the network
+     interface disabled.
+
+
+================================================================================
+2. REPOSITORY LAYOUT (authoritative)
+================================================================================
+
+  /                              repo root
+    package.json                 npm scripts: lint | test | build | package
+    tsconfig.json                strict TypeScript, path aliases
+    vite.config.ts               MV3 multi-entry build -> /dist
+    vitest.config.ts             node-environment test runner
+    scripts/package-extension.mjs  produces dist-zip/universal-geo-converter.zip
+    .github/workflows/ci.yml     typecheck + test + build + package artifact
+    docs/
+      UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt   (this file)
+      BUILD_STATE.md             resumable progress ledger - update every session
+      FORMAT_MATRIX.md           generated-by-hand mirror of the registry
+      NATIVE_HOST.md             DWG/ODA helper install + protocol
+    native-host/                 python native messaging host + installers
+    vendor/reference/            original source zips, kept for provenance
+    extension/
+      manifest.json
+      public/icons/              packaged icons (no remote assets)
+      src/
+        background/service-worker.ts
+        popup/                   compact launcher
+        sidepanel/               quick drop + queue
+        workspace/               full-page professional workspace
+        core/                    CIR, registry, detect, units, geometry, ...
+        crs/                     projections, EPSG subset, WKT, transforms
+        engines/
+          vector/  cad/  raster/  pointcloud/  survey/  archives/
+        qa/                      fidelity + topology
+        adapters/native-messaging/
+        workers/                 parse + convert workers
+        state/                   store, settings, provenance log
+        ui/                      view components (framework-free)
+      tests/                     vitest suites incl. round-trips
+
+2.1 DEPENDENCY POLICY
+Runtime dependencies: ZERO. The shipped extension has no npm runtime package.
+Everything (ZIP, DEFLATE, DBF, SHP, DXF, LAS, XLSX, projections) is implemented
+in-repo or uses platform APIs (CompressionStream, DecompressionStream,
+TextDecoder, DataView, OffscreenCanvas, Web Workers).
+Dev dependencies are limited to typescript, vite, vitest and type packages.
+Rationale: MV3 forbids remote code; a zero-runtime-dependency package cannot
+silently acquire one, and it keeps offline mode provably true.
+
+
+================================================================================
+3. CANONICAL INTERMEDIATE REPRESENTATION (CIR)
+================================================================================
+
+3.1 TOP LEVEL
+A parsed source becomes exactly one CirDataset:
+
+  CirDataset {
+    kind: 'vector' | 'raster' | 'pointcloud' | 'table' | 'mixed'
+    name: string
+    source: SourceInfo          // filename, size, sha256, detected format
+    crs: CrsRef | null          // null means UNKNOWN - never guess
+    crsOrigin: 'declared' | 'sidecar' | 'user' | 'inferred' | 'unknown'
+    units: LinearUnitId | null
+    axisOrder: 'xy' | 'yx' | 'unknown'
+    vertical: VerticalRef       // {kind:'unknown'|'ellipsoidal'|'orthometric'|'local'}
+    layers: CirLayer[]          // vector/CAD
+    raster?: CirRaster
+    pointcloud?: CirPointCloud
+    table?: CirTable
+    warnings: Warning[]
+    provenance: Provenance
+  }
+
+3.2 VECTOR
+  CirLayer { name, geometryTypes[], features: CirFeature[], fields: FieldDef[] }
+  CirFeature {
+    id, geometry: CirGeometry, properties: Record<string, unknown>,
+    sourceLayer, sourceEntity,      // e.g. 'LWPOLYLINE'
+    sourceHandle,                   // DXF handle, preserved verbatim
+    style?: StyleHint
+  }
+  CirGeometry - GeoJSON-shaped but with explicit dimension:
+    { type: 'Point'|'MultiPoint'|'LineString'|'MultiLineString'|'Polygon'
+            |'MultiPolygon'|'GeometryCollection',
+      coordinates: Position[]..., dimension: 2|3|4 }   // 4 = XYZM
+  Position = [x, y] | [x, y, z] | [x, y, z, m]
+  Coordinates are ALWAYS stored in the dataset CRS, in x/y (easting/northing or
+  longitude/latitude) order. Axis-order handling happens in readers and writers,
+  never in the middle of the pipeline.
+
+3.3 RASTER
+  CirRaster { width, height, bandCount, pixelType, noData, geotransform:[6],
+              crs, extent, statistics?, bands?: BandData[], hasPixelData: bool }
+  hasPixelData=false means "georeference/metadata only". A writer MUST refuse to
+  emit a raster product from a metadata-only source.
+
+3.4 POINT CLOUD
+  CirPointCloud {
+    count, loaded, bounds, scale:[3], offset:[3], pointFormat, versionMajor,
+    versionMinor, attributes: PointAttributeFlags,
+    points: { x:Float64Array, y:Float64Array, z:Float64Array,
+              intensity?:Uint16Array, classification?:Uint8Array,
+              returnNumber?:Uint8Array, numberOfReturns?:Uint8Array,
+              rgb?:Uint16Array, gpsTime?:Float64Array,
+              scanAngle?:Int16Array, sourceId?:Uint16Array },
+    decimation: { mode:'none'|'nth'|'grid'|'voxel', factor?, cell? } | null
+  }
+  Typed arrays only - never arrays of objects. A 40M-point cloud in objects is
+  an out-of-memory crash; in typed arrays it is a buffer that transfers to a
+  worker for free.
+
+3.5 TABLE (survey coordinate schemas)
+  CirTable { columns: ColumnDef[], rows: (string|number|null)[][],
+             mapping: ColumnMapping | null, detectedSchema: SurveySchemaId|null }
+  ColumnMapping names which column is id/easting/northing/elevation/lat/lon/
+  code/description. Mapping is required before a table becomes vector geometry.
+
+3.6 PROVENANCE (attached to every dataset and every conversion job)
+  Provenance {
+    sourceFile, sha256, sourceFormat, detectionConfidence,
+    sourceCrs, targetCrs, settingsSnapshot, engineVersions,
+    warnings[], qaResult, startedAt, finishedAt, durationMs
+  }
+
+
+================================================================================
+4. FORMAT CAPABILITY REGISTRY
+================================================================================
+
+4.1 SINGLE SOURCE OF TRUTH
+extension/src/core/registry.ts holds one FormatDef per format. The UI, the
+detector, the settings panel and the docs all read this registry. No component
+may hard-code a format list.
+
+  FormatDef {
+    id, name, extensions[], mimeTypes[], magic?: MagicRule[],
+    category: 'gis'|'cad'|'raster'|'lidar'|'survey'|'gps'|'mining'
+              |'spreadsheet'|'archive'|'crs',
+    dataKind: 'vector'|'raster'|'pointcloud'|'table'|'archive'|'sidecar',
+    support: {
+      import: 'full'|'partial'|'metadata-only'|'adapter'|'none',
+      export: 'full'|'partial'|'adapter'|'none'
+    },
+    requiresNative?: boolean, requiresWasm?: boolean,
+    supports2D, supports3D, supportsZ, supportsM, supportsAttributes,
+    supportsCRS, supportsMultiGeometry, supportsCurves,
+    companions?: string[],        // e.g. shp -> ['shx','dbf','prj','cpg']
+    packaging?: 'single'|'zip',
+    maxRecommendedSizeMb?, readerEngine?, writerEngine?,
+    warnings?: string[], notes?: string
+  }
+
+4.2 SUPPORT LEVEL SEMANTICS (displayed verbatim in the UI)
+  full           reader/writer implemented and round-trip tested
+  partial        implemented with named, enumerated limitations
+  metadata-only  structure/georeference read; pixel or payload NOT decoded
+  adapter        contract exists; requires native host or a future WASM engine
+  none           not implemented; never offered
+
+4.3 TARGET MATRIX
+The following is the delivery target. Anything not at 'full' MUST carry its
+honest level in the registry and in the UI badge.
+
+A. VECTOR / GIS
+   GeoJSON .geojson/.json                    import full   export full
+   GeoJSON Sequence .geojsonl/.jsonl         import full   export full
+   TopoJSON .topojson                        import full   export partial
+   ESRI Shapefile .shp+.shx+.dbf+.prj+.cpg   import full   export full (zip)
+   KML .kml                                  import full   export full
+   KMZ .kmz                                  import full   export full
+   GML .gml                                  import partial export partial
+   GPX .gpx                                  import full   export full
+   WKT .wkt                                  import full   export full
+   WKB .wkb                                  import full   export full
+   MapInfo MIF/MID .mif+.mid                 import partial export partial
+   OSM XML .osm                              import partial export none
+   LandXML .xml/.landxml                     import partial export partial
+   CSV/TSV/TXT coordinate tables             import full   export full
+   XLSX .xlsx                                import full   export full
+   GeoPackage .gpkg                          ADAPTER (SQLite/WASM)
+   FlatGeobuf .fgb                           ADAPTER
+   GeoParquet .parquet                       ADAPTER
+   File Geodatabase .gdb                     ADAPTER (licensed SDK)
+   SpatiaLite .sqlite                        ADAPTER
+
+B. CAD
+   DXF ASCII .dxf                            import full   export full
+   DXF binary .dxf                           import partial export none
+   DWG .dwg                                  ADAPTER (native host + ODA)
+   DGN .dgn                                  ADAPTER
+   LandXML                                   as above
+
+C. RASTER
+   ESRI ASCII Grid .asc/.grd                 import full   export full
+   World files .tfw/.jgw/.pgw/.wld/.gfw/.bpw import full   export full
+   QGIS GCP .points                          import full   export full
+   PRJ / QPJ sidecars                        import full   export full
+   GeoTIFF .tif/.tiff                        import metadata-only, export none
+                                             until a real raster codec ships
+   PNG/JPEG/BMP/WebP + sidecar               import metadata-only (georef bind)
+   COG / VRT / IMG / ECW / MrSID             ADAPTER
+
+D. POINT CLOUD
+   LAS 1.0-1.4 .las                          import full   export full
+   LAZ .laz                                  ADAPTER (real codec required, R5)
+   COPC .laz                                 ADAPTER
+   XYZ .xyz / TXT / CSV clouds               import full   export full
+   PTS .pts                                  import full   export full
+   PLY .ply (ascii + binary LE)              import full   export full (ascii)
+   E57 .e57                                  ADAPTER
+
+E. SURVEY / MINING
+   PNEZD / PENZD / NEZ / ENZ / XYZ tables    import full   export full
+   Surpac String .str                        import partial export partial
+   Drill collar / assay / blast-hole CSV     import full (via table mapping)
+   Datamine / Micromine / Vulcan / Carlson   ADAPTER
+
+4.4 REGISTRY DISCIPLINE
+A pull request that raises a support level MUST, in the same commit, add the
+test that justifies it. CI fails if a format is 'full' with no round-trip test
+covering it (see 12.4).
+
+
+================================================================================
+5. INGESTION AND DETECTION
+================================================================================
+
+5.1 INPUT METHODS (all mandatory)
+  1. Drag and drop of files
+  2. Drag and drop of folders (webkitGetAsEntry traversal)
+  3. File picker (multiple)
+  4. Directory picker where Chrome allows it
+  5. ZIP / KMZ archive import
+  6. Nested archive extraction (depth limited, see 9.3)
+  7. Companion-file grouping (see 5.4)
+  8. Mixed-format batch queues
+  9. Session restore while the workspace tab lives
+
+5.2 LAYERED DETECTOR (core/detect.ts)
+Detection MUST run these layers and combine them into a confidence score:
+  L1 extension            weak signal, never decisive on its own
+  L2 MIME type            weak
+  L3 magic bytes          strong  (e.g. 'PK\x03\x04', 'LASF', 0x0000270A shp)
+  L4 header structure     strong  (LAS header length, SHP file length field)
+  L5 XML root + namespace strong  (kml, gpx, gml, LandXML, osm)
+  L6 JSON shape validation strong (GeoJSON type+geometry keys, TopoJSON arcs)
+  L7 binary layout probe   strong  (DBF field descriptor table, TIFF IFD walk)
+  L8 text heuristics       medium  (DXF '  0\nSECTION', CSV delimiter+numeric
+                                    column profile, PLY 'ply\nformat')
+  L9 companion context     medium  (a .shx next to a .shp raises SHP confidence)
+
+  Confidence = weighted sum, clamped 0..1.
+  >= 0.90  auto-proceed
+  0.60-0.89 proceed but show "Confirm detected format" chip
+  < 0.60   BLOCK conversion until the user confirms the format
+
+5.3 DETECTION OUTPUT (shown in the inspector header, verbatim style)
+    Detected : DXF Vector Drawing (ASCII)
+    Confidence: 98%
+    CRS      : not declared - selection required
+    Units    : from $INSUNITS = metre
+    Geometry : 412 point / 88 line / 31 polygon
+
+  "INFERRED" and "not declared" are required labels. An empty CRS field is a bug.
+
+5.4 COMPANION GROUPING (core/companions.ts)
+Group by case-insensitive basename within the same directory or archive folder:
+  roads.shp + roads.shx + roads.dbf + roads.prj + roads.cpg -> one SHP dataset
+  map.mif + map.mid                                          -> one MIF dataset
+  ortho.tif + ortho.tfw + ortho.prj                          -> one raster
+  cloud.las + cloud.prj                                      -> one point cloud
+Missing mandatory companion (.shx or .dbf for SHP) is a WARNING with an exact
+message naming the missing file - never a silent partial read.
+
+5.5 JSON DISAMBIGUATION
+A .json file is GeoJSON only if it structurally validates: a FeatureCollection
+with a features array, or a bare Geometry/Feature with a known type. Otherwise
+it is 'json (unrecognised)' and offered only to the table importer if it is an
+array of flat objects.
+
+
+================================================================================
+6. CRS AND GEODESY ENGINE
+================================================================================
+
+6.1 REQUIRED CAPABILITIES
+  - EPSG:4326 WGS 84 geographic
+  - EPSG:3857 Web Mercator
+  - UTM zones 1-60, north and south, WGS 84 (EPSG:326xx / 327xx)
+  - Bundled EPSG subset with name, datum, projection, unit, axis order
+  - Projected <-> geographic transformation both directions
+  - Explicit axis-order handling per CRS
+  - Local / engineering grid mode (no transformation, units only)
+  - Custom CRS via WKT1, PROJJSON or PROJ string entry
+  - .prj / .qpj parsing and .prj generation for Shapefile export
+
+6.2 PROJECTION MATH (crs/projection.ts)
+Transverse Mercator by the Krueger series, WGS 84 ellipsoid:
+  a = 6378137.0, f = 1/298.257223563, k0 = 0.9996
+  FE = 500000 m, FN = 0 (north) or 10000000 m (south)
+Accuracy requirement: round-trip lat/lon -> UTM -> lat/lon MUST agree within
+1e-7 degrees, and E/N -> lat/lon -> E/N within 1 mm, across zones 1..60 and
+latitudes -80..+84. This is enforced by tests, not by assertion.
+
+6.3 CRS SAFETY RULES
+  - A file's declared CRS always wins over any project default.
+  - If CRS is unknown AND coordinate magnitudes are ambiguous, conversion STOPS
+    and the user must pick a source CRS. Heuristics may SUGGEST, never decide.
+  - Suggestion heuristic (suggest only, label 'INFERRED'):
+      |x| <= 180 and |y| <= 90                     -> geographic candidate
+      100000 <= x <= 900000 and 0 <= y <= 10000000 -> UTM candidate, zone unknown
+      anything else                                 -> local/engineering grid
+  - A user-selected CRS is written into provenance with crsOrigin='user'.
+  - Datum transformation beyond WGS84-family is an ADAPTER. The UI MUST NOT
+    offer a datum shift the engine cannot actually perform.
+
+6.4 INDIAN SURVEY DEFAULTS
+UTM zones 42N-47N are pinned to the top of the quick list because they cover
+India, and the historic Pakhar/Lohardaga profile (EPSG:32645) is offered as a
+saved preset - offered, never forced. There is no global default zone.
+
+6.5 VERTICAL
+Z is carried, never reinterpreted. verticalReference is one of
+ellipsoidal | orthometric | local RL | unknown, defaulting to unknown.
+Orthometric<->ellipsoidal conversion requires a geoid model: ADAPTER, and until
+it exists the UI MUST NOT offer it.
+
+
+================================================================================
+7. UNITS
+================================================================================
+
+7.1 SUPPORTED
+  linear : mm, cm, m, km, in, ft (international), us-ft, yd, mi, nmi
+  angular: degree, radian, gon
+  area   : m2, ha, acre, ft2, km2
+  volume : m3, ft3, yd3
+
+7.2 RULES
+  - Linear, angular, area and volume are separate namespaces in the UI and in
+    the code. An area factor can never be applied to a coordinate: the unit
+    engine refuses cross-namespace conversion at the type level.
+  - us-ft = 1200/3937 m exactly. int-ft = 0.3048 m exactly. These MUST NOT be
+    conflated; a 2 ppm error over a 10 km traverse is 20 mm.
+  - DXF $INSUNITS is read on import and written on export.
+
+
+================================================================================
+8. GEOMETRY, TOPOLOGY, PRECISION
+================================================================================
+
+8.1 GEOMETRY OPERATIONS
+point, multipoint, line, multiline, polygon (with interior rings), multipolygon,
+geometry collection where the target permits, Z always, M where supported.
+
+8.2 CURVE POLICY (CAD -> GIS)
+ARC, CIRCLE, ELLIPSE and SPLINE MUST be segmentized with an explicit, visible
+tolerance (default: sagitta 0.01 m, minimum 8 segments per full circle).
+The segment count and the tolerance used are recorded per entity in the QA
+warnings. Silent chord replacement is prohibited (R3).
+The original entity type and handle are preserved in feature properties as
+_srcEntity and _srcHandle.
+
+8.3 TOPOLOGY CHECKS (qa/topology.ts)
+self-intersection, duplicate vertices, zero-length segments, unclosed rings,
+ring orientation, duplicate features, invalid holes, overlapping polygons.
+
+8.4 REPAIR
+remove duplicate vertices, close rings, snap within tolerance, fix trivial
+self-intersections, normalise ring orientation, deduplicate features.
+DEFAULT: ALL REPAIR OFF. Survey data is legal evidence; the tool does not
+quietly edit it. Enabling repair is a deliberate user action and is recorded.
+
+8.5 PRECISION
+Internal storage is IEEE-754 double, always. Display rounding is presentation
+only and MUST NOT feed back into computation. Output precision options: full |
+3 | 4 | 5 | 6 | custom. Default 3 decimals for human-readable projected output,
+full precision for geographic output (1e-9 deg) and for binary formats.
+QA reports the maximum coordinate delta introduced by output rounding.
+
+
+================================================================================
+9. ENGINE IMPLEMENTATION NOTES
+================================================================================
+
+9.1 DXF READER (engines/cad/dxf-read.ts)
+Group-code tokenizer, then section walk: HEADER, TABLES (LAYER), BLOCKS,
+ENTITIES. Required entity coverage:
+  POINT, LINE, POLYLINE (2D/3D + vertex stream), LWPOLYLINE, 3DFACE, SOLID,
+  TRACE, ARC, CIRCLE, ELLIPSE, SPLINE, TEXT, MTEXT, INSERT (block expansion
+  with translation/scale/rotation), ATTRIB, DIMENSION (anchor point + text),
+  LEADER, MLEADER (polyline path), HATCH (boundary paths), MESH/POLYFACE
+  (as faces where present).
+Header values consumed: $INSUNITS, $EXTMIN/$EXTMAX, $ACADVER.
+Every entity type encountered but not converted is COUNTED BY NAME and reported
+(dxfUnconvertedEntities behaviour from Geo-Studio is preserved and extended).
+Layer name, colour (ACI + true colour), linetype, elevation and handle are
+preserved into feature properties.
+
+9.2 DXF WRITER (engines/cad/dxf-write.ts)
+Emit AC1015 (R2000) minimum, with an option for AC1032 (2018). Mapping:
+  Point   -> POINT (with optional TEXT label)
+  Line    -> LWPOLYLINE (2D) or POLYLINE with 3D vertices when Z is preserved
+  Polygon -> closed LWPOLYLINE (+ optional HATCH fill)
+  Text    -> TEXT or MTEXT
+Layer per source layer, or per attribute field (layer-by-code), selectable.
+The writer MUST write $INSUNITS matching the export unit.
+
+9.3 ARCHIVES (engines/archives/zip.ts)
+Read: local-header walk plus central-directory walk, store + deflate, using
+DecompressionStream('deflate-raw').
+Write: CompressionStream('deflate-raw') with a pure-TS fixed-Huffman fallback
+(ported from Geo-Studio zip.ts) so the writer never depends on a flag.
+Security limits, all enforced:
+  max nesting depth            4
+  max total decompressed size  2 GB (configurable, default 1 GB)
+  max compression ratio        200:1 per entry (zip-bomb guard)
+  path traversal               entries containing '..' or absolute paths are
+                               rejected, not sanitised
+  no execution                 archive contents are never evaluated
+
+9.4 LAS (engines/pointcloud/las.ts)
+Reader: public header block (1.0-1.4), variable-length records, point formats
+0-10, scale/offset applied as x = X*scaleX + offsetX in double precision.
+Header/file-length cross-check: if declared point count exceeds the bytes
+available, report "declares N records, file holds M" and stop - do not read
+garbage.
+Writer: LAS 1.2/1.4, point formats 0/1/2/3/6/7, computed scale/offset from the
+data bounds unless the user pins them, correct bounding box, correct
+"number of points by return".
+LAZ: header says compressed (point format bit 7 set / laszip VLR present) ->
+reject with the exact reason. Never fall through to the LAS reader (R5).
+
+9.5 SHAPEFILE (engines/vector/shapefile.ts)
+Reader: .shp record loop, shape types 1/3/5/8/11/13/15/18/21/23/25/28 (point,
+polyline, polygon, multipoint, and their Z/M variants), .dbf field table with
+C/N/F/D/L types and code-page from .cpg, ring orientation to decide outer vs
+hole, .prj through the WKT parser.
+Writer: emits .shp + .shx + .dbf + .prj + .cpg packaged as one ZIP.
+DBF constraints enforced before writing: field name <= 10 bytes uppercase,
+unique after truncation, numeric width <= 18, text width <= 254. Every rename
+and truncation is reported and recorded in the manifest (33 in the source spec).
+Shapefile cannot hold mixed geometry types: the writer splits by type into
+name_point / name_line / name_polygon and says so.
+
+9.6 SURVEY TABLES (engines/survey/schema.ts)
+Header-name matching plus positional fallback. Recognised aliases (case- and
+separator-insensitive), preserving the ORIGINAL field names in the output:
+  id     : point, pt, pointid, pt_no, no, id, name, station, stn
+  easting: easting, east, e, x, x_coord, utm_e
+  northing: northing, north, n, y, y_coord, utm_n
+  elev   : elevation, elev, z, rl, level, height, ht
+  lat    : latitude, lat, y_lat
+  lon    : longitude, lon, lng, long, x_lon
+  code   : code, feature, desc, description, remark, remarks, layer
+  mining : bhid, hole_id, borehole, bench, crest, toe, pit, block, plot,
+           khasra, khewat, khatian, lithology, assay, grade
+Positional schemas: PNEZD, PENZD, NEZ, ENZ, XYZ, ID-X-Y-Z, ID-Y-X-Z.
+The user can always override the mapping in a preview table. Coordinate order
+is ALWAYS shown explicitly; latitude and longitude are never swapped silently.
+
+9.7 GEOTIFF (engines/raster/geotiff.ts)
+Implemented: TIFF/BigTIFF IFD walk, ModelPixelScale, ModelTiepoint,
+ModelTransformation, GeoKeyDirectory (EPSG code extraction), sample format,
+bits per sample, band count, nodata, tile/strip layout.
+NOT implemented: pixel decode for compressed variants.
+Therefore the registry level is metadata-only and the UI says
+"Georeference and structure read. Pixel data not decoded - raster output is
+disabled for this source." (R2, spec item 14).
+
+9.8 ASCII GRID (engines/raster/asciigrid.ts)
+Full read and write of ncols/nrows/xllcorner|xllcenter/yllcorner|yllcenter/
+cellsize/NODATA_value plus the value matrix. This is the working DEM path and
+is where DEM round-trip tests run.
+
+
+================================================================================
+10. QA / FIDELITY ENGINE
+================================================================================
+
+10.1 CONTRACT
+QA is a re-import comparison, not a success message. After writing the output,
+the engine parses the produced bytes back into a CIR and compares.
+
+10.2 VECTOR CHECKS
+feature count, per-type geometry counts, vertex count, bounds (all four edges),
+maximum coordinate drift, Z presence and min/max, attribute field survival,
+CRS identity or intended transform, topology deltas.
+
+10.3 POINT CLOUD CHECKS
+point count, bounding box, Z range, attribute availability, sampled coordinate
+drift against scale/offset resolution, scale/offset sanity.
+
+10.4 RASTER CHECKS
+dimensions, band count, extent, pixel size, CRS, nodata, sampled pixel
+comparison where pixel data exists.
+
+10.5 VERDICTS
+  PASS                 re-imported and every check within tolerance
+  PASS WITH WARNINGS   re-imported, known and enumerated losses
+  FAILED               re-import failed or a check exceeded tolerance
+  NOT VALIDATED        output written but no reader exists for that target
+A green PASS for an unvalidated output is prohibited (R11).
+
+10.6 WARNING TEXT STYLE (mandatory shape: what / why / what to do)
+  "243 curved DXF entities were segmentized to lines at 0.010 m sagitta
+   tolerance. GeoJSON has no arc primitive. Increase tolerance or export to DXF
+   to keep true curves."
+  "Z values were dropped: the Shapefile target was written as shapeType 3
+   (PolyLine, 2D). Choose PolyLineZ to keep elevations."
+  "Source CRS was not declared. The user selected EPSG:32645 (WGS 84 / UTM 45N);
+   this selection is recorded in the manifest."
+
+
+================================================================================
+11. USER INTERFACE
+================================================================================
+
+11.1 SURFACES
+  Toolbar popup   compact launcher: open workspace, open side panel, status
+  Side panel      quick drop zone + live queue, for use beside another tab
+  Full page       the professional workspace (chrome-extension://<id>/src/
+                  workspace/index.html), opened from the popup or the action
+
+The full application MUST NOT live inside the toolbar popup.
+
+11.2 VISUAL LANGUAGE
+Professional technical workstation. Dark theme primary, light theme supported,
+system-following by default. High information density without clutter.
+Type scale is compact (12/13/14/16/20 px), tabular numerals for coordinates,
+monospace for coordinates, handles, hashes and log lines.
+No decorative animation. Motion is limited to state feedback under 150 ms.
+Colour carries meaning only: green = validated, amber = warning/inferred,
+red = error/blocked, blue = active/selected, grey = unavailable.
+Every colour-coded state also carries text or an icon (accessibility).
+
+11.3 WORKSPACE LAYOUT
+  Top bar    : product name | Local-only badge | Native engine status |
+               theme | settings | help
+  Left       : QUEUE (compact rows, mixed formats, per-file target)
+  Centre     : DROP ZONE (large, generous) collapsing to INSPECTOR +
+               PREVIEW once files are queued
+  Right      : TARGET FORMAT picker (search + category chips + cards)
+               and CONVERSION SETTINGS (target-driven, advanced collapsed)
+  Bottom     : QA REPORT | CONVERSION LOG | progress and throughput
+
+  Primary actions, always visible:  [ Add Files ]  [ Output Format ]  [ Convert ]
+  Secondary:  Inspect | Convert + QA | Download | Batch ZIP | Clear Queue
+  Advanced settings stay collapsed until requested.
+
+11.4 FORMAT PICKER
+Never a 100-item dropdown. Search field + category chips
+(GIS | CAD | Raster | LiDAR | Survey | GPS | Mining | Spreadsheet | Archive)
++ recent + favourites. Each card shows: name, extension, IMPORT/EXPORT badges,
+2D/3D badge, attribute and CRS support, and the support level from 4.2.
+Targets that are invalid for the queued data kind are filtered out, not
+greyed-out noise.
+
+11.5 QUEUE ROW
+filename | detected format + confidence | data summary (features / points /
+raster size) | CRS chip | target format | status | warnings count |
+inspect | remove.
+
+11.6 INSPECTOR TABS
+Overview | Geometry | CRS | Attributes | Preview | Source metadata | Warnings.
+Content per data kind exactly as listed in the source specification section 12.
+
+11.7 PREVIEW
+Canvas 2D renderer, no map tiles (offline, R15).
+Vector: fit bounds, pan, zoom, layer toggles, feature pick with attribute
+popup, coordinate readout, graticule/grid.
+CAD: layer visibility, ACI colour, text toggle, block toggle.
+Point cloud: plan view, point size, Z or classification or intensity colouring,
+preview decimation clearly labelled "PREVIEW ONLY - export uses all points".
+Raster: extent rectangle plus image where pixels exist.
+Preview data is NEVER the export data.
+
+11.8 ACCESSIBILITY
+Full keyboard operation, visible focus rings, ARIA roles on the queue,
+drop zone and dialogs, minimum 4.5:1 contrast for text, tooltips that explain
+survey/CAD terminology (sagitta, PNEZD, ACI, LWPOLYLINE, orthometric height).
+
+
+================================================================================
+12. BATCH, PACKAGING, NAMING
+================================================================================
+
+12.1 BATCH
+Per-file target or one global target. Apply-to-selected. Retry failed, skip
+completed, pause, resume, cancel. Per-file and overall progress with ETA.
+Error isolation: one failed file never aborts the batch.
+Concurrency defaults to min(4, hardwareConcurrency) and is user-settable.
+
+12.2 OUTPUTS
+Single file downloads directly. Multi-file targets (Shapefile, MIF/MID, KMZ)
+are packaged automatically. A batch produces one master ZIP plus a manifest.
+
+12.3 MANIFEST (CSV and JSON, both)
+source filename, source format, detection confidence, target filename, target
+format, source CRS, target CRS, feature/point/pixel counts in and out, output
+size, status, warnings, errors, engine versions, sha256, timestamp, duration.
+
+12.4 FILE NAMING
+Default {basename}_converted_to_{target}.{ext}
+Alternatives {basename}_{target} and {basename}_{date}_{target}
+Unsafe path characters are sanitised. The source is never overwritten.
+
+
+================================================================================
+13. NATIVE MESSAGING HOST (DWG / ODA)
+================================================================================
+
+13.1 WHY
+A Chrome extension cannot execute a native converter. DWG therefore runs through
+Chrome Native Messaging to a small local host that drives the user's own
+installed ODA File Converter. This reuses the prototype's proven flow.
+
+13.2 PROTOCOL (stdio, 4-byte little-endian length prefix + UTF-8 JSON)
+  Request  { id, op: 'ping'|'health'|'convert', payload }
+  convert  payload { sourceName, sourceBase64, targetFormat, odaVersion }
+  Response { id, ok, result?, error?, engine: {name, version, path} }
+  Progress { id, progress: 0..1, stage: string }
+
+13.3 HOST BEHAVIOUR (native-host/universal_geo_host.py)
+  - creates an isolated temp job directory per request, always cleaned up
+  - validates that the payload is a DWG by magic bytes ('AC10'..'AC10xx')
+  - invokes ODA File Converter exactly as the prototype did:
+      <exe> <inDir> <outDir> <ACADxxxx> DXF <recursive> <audit> *.DWG
+  - enforces a timeout and returns stderr/stdout on failure
+  - validates the produced DXF (non-empty, contains 'SECTION')
+  - never touches a path outside its own temp directory
+  - reports engine name, version and executable path in every response
+
+13.4 STATUS STATES (shown in the top bar)
+  READY | NOT INSTALLED | CONFIGURATION ERROR | ENGINE ERROR | TIMEOUT
+The extension is fully functional for all non-native formats in every state.
+When the helper is absent, DWG cards show "Native Engine Required" and the
+convert button for DWG is disabled with a link to docs/NATIVE_HOST.md.
+
+13.5 INSTALLERS
+native-host/install-windows.ps1, install-macos.sh, install-linux.sh write the
+native messaging manifest into the correct per-platform location with the
+extension ID supplied by the user at install time.
+
+
+================================================================================
+14. PERFORMANCE AND MEMORY
+================================================================================
+
+14.1 WORKERS
+  parse worker    detection + reading -> CIR
+  convert worker  CIR -> target bytes
+Anything above WORKER_THRESHOLD_BYTES (2 MB, from Geo-Studio's parseClient)
+goes to a worker. Transferable ArrayBuffers are used for payload hand-off;
+typed arrays are never structure-cloned repeatedly.
+
+14.2 TARGETS (measured by the perf test, not claimed)
+  < 10 MB vector      interactive, < 1 s to inspector
+  10-100 MB           worker path, UI stays responsive, progress visible
+  > 100 MB            chunked/streaming where the engine allows, otherwise the
+                      pre-flight refuses with an actionable message
+
+14.3 PRE-FLIGHT
+Before a risky job, estimate memory (bytes x engine expansion factor) against
+navigator.deviceMemory / performance.memory where available. If it exceeds the
+budget, refuse with:
+  "This dataset is too large for in-browser processing (estimated 3.4 GB peak).
+   Use the local engine, or crop/decimate/filter the dataset first."
+
+14.4 REPORTED METRICS
+read speed, conversion speed, output size, elapsed time, peak memory estimate.
+
+
+================================================================================
+15. SECURITY AND PRIVACY
+================================================================================
+  - Local-only mode is ON by default and has no off switch in v1.
+  - No file bytes leave the machine. No analytics in any conversion path.
+  - CSP: script-src 'self' 'wasm-unsafe-eval'; object-src 'self'.
+  - host_permissions is empty.
+  - Permissions justified: storage (settings/presets), unlimitedStorage (large
+    intermediate results), downloads (write outputs), sidePanel (quick queue),
+    nativeMessaging (DWG helper only).
+  - All binary input is bounds-checked before allocation; a declared length is
+    never trusted against the actual buffer size.
+  - Archive extraction is guarded per 9.3.
+
+
+================================================================================
+16. TESTING
+================================================================================
+
+16.1 PER IMPORT FORMAT
+valid sample, malformed sample, empty file, correct content with the wrong
+extension, CRS declared, CRS missing, 2D, 3D, multiple geometry types,
+attributes, unicode attributes.
+
+16.2 PER EXPORT FORMAT
+generate output, re-import it, compare against the source CIR: counts,
+geometry, CRS, precision.
+
+16.3 MANDATORY ROUND TRIPS
+  CSV -> DXF -> CSV
+  CSV -> GeoJSON -> CSV
+  CSV -> SHP -> GeoJSON
+  DXF -> GeoJSON -> DXF
+  DXF -> KML -> GeoJSON
+  KML -> GeoJSON -> KML
+  GeoJSON -> SHP -> GeoJSON
+  GeoJSON -> WKB -> GeoJSON
+  LAS -> XYZ -> LAS
+  LAS -> LAS (binary identity of coordinates within scale resolution)
+  ASC -> ASC (DEM values identical)
+  ARC / CIRCLE / SPLINE -> GIS -> DXF with measured chord tolerance
+
+16.4 REGISTRY GUARD TEST
+A test walks the registry and fails if any format claims import/export 'full'
+without a corresponding round-trip or read test. This is what keeps R1 true.
+
+
+================================================================================
+17. CI
+================================================================================
+.github/workflows/ci.yml runs on every push and pull request:
+  1. checkout, Node 22
+  2. npm ci
+  3. npm audit --omit=dev --audit-level=moderate   (blocking)
+  4. npm run lint      (tsc --noEmit, strict)
+  5. npm test          (vitest)
+  6. npm run build     (vite -> dist/)
+  7. npm run package   (dist-zip/universal-geo-converter.zip)
+  8. upload the packaged extension as a build artifact
+A red CI is a broken build. The artifact from a green run is directly loadable
+with chrome://extensions -> Load unpacked (dist/) or as the packaged zip.
+
+
+================================================================================
+18. PHASED DELIVERY
+================================================================================
+  PHASE 1 FOUNDATION   manifest, workspace shell, registry, CIR, detector,
+                       drop/queue, ZIP engine, workers, settings, provenance
+  PHASE 2 CORE VECTOR  CSV/TXT/XYZ survey tables, GeoJSON(+seq), KML/KMZ, GPX,
+                       WKT/WKB, Shapefile, DXF read+write, TopoJSON
+  PHASE 3 SURVEY/ENG   LandXML, Surpac STR, MIF/MID, GML, OSM, ASCII Grid,
+                       world files, QGIS GCP, XLSX
+  PHASE 4 RASTER       full GeoTIFF codec, resampling, raster reprojection,
+                       DEM/DSM products
+  PHASE 5 POINT CLOUD  LAS complete, real LAZ codec, PLY, PTS/PTX, filtering
+                       and decimation
+  PHASE 6 NATIVE/ADV   DWG via native host, DGN, E57, GeoPackage, FlatGeobuf,
+                       GeoParquet, vendor mining adapters
+
+Each phase ends green: lint + tests + build + a loadable extension.
+
+
+================================================================================
+19. ACCEPTANCE CRITERIA
+================================================================================
+ 1  Installs as MV3 from dist/ with no errors in chrome://extensions.
+ 2  Every bundled format converts with the network disabled.
+ 3  No CDN or remote resource reference exists anywhere in dist/.
+ 4  Mixed-format files queue and convert together.
+ 5  Detection uses signature/structure, not extension alone.
+ 6  The inspector shows format, CRS, units and a geometry summary.
+ 7  Ambiguous CRS blocks conversion and asks; it never guesses.
+ 8  All vector conversion goes through the CIR.
+ 9  Batch conversion works with per-file targets and error isolation.
+10  Master ZIP plus CSV/JSON manifest is produced for batches.
+11  QA re-import runs for every supported round trip.
+12  Unsupported entities and dropped attributes are counted and named.
+13  LAZ is genuinely decoded or explicitly refused - never mis-parsed.
+14  GeoTIFF is presented as metadata-only until a real codec ships.
+15  DWG shows native-required status and never fakes an output.
+16  No source bytes leave the machine.
+17  A 100 MB dataset does not freeze the UI.
+18  Companion files are grouped, and missing ones warn by name.
+19  Exported Shapefile packages are complete and re-import cleanly.
+20  Logs, warnings and errors state what happened, why, and what to do next.
+
+
+================================================================================
+20. SESSION HANDOVER
+================================================================================
+Progress is tracked in docs/BUILD_STATE.md. Any session - human or AI - that
+picks this work up MUST:
+  1. read this file,
+  2. read docs/BUILD_STATE.md for the current phase and the next task,
+  3. run `npm ci && npm run verify` to confirm the tree is green,
+  4. do the next task, update BUILD_STATE.md, commit, push.
+The branch for all work is claude/gis-cad-chrome-converter-hk8uwg.
+
+================================================================================
+END OF INSTRUCTION
+================================================================================

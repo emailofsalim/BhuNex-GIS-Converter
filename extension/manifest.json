@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Universal Geo Converter — GIS / Survey / CAD / Mining",
+  "short_name": "Universal Geo Converter",
+  "version": "1.0.0",
+  "description": "Offline-first conversion suite for GIS, geomatics, land survey, CAD, LiDAR and mine-survey data. All processing stays on your machine.",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Universal Geo Converter",
+    "default_popup": "src/popup/index.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "options_page": "src/workspace/index.html",
+  "commands": {
+    "open-workspace": {
+      "suggested_key": { "default": "Ctrl+Shift+U", "mac": "Command+Shift+U" },
+      "description": "Open the Universal Geo Converter workspace"
+    }
+  },
+  "permissions": ["storage", "unlimitedStorage", "downloads", "sidePanel", "nativeMessaging"],
+  "optional_permissions": [],
+  "host_permissions": [],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' blob: data:"
+  },
+  "web_accessible_resources": [],
+  "offline_enabled": true
+}

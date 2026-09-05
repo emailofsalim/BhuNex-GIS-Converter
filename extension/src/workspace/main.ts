@@ -1,0 +1,1433 @@
+/**
+ * Universal Geo Converter workspace.
+ *
+ * Framework-free: the workspace has one state tree and a handful of views, and a
+ * render-on-change loop is the whole requirement. It also keeps the bundle small
+ * and provably free of remote code, which the offline rule needs.
+ *
+ * The layout follows instruction §11.3 — queue on the left, inspector and
+ * preview in the centre, target format and settings on the right, QA and log
+ * along the bottom — with the three primary actions always visible and every
+ * advanced control collapsed until asked for.
+ */
+
+import './styles.css';
+
+import { groupCompanions, type IngestFile } from '../core/companions';
+import { CONFIRM_THRESHOLD } from '../core/detect';
+import { ConversionError } from '../core/errors';
+import { packageBatch, type ConversionSettings } from '../core/pipeline';
+import { FULL_PRECISION, fixedPrecision } from '../core/precision';
+import {
+  CATEGORY_LABEL,
+  FORMATS,
+  SUPPORT_LABEL,
+  exportTargetsFor,
+  getFormat,
+  isAvailable,
+  type FormatCategory,
+  type FormatDef,
+} from '../core/registry';
+import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../crs/epsg';
+import { crsLabel } from '../crs/transform';
+import { checkNativeHealth, NATIVE_STATUS_LABEL } from '../adapters/native-messaging/client';
+import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../ui/preview';
+import {
+  DEFAULT_SETTINGS,
+  loadSettings,
+  nextId,
+  rememberCrs,
+  rememberFormat,
+  store,
+  type AppSettings,
+  type QueueItem,
+} from '../state/store';
+import { expand, inspect, preflight, runConversion } from '../workers/client';
+
+// --------------------------------------------------------------------- helpers
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
+
+function element<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  attributes: Record<string, string> = {},
+  children: (Node | string)[] = []
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attributes)) {
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) node.append(child);
+  return node;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function badge(text: string, kind = 'muted', title?: string): HTMLElement {
+  const node = element('span', { class: `badge badge--${kind}`, text });
+  if (title) node.title = title;
+  return node;
+}
+
+// ----------------------------------------------------------------- ingestion
+
+/** Reads a File into the shape the grouper and the pipeline expect. */
+async function toIngestFile(file: File, path?: string): Promise<IngestFile> {
+  const buffer = await file.arrayBuffer();
+  return {
+    path: path ?? (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? file.name,
+    name: file.name,
+    size: file.size,
+    bytes: new Uint8Array(buffer),
+    mimeType: file.type || undefined,
+  };
+}
+
+/** Walks a dropped directory so a folder of shapefiles arrives grouped. */
+async function readEntry(entry: FileSystemEntry, prefix: string, into: IngestFile[]): Promise<void> {
+  if (entry.isFile) {
+    const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
+    into.push(await toIngestFile(file, `${prefix}${entry.name}`));
+    return;
+  }
+  if (!entry.isDirectory) return;
+  const reader = (entry as FileSystemDirectoryEntry).createReader();
+  for (;;) {
+    // readEntries returns at most 100 entries per call, so it must be drained.
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+    if (batch.length === 0) break;
+    for (const child of batch) await readEntry(child, `${prefix}${entry.name}/`, into);
+  }
+}
+
+async function filesFromDataTransfer(transfer: DataTransfer): Promise<IngestFile[]> {
+  const out: IngestFile[] = [];
+  const entries: FileSystemEntry[] = [];
+  for (const item of Array.from(transfer.items)) {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry) entries.push(entry);
+  }
+  if (entries.length > 0) {
+    for (const entry of entries) await readEntry(entry, '', out);
+    return out;
+  }
+  for (const file of Array.from(transfer.files)) out.push(await toIngestFile(file));
+  return out;
+}
+
+async function addFiles(files: IngestFile[]): Promise<void> {
+  if (files.length === 0) return;
+  const groups = groupCompanions(files);
+  const items: QueueItem[] = groups.map((group) => ({
+    id: nextId(),
+    fileName: group.primary.name,
+    path: group.primary.path,
+    size: group.primary.size,
+    bytes: group.primary.bytes,
+    companions: group.companions.size > 0 ? new Map([...group.companions].map(([key, file]) => [key, file.bytes])) : undefined,
+    siblingExtensions: group.siblingExtensions,
+    missingCompanions: group.missing,
+    status: 'queued',
+    warnings: [],
+  }));
+
+  store.addItems(items);
+  store.log('info', `Added ${items.length} dataset${items.length === 1 ? '' : 's'} (${files.length} file${files.length === 1 ? '' : 's'}).`);
+
+  for (const item of items) {
+    if (item.missingCompanions.length > 0) {
+      store.log(
+        'warn',
+        `${item.fileName}: missing companion file${item.missingCompanions.length === 1 ? '' : 's'} ${item.missingCompanions
+          .map((extension) => `.${extension}`)
+          .join(', ')} — the dataset is incomplete.`
+      );
+    }
+    await inspectItem(item.id);
+  }
+  render();
+}
+
+async function inspectItem(id: string): Promise<void> {
+  const item = store.get().items.find((candidate) => candidate.id === id);
+  if (!item) return;
+  store.updateItem(id, { status: 'inspecting' });
+  render();
+
+  try {
+    const { detection, dataset } = await inspect(
+      {
+        fileName: item.fileName,
+        bytes: item.bytes,
+        companions: item.companions,
+        siblingExtensions: item.siblingExtensions,
+      },
+      item.forcedFormatId
+    );
+
+    const blocked = detection.requiresConfirmation && !item.forcedFormatId;
+    store.updateItem(id, {
+      detection,
+      dataset,
+      warnings: dataset.warnings ?? [],
+      status: blocked ? 'blocked' : 'ready',
+      // Suggest the global target, or the first valid one for this data kind.
+      targetFormatId: item.targetFormatId ?? store.get().settings.globalTargetFormatId ?? undefined,
+    });
+
+    if (blocked) {
+      store.log(
+        'warn',
+        `${item.fileName}: format not identified with confidence (${detection.formatName}, ${(detection.confidence * 100).toFixed(0)}%). Confirm it in the inspector before converting.`
+      );
+    } else {
+      store.log('ok', `${item.fileName}: ${detection.formatName} (${(detection.confidence * 100).toFixed(0)}% confidence).`);
+    }
+  } catch (error) {
+    const structured =
+      error instanceof ConversionError
+        ? error.toJSON()
+        : { code: 'INSPECT_FAILED', what: 'The file could not be read.', why: String(error), action: 'Confirm the source format in the inspector.' };
+    store.updateItem(id, { status: 'failed', error: structured as QueueItem['error'] });
+    store.log('error', `${item.fileName}: ${structured.what} ${structured.why}`);
+  }
+  render();
+}
+
+async function expandArchiveItem(id: string): Promise<void> {
+  const item = store.get().items.find((candidate) => candidate.id === id);
+  if (!item) return;
+  try {
+    const expanded = await expand({ fileName: item.fileName, bytes: item.bytes });
+    store.removeItem(id);
+    await addFiles(
+      expanded.map((entry) => ({ path: entry.fileName, name: entry.fileName.split('/').pop() ?? entry.fileName, size: entry.bytes.length, bytes: entry.bytes }))
+    );
+    store.log('ok', `${item.fileName}: expanded to ${expanded.length} file(s).`);
+  } catch (error) {
+    store.log('error', `${item.fileName}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// ----------------------------------------------------------------- conversion
+
+function buildSettings(): Partial<ConversionSettings> {
+  const settings = store.get().settings;
+  const sourceCrs = settings.sourceCrsEpsg ? crsFromEpsg(settings.sourceCrsEpsg) : null;
+  const targetCrs = settings.targetCrsEpsg ? crsFromEpsg(settings.targetCrsEpsg) : null;
+  return {
+    precision: settings.precisionMode === 'full' ? FULL_PRECISION : fixedPrecision(settings.precisionDecimals),
+    sourceCrs,
+    targetCrs,
+    preserveZ: settings.preserveZ,
+    naming: { pattern: settings.naming },
+    runQa: settings.runQa,
+    arcTolerance: settings.arcTolerance,
+    embedMetadata: settings.embedMetadata,
+    repair: {
+      closeRings: settings.repairCloseRings,
+      removeDuplicateVertices: settings.repairRemoveDuplicateVertices,
+      normalizeRingOrientation: settings.repairNormalizeOrientation,
+      removeDuplicateFeatures: settings.repairDeduplicateFeatures,
+      snapTolerance: settings.snapTolerance,
+    },
+    decimation:
+      settings.decimationMode === 'none'
+        ? undefined
+        : { mode: settings.decimationMode, factor: settings.decimationFactor, cell: settings.decimationCell },
+    dxf: { arcTolerance: settings.arcTolerance } as never,
+  };
+}
+
+async function convertItem(id: string, withQa: boolean): Promise<void> {
+  const item = store.get().items.find((candidate) => candidate.id === id);
+  if (!item) return;
+  const targetId = item.targetFormatId ?? store.get().settings.globalTargetFormatId;
+  if (!targetId) {
+    store.log('warn', `${item.fileName}: choose an output format first.`);
+    return;
+  }
+
+  const check = preflight(item.size, item.detection?.formatId ?? 'unknown');
+  if (!check.ok) {
+    store.updateItem(id, {
+      status: 'failed',
+      error: {
+        code: 'TOO_LARGE_FOR_BROWSER',
+        what: 'The dataset is too large to convert in the browser.',
+        why: check.message ?? '',
+        action: 'Reduce it with a crop, filter or decimation setting, or convert it with a desktop tool.',
+      },
+    });
+    store.log('error', `${item.fileName}: ${check.message}`);
+    render();
+    return;
+  }
+
+  store.updateItem(id, { status: 'converting', error: undefined });
+  render();
+  const startedAt = performance.now();
+
+  try {
+    const settings = { ...buildSettings(), runQa: withQa && store.get().settings.runQa };
+    const result = await runConversion(
+      { fileName: item.fileName, bytes: item.bytes, companions: item.companions, siblingExtensions: item.siblingExtensions },
+      targetId,
+      settings,
+      item.forcedFormatId
+    );
+    const durationMs = Math.round(performance.now() - startedAt);
+    const outputBytes = result.outputs.reduce((sum, output) => sum + output.bytes.length, 0);
+
+    store.updateItem(id, {
+      status: 'done',
+      outputs: result.outputs,
+      qa: result.qa,
+      warnings: result.warnings,
+      provenance: result.provenance,
+      durationMs,
+    });
+    await store.patchSettings({
+      recentFormats: rememberFormat(store.get().settings, targetId),
+      recentCrs: rememberCrs(store.get().settings, crsFromEpsg(store.get().settings.targetCrsEpsg ?? 0)),
+    });
+    store.set({
+      perf: `${formatBytes(item.size)} in ${durationMs} ms · ${formatBytes(outputBytes)} out · ${(item.size / 1024 / 1024 / (durationMs / 1000)).toFixed(1)} MB/s`,
+    });
+    store.log('ok', `${item.fileName} → ${getFormat(targetId)?.name}: ${result.qa.verdict.replace(/_/g, ' ')} in ${durationMs} ms.`);
+    for (const warning of result.warnings) {
+      if (warning.severity !== 'info') store.log(warning.severity === 'error' ? 'error' : 'warn', `${item.fileName}: ${warning.message}`);
+    }
+  } catch (error) {
+    const structured =
+      error instanceof ConversionError
+        ? error.toJSON()
+        : {
+            code: 'CONVERT_FAILED',
+            what: 'The conversion did not complete.',
+            why: error instanceof Error ? error.message : String(error),
+            action: 'Check the source file in the inspector.',
+          };
+    store.updateItem(id, { status: 'failed', error: structured as QueueItem['error'] });
+    store.log('error', `${item.fileName}: ${structured.what} ${structured.why} ${structured.action}`);
+  }
+  render();
+}
+
+async function convertAll(withQa: boolean): Promise<void> {
+  const pending = store.get().items.filter((item) => item.status === 'ready' || item.status === 'failed' || item.status === 'done');
+  if (pending.length === 0) return;
+  store.set({ busy: true, progress: 0 });
+
+  // Error isolation: one failed file never aborts the batch (instruction §12.1).
+  let completed = 0;
+  const concurrency = Math.max(1, store.get().settings.parallelJobs);
+  const queue = [...pending];
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    for (;;) {
+      const item = queue.shift();
+      if (!item) return;
+      await convertItem(item.id, withQa);
+      completed++;
+      store.set({ progress: completed / pending.length });
+    }
+  });
+  await Promise.all(workers);
+
+  store.set({ busy: false, progress: 1 });
+  const done = store.get().items.filter((item) => item.status === 'done').length;
+  const failed = store.get().items.filter((item) => item.status === 'failed').length;
+  store.log(failed > 0 ? 'warn' : 'ok', `Batch finished: ${done} converted, ${failed} failed.`);
+  render();
+}
+
+function downloadBytes(bytes: Uint8Array, name: string, mimeType: string): void {
+  const blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = element('a', { href: url, download: name });
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoking immediately can cancel the download in some Chrome versions.
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+function downloadSelected(): void {
+  const item = store.selected();
+  if (!item?.outputs?.length) return;
+  for (const output of item.outputs) downloadBytes(output.bytes, output.name, output.mimeType);
+  store.log('ok', `Downloaded ${item.outputs.length} file(s) for ${item.fileName}.`);
+}
+
+async function downloadBatchZip(): Promise<void> {
+  const done = store.get().items.filter((item) => item.status === 'done' && item.outputs?.length);
+  if (done.length === 0) return;
+  const results = done.map((item) => ({
+    input: { fileName: item.fileName, bytes: item.bytes },
+    detection: item.detection!,
+    sourceDataset: item.dataset,
+    outputs: item.outputs!.map((output) => ({ name: output.name, bytes: output.bytes, mimeType: output.mimeType })),
+    warnings: item.warnings,
+    qa: item.qa!,
+    provenance: item.provenance,
+  }));
+  const { zip, manifestCsv } = await packageBatch(results as never);
+  store.set({ manifestCsv });
+  downloadBytes(zip, `universal-geo-converter-batch-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip');
+  store.log('ok', `Batch ZIP written with ${done.length} dataset(s) and a manifest.`);
+  render();
+}
+
+// --------------------------------------------------------------------- render
+
+let preview: PreviewCanvas | null = null;
+
+function render(): void {
+  const state = store.get();
+  renderQueue();
+  renderFormats();
+  renderInspector();
+  renderSettingsPanel();
+  renderBottom();
+
+  $('queueCount').textContent = `${state.items.length} file${state.items.length === 1 ? '' : 's'}`;
+  ($('progressBar') as HTMLElement).style.width = `${Math.round(state.progress * 100)}%`;
+  $('perfBadge').textContent = state.perf;
+
+  const selected = store.selected();
+  const canConvert = Boolean(selected && (selected.status === 'ready' || selected.status === 'done') && (selected.targetFormatId ?? state.settings.globalTargetFormatId));
+  ($('convertBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;
+  ($('convertQaBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;
+  ($('downloadBtn') as HTMLButtonElement).disabled = !selected?.outputs?.length;
+  ($('batchZipBtn') as HTMLButtonElement).disabled = !state.items.some((item) => item.status === 'done');
+
+  const target = selected?.targetFormatId ?? state.settings.globalTargetFormatId;
+  $('targetBadge').textContent = target ? (getFormat(target)?.name ?? target) : 'none selected';
+  $('targetBadge').className = target ? 'badge badge--accent' : 'badge badge--muted';
+
+  const dropzone = $('dropzone');
+  dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
+  $('inspectorTabs').classList.toggle('hidden', !selected);
+  $('previewWrap').classList.toggle('hidden', state.inspectorTab !== 'preview' || !selected);
+}
+
+function renderQueue(): void {
+  const state = store.get();
+  const container = $('queue');
+  container.replaceChildren();
+
+  if (state.items.length === 0) {
+    container.append(
+      element('p', { class: 'queue__empty' }, ['Nothing queued yet.', element('br'), 'Drop files anywhere, or use Add Files.'])
+    );
+    return;
+  }
+
+  for (const item of state.items) {
+    const row = element('div', {
+      class: `qrow${item.id === state.selectedId ? ' qrow--selected' : ''}`,
+      role: 'button',
+      tabindex: '0',
+      'aria-label': `${item.fileName}, ${item.status}`,
+    });
+    row.addEventListener('click', () => {
+      store.set({ selectedId: item.id });
+      render();
+    });
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        store.set({ selectedId: item.id });
+        render();
+      }
+    });
+
+    row.append(element('div', { class: 'qrow__name', text: item.fileName, title: item.path }));
+
+    const actions = element('div', { class: 'qrow__actions' });
+    if (item.detection?.formatId === 'zip') {
+      const expandBtn = element('button', { class: 'btn btn--ghost', text: 'Expand', title: 'Add the archive contents as separate items' });
+      expandBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void expandArchiveItem(item.id);
+      });
+      actions.append(expandBtn);
+    }
+    const removeBtn = element('button', { class: 'btn btn--ghost btn--danger', text: '✕', 'aria-label': `Remove ${item.fileName}` });
+    removeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      store.removeItem(item.id);
+      render();
+    });
+    actions.append(removeBtn);
+    row.append(actions);
+
+    const meta = element('div', { class: 'qrow__meta' });
+    meta.append(badge(statusLabel(item), statusKind(item)));
+    if (item.detection) {
+      meta.append(
+        badge(
+          `${item.detection.formatName} ${(item.detection.confidence * 100).toFixed(0)}%`,
+          item.detection.confidence >= 0.9 ? 'muted' : 'warn',
+          item.detection.evidence.map((evidence) => `${evidence.layer}: ${evidence.note}`).join('\n')
+        )
+      );
+    }
+    meta.append(element('span', { text: formatBytes(item.size) }));
+    const summary = datasetSummary(item);
+    if (summary) meta.append(element('span', { text: summary }));
+    if (item.dataset?.crs) meta.append(badge(crsShort(item.dataset.crs), 'muted', crsLabel(item.dataset.crs)));
+    else if (item.dataset) meta.append(badge('CRS not declared', 'warn', 'Select a source CRS before transforming coordinates.'));
+    if (item.targetFormatId) meta.append(badge(`→ ${getFormat(item.targetFormatId)?.name ?? item.targetFormatId}`, 'accent'));
+    if (item.warnings.length > 0) meta.append(badge(`${item.warnings.length} warning${item.warnings.length === 1 ? '' : 's'}`, 'warn'));
+    if (item.missingCompanions.length > 0) {
+      meta.append(badge(`missing .${item.missingCompanions.join(', .')}`, 'error', 'A required companion file was not supplied.'));
+    }
+    row.append(meta);
+    container.append(row);
+  }
+}
+
+function statusLabel(item: QueueItem): string {
+  switch (item.status) {
+    case 'queued':
+      return 'queued';
+    case 'inspecting':
+      return 'reading…';
+    case 'ready':
+      return 'ready';
+    case 'converting':
+      return 'converting…';
+    case 'done':
+      return item.qa ? item.qa.verdict.replace(/_/g, ' ').toLowerCase() : 'done';
+    case 'failed':
+      return 'failed';
+    case 'blocked':
+      return 'confirm format';
+    default:
+      return item.status;
+  }
+}
+
+function statusKind(item: QueueItem): string {
+  switch (item.status) {
+    case 'done':
+      return item.qa?.verdict === 'FAILED' ? 'error' : item.qa?.verdict === 'PASS' ? 'ok' : 'warn';
+    case 'failed':
+      return 'error';
+    case 'blocked':
+      return 'warn';
+    case 'converting':
+    case 'inspecting':
+      return 'info';
+    default:
+      return 'muted';
+  }
+}
+
+function datasetSummary(item: QueueItem): string | null {
+  const dataset = item.dataset;
+  if (!dataset) return null;
+  if (dataset.pointcloud) return `${dataset.pointcloud.count.toLocaleString()} points`;
+  if (dataset.raster) return `${dataset.raster.width} × ${dataset.raster.height} px, ${dataset.raster.bandCount} band(s)`;
+  if (dataset.table) return `${dataset.table.rowCount.toLocaleString()} rows`;
+  const features = (dataset.layers ?? []).reduce((sum: number, layer: any) => sum + layer.featureCount, 0);
+  return features > 0 ? `${features.toLocaleString()} features` : null;
+}
+
+function crsShort(crs: any): string {
+  return crs?.epsg ? `EPSG:${crs.epsg}` : (crs?.name ?? 'CRS');
+}
+
+// ------------------------------------------------------------- format picker
+
+function renderFormats(): void {
+  const state = store.get();
+  const selected = store.selected();
+  const kind = selected?.dataset?.kind ?? 'vector';
+  const nativeReady = state.native.status === 'READY';
+
+  const chips = $('categoryChips');
+  chips.replaceChildren();
+  const categories: (FormatCategory | null)[] = [null, 'gis', 'cad', 'raster', 'lidar', 'survey', 'gps', 'mining', 'spreadsheet'];
+  for (const category of categories) {
+    const label = category ? CATEGORY_LABEL[category] : 'All';
+    const chip = element('button', { class: `chip${state.formatCategory === category ? ' chip--on' : ''}`, text: label });
+    chip.addEventListener('click', () => {
+      store.set({ formatCategory: category });
+      render();
+    });
+    chips.append(chip);
+  }
+
+  const search = state.formatSearch.trim().toLowerCase();
+  const candidates = selected ? exportTargetsFor(kind) : FORMATS.filter((format) => format.support.export !== 'none');
+  const visible = candidates
+    .filter((format) => !state.formatCategory || format.category === state.formatCategory)
+    .filter(
+      (format) =>
+        !search ||
+        format.name.toLowerCase().includes(search) ||
+        format.extensions.some((extension) => extension.includes(search)) ||
+        format.id.includes(search)
+    )
+    // Recent formats first, then supported before adapter-only.
+    .sort((a, b) => {
+      const recentA = state.settings.recentFormats.indexOf(a.id);
+      const recentB = state.settings.recentFormats.indexOf(b.id);
+      if (recentA !== recentB) return (recentA < 0 ? 99 : recentA) - (recentB < 0 ? 99 : recentB);
+      const rank = (format: FormatDef) => (format.support.export === 'full' ? 0 : format.support.export === 'partial' ? 1 : 2);
+      return rank(a) - rank(b) || a.name.localeCompare(b.name);
+    });
+
+  const container = $('formatCards');
+  container.replaceChildren();
+  if (visible.length === 0) {
+    container.append(element('p', { class: 'muted small', text: 'No output format matches this search for the selected data.' }));
+    return;
+  }
+
+  const current = selected?.targetFormatId ?? state.settings.globalTargetFormatId;
+  for (const format of visible) {
+    const available = isAvailable(format, 'export', nativeReady);
+    const card = element('button', {
+      class: `fcard${current === format.id ? ' fcard--on' : ''}`,
+      type: 'button',
+      title: [format.notes, ...(format.warnings ?? [])].filter(Boolean).join('\n\n'),
+    }) as HTMLButtonElement;
+    card.disabled = !available;
+
+    card.append(element('span', { class: 'fcard__name', text: format.name }));
+    card.append(element('span', { class: 'fcard__ext', text: format.extensions.map((extension) => `.${extension}`).join(' ') }));
+
+    const badges = element('div', { class: 'fcard__badges' });
+    badges.append(badge(SUPPORT_LABEL[format.support.export], format.support.export === 'full' ? 'ok' : format.support.export === 'partial' ? 'warn' : 'muted'));
+    if (format.supports3D) badges.append(badge('3D', 'info'));
+    if (format.supportsAttributes) badges.append(badge('attrs', 'muted'));
+    if (format.supportsCRS) badges.append(badge('CRS', 'muted'));
+    if (format.requiresNative) badges.append(badge(nativeReady ? 'native ready' : 'native required', nativeReady ? 'ok' : 'error'));
+    if (format.requiresWasm) badges.append(badge('engine required', 'error'));
+    if (format.packaging === 'zip') badges.append(badge('ZIP package', 'muted', 'Multiple files are packaged automatically.'));
+    card.append(badges);
+
+    card.addEventListener('click', () => {
+      if (selected) store.updateItem(selected.id, { targetFormatId: format.id });
+      else void store.patchSettings({ globalTargetFormatId: format.id });
+      render();
+    });
+    container.append(card);
+  }
+}
+
+// ---------------------------------------------------------------- inspector
+
+function renderInspector(): void {
+  const state = store.get();
+  const body = $('inspectorBody');
+  const item = store.selected();
+  body.replaceChildren();
+  $('warnCount').textContent = String(item?.warnings.length ?? 0);
+
+  if (!item) {
+    body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Select a queued file to inspect it.' }));
+    return;
+  }
+
+  if (item.error) {
+    body.append(messageBlock('error', item.error.what, item.error.why, item.error.action));
+  }
+
+  switch (state.inspectorTab) {
+    case 'overview':
+      body.append(...overviewTab(item));
+      break;
+    case 'geometry':
+      body.append(...geometryTab(item));
+      break;
+    case 'crs':
+      body.append(...crsTab(item));
+      break;
+    case 'attributes':
+      body.append(...attributesTab(item));
+      break;
+    case 'preview':
+      renderPreview(item);
+      break;
+    case 'metadata':
+      body.append(keyValues(Object.entries(item.dataset?.metadata ?? {}).map(([key, value]) => [key, formatValue(value)])));
+      break;
+    case 'warnings':
+      body.append(...warningsTab(item));
+      break;
+    default:
+      break;
+  }
+}
+
+function messageBlock(kind: 'error' | 'warn' | 'info', what: string, why?: string, action?: string): HTMLElement {
+  const node = element('div', { class: `msg msg--${kind}`, style: 'margin:12px' });
+  node.append(element('span', { class: 'msg__icon', text: kind === 'error' ? '✕' : kind === 'warn' ? '!' : 'i' }));
+  const body = element('div', { class: 'msg__body' });
+  body.append(element('div', { class: 'msg__what', text: what }));
+  if (why) body.append(element('div', { class: 'msg__why', text: why }));
+  if (action) body.append(element('div', { class: 'msg__action', text: action }));
+  node.append(body);
+  return node;
+}
+
+function keyValues(pairs: [string, string][]): HTMLElement {
+  const grid = element('div', { class: 'kv' });
+  for (const [key, value] of pairs) {
+    grid.append(element('div', { class: 'kv__k', text: key }));
+    grid.append(element('div', { class: 'kv__v', text: value }));
+  }
+  return grid;
+}
+
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function overviewTab(item: QueueItem): HTMLElement[] {
+  const dataset = item.dataset;
+  const nodes: HTMLElement[] = [];
+
+  if (item.status === 'blocked' && item.detection) {
+    const block = messageBlock(
+      'warn',
+      `Detected as ${item.detection.formatName} with ${(item.detection.confidence * 100).toFixed(0)}% confidence.`,
+      `That is below the ${(CONFIRM_THRESHOLD * 100).toFixed(0)}% threshold, so the format has to be confirmed before converting.`,
+      'Pick the correct source format below.'
+    );
+    const select = element('select', { class: 'select', style: 'margin-top:8px' }) as HTMLSelectElement;
+    select.append(element('option', { value: '', text: 'Confirm source format…' }));
+    for (const format of FORMATS.filter((candidate) => candidate.support.import !== 'none')) {
+      select.append(element('option', { value: format.id, text: `${format.name} (.${format.extensions[0]})` }));
+    }
+    select.addEventListener('change', () => {
+      if (!select.value) return;
+      store.updateItem(item.id, { forcedFormatId: select.value });
+      void inspectItem(item.id);
+    });
+    block.querySelector('.msg__body')?.append(select);
+    nodes.push(block);
+  }
+
+  if (!dataset) return nodes;
+
+  const pairs: [string, string][] = [
+    ['File', item.fileName],
+    ['Size', formatBytes(item.size)],
+    ['Detected', `${item.detection?.formatName ?? '—'}`],
+    ['Confidence', item.detection ? `${(item.detection.confidence * 100).toFixed(0)}%` : '—'],
+    ['Data kind', dataset.kind],
+    ['CRS', crsLabel(dataset.crs)],
+    ['CRS source', dataset.crsOrigin],
+    ['Units', dataset.units ?? 'not declared'],
+    ['Coordinate order', dataset.axisOrder],
+    ['Vertical reference', dataset.vertical?.kind ?? 'unknown'],
+  ];
+
+  if (dataset.pointcloud) {
+    const cloud = dataset.pointcloud;
+    pairs.push(
+      ['Total points', cloud.count.toLocaleString()],
+      ['Loaded points', cloud.loaded.toLocaleString()],
+      ['LAS version', cloud.version ?? '—'],
+      ['Point format', String(cloud.pointFormat ?? '—')],
+      ['Z range', cloud.bounds ? `${cloud.bounds.minZ.toFixed(3)} → ${cloud.bounds.maxZ.toFixed(3)}` : '—'],
+      ['Attributes', Object.entries(cloud.attributes).filter(([, on]) => on).map(([name]) => name).join(', ') || 'none']
+    );
+  } else if (dataset.raster) {
+    const raster = dataset.raster;
+    pairs.push(
+      ['Dimensions', `${raster.width} × ${raster.height} px`],
+      ['Bands', String(raster.bandCount)],
+      ['Pixel type', raster.pixelType],
+      ['Pixel size', raster.geotransform ? `${Math.abs(raster.geotransform[1])} × ${Math.abs(raster.geotransform[5])}` : 'not georeferenced'],
+      ['NoData', raster.noData === null ? 'none' : String(raster.noData)],
+      ['Raster type', raster.isElevation ? 'elevation / DEM' : 'image'],
+      ['Pixel data', raster.hasPixelData ? 'decoded' : 'not decoded — georeference only']
+    );
+  } else if (dataset.table) {
+    pairs.push(
+      ['Rows', dataset.table.rowCount.toLocaleString()],
+      ['Columns', String(dataset.table.columns.length)],
+      ['Detected schema', dataset.table.detectedSchema ?? 'none matched'],
+      ['Header row', dataset.table.hasHeader ? 'yes' : 'no']
+    );
+  } else {
+    const features = (dataset.layers ?? []).reduce((sum: number, layer: any) => sum + layer.featureCount, 0);
+    pairs.push(['Layers', String(dataset.layers?.length ?? 0)], ['Features', features.toLocaleString()]);
+  }
+
+  nodes.push(keyValues(pairs));
+  return nodes;
+}
+
+function geometryTab(item: QueueItem): HTMLElement[] {
+  const dataset = item.dataset;
+  if (!dataset?.layers?.length) return [element('p', { class: 'muted', style: 'padding:16px', text: 'No vector layers in this dataset.' })];
+  const table = element('table', { class: 'table' });
+  table.append(
+    element('thead', {}, [
+      element('tr', {}, [
+        element('th', { text: 'Layer' }),
+        element('th', { text: 'Features' }),
+        element('th', { text: 'Geometry types' }),
+        element('th', { text: 'Fields' }),
+      ]),
+    ])
+  );
+  const body = element('tbody');
+  for (const layer of dataset.layers) {
+    body.append(
+      element('tr', {}, [
+        element('td', { text: layer.name }),
+        element('td', { class: 'num', text: layer.featureCount.toLocaleString() }),
+        element('td', { text: layer.geometryTypes.join(', ') || '—' }),
+        element('td', { class: 'num', text: String(layer.fields.length) }),
+      ])
+    );
+  }
+  table.append(body);
+  return [element('div', { class: 'scroll-x' }, [table])];
+}
+
+function crsTab(item: QueueItem): HTMLElement[] {
+  const state = store.get();
+  const dataset = item.dataset;
+  const nodes: HTMLElement[] = [];
+
+  nodes.push(
+    keyValues([
+      ['Declared CRS', crsLabel(dataset?.crs ?? null)],
+      ['Origin', dataset?.crsOrigin ?? 'unknown'],
+      ['Axis order (authority)', dataset?.crs?.axisOrder ?? '—'],
+      ['Datum', dataset?.crs?.datum ?? '—'],
+      ['Projection', dataset?.crs?.projection ?? '—'],
+      ['Linear unit', dataset?.crs?.unit ?? '—'],
+    ])
+  );
+
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Source CRS (used when the file declares none)' }));
+  section.append(crsSelect(state.settings.sourceCrsEpsg, (epsg) => void store.patchSettings({ sourceCrsEpsg: epsg })));
+  nodes.push(section);
+
+  const targetSection = element('div', { class: 'section' });
+  targetSection.append(element('h3', { class: 'section__title', text: 'Target CRS (leave unset to keep the source CRS)' }));
+  targetSection.append(crsSelect(state.settings.targetCrsEpsg, (epsg) => void store.patchSettings({ targetCrsEpsg: epsg })));
+  targetSection.append(
+    element('p', { class: 'small faint', style: 'margin-top:8px', text: 'A datum shift outside the WGS 84 family is refused rather than approximated. Reproject those in QGIS or GDAL first.' })
+  );
+  nodes.push(targetSection);
+
+  return nodes;
+}
+
+function crsSelect(current: number | null, onChange: (epsg: number | null) => void): HTMLElement {
+  const wrap = element('div', { class: 'stack' });
+  const search = element('input', { class: 'input', type: 'search', placeholder: 'Search EPSG code or name…' }) as HTMLInputElement;
+  const select = element('select', { class: 'select' }) as HTMLSelectElement;
+
+  const fill = (query: string) => {
+    select.replaceChildren();
+    select.append(element('option', { value: '', text: 'Not set' }));
+    // Indian UTM zones first: they cover this product's primary field of use.
+    const quick = QUICK_ZONES.map((zone) => utmCrs(zone, false));
+    if (!query) {
+      const group = element('optgroup', { label: 'Common UTM zones (India)' });
+      for (const crs of quick) group.append(element('option', { value: String(crs.epsg), text: `EPSG:${crs.epsg} — ${crs.name}` }));
+      select.append(group);
+      const common = element('optgroup', { label: 'Common' });
+      for (const code of [4326, 3857]) {
+        const crs = crsFromEpsg(code)!;
+        common.append(element('option', { value: String(code), text: `EPSG:${code} — ${crs.name}` }));
+      }
+      select.append(common);
+    }
+    const results = element('optgroup', { label: query ? 'Search results' : 'All bundled CRS' });
+    for (const entry of searchEpsg(query, 60)) {
+      results.append(element('option', { value: String(entry.code), text: `EPSG:${entry.code} — ${entry.name}` }));
+    }
+    select.append(results);
+    select.value = current ? String(current) : '';
+  };
+
+  fill('');
+  search.addEventListener('input', () => fill(search.value));
+  select.addEventListener('change', () => {
+    onChange(select.value ? Number(select.value) : null);
+    render();
+  });
+
+  wrap.append(search, select);
+  return wrap;
+}
+
+function attributesTab(item: QueueItem): HTMLElement[] {
+  const dataset = item.dataset;
+  if (dataset?.table) return [columnMappingPanel(item)];
+  const fields = (dataset?.layers ?? []).flatMap((layer: any) => layer.fields);
+  if (fields.length === 0) return [element('p', { class: 'muted', style: 'padding:16px', text: 'This dataset has no attribute fields.' })];
+  const table = element('table', { class: 'table' });
+  table.append(element('thead', {}, [element('tr', {}, [element('th', { text: 'Field' }), element('th', { text: 'Type' }), element('th', { text: 'Width' })])]));
+  const body = element('tbody');
+  for (const field of fields) {
+    body.append(
+      element('tr', {}, [
+        element('td', { class: 'mono', text: field.name }),
+        element('td', { text: field.type }),
+        element('td', { class: 'num', text: String(field.width ?? '—') }),
+      ])
+    );
+  }
+  table.append(body);
+  return [element('div', { class: 'scroll-x' }, [table])];
+}
+
+/** Column mapping with a preview table, as instruction §E requires. */
+function columnMappingPanel(item: QueueItem): HTMLElement {
+  const table = item.dataset.table;
+  const wrap = element('div');
+
+  if (table.mapping) {
+    const roles = Object.entries(table.mapping.roles)
+      .map(([role, index]) => `${role} → column ${Number(index) + 1} (${table.columns[Number(index)]?.name ?? '?'})`)
+      .join('\n');
+    wrap.append(
+      messageBlock(
+        item.status === 'blocked' ? 'warn' : 'info',
+        `Schema: ${table.detectedSchema ?? 'user-defined'} · coordinate order ${table.mapping.coordinateOrder}`,
+        roles,
+        item.dataset.metadata?.schemaRationale
+      )
+    );
+  } else {
+    wrap.append(messageBlock('error', 'No coordinate columns identified.', 'Geometry cannot be built until easting/northing or longitude/latitude are named.', 'Pick the columns below.'));
+  }
+
+  const preview = element('table', { class: 'table' });
+  preview.append(
+    element('thead', {}, [
+      element(
+        'tr',
+        {},
+        table.columns.map((column: any, index: number) => {
+          const role = Object.entries(table.mapping?.roles ?? {}).find(([, columnIndex]) => columnIndex === index)?.[0];
+          return element('th', { text: role ? `${column.name} · ${role}` : column.name });
+        })
+      ),
+    ])
+  );
+  const body = element('tbody');
+  for (const row of table.previewRows.slice(0, 12)) {
+    body.append(element('tr', {}, row.map((cell: unknown) => element('td', { class: 'mono', text: cell === null ? '' : String(cell) }))));
+  }
+  preview.append(body);
+  wrap.append(element('div', { class: 'scroll-x' }, [preview]));
+  wrap.append(element('p', { class: 'small faint', style: 'padding:0 12px 12px', text: `${table.rowCount.toLocaleString()} rows total; first ${Math.min(12, table.previewRows.length)} shown.` }));
+  return wrap;
+}
+
+function warningsTab(item: QueueItem): HTMLElement[] {
+  if (item.warnings.length === 0) return [element('p', { class: 'muted', style: 'padding:16px', text: 'No warnings for this dataset.' })];
+  const wrap = element('div', { style: 'padding:12px' });
+  for (const warning of item.warnings) {
+    const node = element('div', { class: `msg msg--${warning.severity === 'error' ? 'error' : warning.severity === 'warning' ? 'warn' : 'info'}` });
+    node.append(element('span', { class: 'msg__icon', text: warning.severity === 'error' ? '✕' : warning.severity === 'warning' ? '!' : 'i' }));
+    const body = element('div', { class: 'msg__body' });
+    body.append(element('div', { class: 'msg__what', text: warning.count && warning.count > 1 ? `${warning.message} (×${warning.count})` : warning.message }));
+    if (warning.reason) body.append(element('div', { class: 'msg__why', text: warning.reason }));
+    if (warning.action) body.append(element('div', { class: 'msg__action', text: warning.action }));
+    node.append(body);
+    wrap.append(node);
+  }
+  return [wrap];
+}
+
+function renderPreview(item: QueueItem): void {
+  const canvas = $('previewCanvas') as HTMLCanvasElement;
+  if (!preview) preview = new PreviewCanvas(canvas, (text) => ($('readout').textContent = text));
+
+  const dataset = item.dataset;
+  const data: PreviewData = { layers: [], truncated: false };
+
+  if (dataset?.layers?.length) {
+    dataset.layers.forEach((layer: any, index: number) => {
+      data.layers.push({
+        name: layer.name,
+        visible: true,
+        color: LAYER_COLORS[index % LAYER_COLORS.length],
+        features: layer.preview ?? [],
+      });
+      if (layer.previewTruncated) data.truncated = true;
+    });
+  }
+  if (dataset?.pointcloud) {
+    data.cloud = {
+      x: dataset.pointcloud.previewX,
+      y: dataset.pointcloud.previewY,
+      z: dataset.pointcloud.previewZ,
+      classification: dataset.pointcloud.previewClassification,
+    };
+    if (dataset.pointcloud.previewX.length < dataset.pointcloud.loaded) data.truncated = true;
+  }
+  if (dataset?.raster?.extent) {
+    data.raster = {
+      extent: dataset.raster.extent,
+      label: `${dataset.raster.width} × ${dataset.raster.height}${dataset.raster.hasPixelData ? '' : ' — georeference only'}`,
+    };
+  }
+
+  $('previewOnlyBadge').classList.toggle('hidden', !data.truncated);
+  preview.setData(data);
+}
+
+// ------------------------------------------------------------ settings panel
+
+function renderSettingsPanel(): void {
+  const state = store.get();
+  const panel = $('settingsPanel');
+  panel.replaceChildren();
+  const item = store.selected();
+  const targetId = item?.targetFormatId ?? state.settings.globalTargetFormatId;
+  if (!targetId) return;
+  const target = getFormat(targetId);
+  if (!target) return;
+
+  const common = element('div', { class: 'section' });
+  common.append(element('h3', { class: 'section__title', text: 'Conversion settings' }));
+  common.append(
+    checkbox('Preserve Z (elevations)', state.settings.preserveZ, (value) => void store.patchSettings({ preserveZ: value }))
+  );
+  common.append(
+    checkbox('Run QA after conversion', state.settings.runQa, (value) => void store.patchSettings({ runQa: value }), 'Re-imports the output and compares it with the source.')
+  );
+
+  const precision = element('div', { class: 'field' });
+  precision.append(element('label', { class: 'field__label', text: 'Output precision' }));
+  const precisionSelect = element('select', { class: 'select' }) as HTMLSelectElement;
+  for (const [value, label] of [
+    ['full', 'Full source precision'],
+    ['3', '3 decimals (millimetre)'],
+    ['4', '4 decimals'],
+    ['5', '5 decimals'],
+    ['6', '6 decimals'],
+  ] as [string, string][]) {
+    precisionSelect.append(element('option', { value, text: label }));
+  }
+  precisionSelect.value = state.settings.precisionMode === 'full' ? 'full' : String(state.settings.precisionDecimals);
+  precisionSelect.addEventListener('change', () => {
+    const value = precisionSelect.value;
+    void store.patchSettings(value === 'full' ? { precisionMode: 'full' } : { precisionMode: 'fixed', precisionDecimals: Number(value) });
+  });
+  precision.append(precisionSelect);
+  common.append(precision);
+  panel.append(common);
+
+  // Target-specific settings, so the panel only ever shows what applies.
+  const specific = element('details', { class: 'adv' });
+  specific.append(element('summary', { text: `${target.name} options` }));
+  const body = element('div');
+
+  if (target.id === 'dxf') {
+    body.append(
+      numberField('Arc segmentation tolerance (sagitta, drawing units)', state.settings.arcTolerance, 0.0001, (value) =>
+        void store.patchSettings({ arcTolerance: value })
+      )
+    );
+    body.append(element('p', { class: 'small faint', text: 'Curved entities have no GIS equivalent. A smaller tolerance follows the true curve more closely at the cost of more vertices.' }));
+  }
+  if (target.id === 'kml' || target.id === 'kmz') {
+    body.append(element('p', { class: 'small faint', text: 'KML is written in WGS 84 longitude/latitude. Set the target CRS to EPSG:4326 so projected data is transformed rather than mis-placed.' }));
+  }
+  if (target.id === 'shapefile') {
+    body.append(element('p', { class: 'small faint', text: 'Mixed geometry is split into _point, _line and _polygon files, and the package is delivered as one ZIP with .prj and .cpg. DBF field names are capped at 10 bytes; every rename is listed in the manifest.' }));
+  }
+  if (target.id === 'las') {
+    body.append(element('p', { class: 'small faint', text: 'Scale and offset are derived from the data extent unless pinned, so the stored resolution matches the data rather than a default.' }));
+  }
+  if (target.dataKind === 'pointcloud' || item?.dataset?.pointcloud) {
+    const decimation = element('div', { class: 'field' });
+    decimation.append(element('label', { class: 'field__label', text: 'Decimation (export)' }));
+    const select = element('select', { class: 'select' }) as HTMLSelectElement;
+    for (const [value, label] of [
+      ['none', 'None — every point'],
+      ['nth', 'Keep every nth point'],
+      ['grid', 'One point per 2D grid cell'],
+      ['voxel', 'One point per 3D voxel'],
+    ] as [string, string][]) {
+      select.append(element('option', { value, text: label }));
+    }
+    select.value = state.settings.decimationMode;
+    select.addEventListener('change', () => void store.patchSettings({ decimationMode: select.value as AppSettings['decimationMode'] }));
+    decimation.append(select);
+    body.append(decimation);
+    if (state.settings.decimationMode === 'nth') {
+      body.append(numberField('Keep every nth point', state.settings.decimationFactor, 1, (value) => void store.patchSettings({ decimationFactor: value })));
+    }
+    if (state.settings.decimationMode === 'grid' || state.settings.decimationMode === 'voxel') {
+      body.append(numberField('Cell size (dataset units)', state.settings.decimationCell, 0.01, (value) => void store.patchSettings({ decimationCell: value })));
+    }
+  }
+
+  body.append(
+    checkbox('Embed conversion metadata alongside the output', state.settings.embedMetadata, (value) => void store.patchSettings({ embedMetadata: value }))
+  );
+  specific.append(body);
+  panel.append(specific);
+
+  // Repair is deliberately buried and off: survey data is evidence.
+  const repair = element('details', { class: 'adv' });
+  repair.append(element('summary', { text: 'Geometry repair (off by default)' }));
+  const repairBody = element('div');
+  repairBody.append(element('p', { class: 'small faint', text: 'Repair edits your geometry. It stays off so survey data converts exactly as delivered; every change it makes is reported.' }));
+  repairBody.append(checkbox('Close unclosed rings', state.settings.repairCloseRings, (value) => void store.patchSettings({ repairCloseRings: value })));
+  repairBody.append(checkbox('Remove duplicate vertices', state.settings.repairRemoveDuplicateVertices, (value) => void store.patchSettings({ repairRemoveDuplicateVertices: value })));
+  repairBody.append(checkbox('Normalise ring orientation', state.settings.repairNormalizeOrientation, (value) => void store.patchSettings({ repairNormalizeOrientation: value })));
+  repairBody.append(checkbox('Remove duplicate features', state.settings.repairDeduplicateFeatures, (value) => void store.patchSettings({ repairDeduplicateFeatures: value })));
+  repair.append(repairBody);
+  panel.append(repair);
+}
+
+function checkbox(label: string, checked: boolean, onChange: (value: boolean) => void, hint?: string): HTMLElement {
+  const wrap = element('label', { class: 'checkbox' });
+  const input = element('input', { type: 'checkbox' }) as HTMLInputElement;
+  input.checked = checked;
+  input.addEventListener('change', () => {
+    onChange(input.checked);
+    render();
+  });
+  wrap.append(input, element('span', { text: label }));
+  if (hint) wrap.append(element('span', { class: 'hint', text: '?', title: hint }));
+  return wrap;
+}
+
+function numberField(label: string, value: number, step: number, onChange: (value: number) => void): HTMLElement {
+  const wrap = element('div', { class: 'field' });
+  wrap.append(element('label', { class: 'field__label', text: label }));
+  const input = element('input', { class: 'input', type: 'number', step: String(step), value: String(value) }) as HTMLInputElement;
+  input.addEventListener('change', () => {
+    const parsed = Number(input.value);
+    if (Number.isFinite(parsed)) {
+      onChange(parsed);
+      render();
+    }
+  });
+  wrap.append(input);
+  return wrap;
+}
+
+// -------------------------------------------------------------------- bottom
+
+function renderBottom(): void {
+  const state = store.get();
+  const body = $('bottomBody');
+  body.replaceChildren();
+
+  if (state.bottomTab === 'log') {
+    const log = element('div', { class: 'log' });
+    for (const entry of state.log) {
+      const line = element('div', { class: `log__line log__line--${entry.level}` });
+      line.append(element('span', { class: 'log__time', text: new Date(entry.at).toLocaleTimeString() }));
+      line.append(element('span', { class: 'log__msg', text: entry.message }));
+      log.append(line);
+    }
+    body.append(log);
+    log.scrollTop = log.scrollHeight;
+    return;
+  }
+
+  if (state.bottomTab === 'manifest') {
+    if (!state.manifestCsv) {
+      body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Convert a batch and choose Batch ZIP to produce a manifest.' }));
+      return;
+    }
+    body.append(element('pre', { class: 'log', text: state.manifestCsv }));
+    return;
+  }
+
+  const item = store.selected();
+  if (!item?.qa) {
+    body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Convert a file to see its fidelity report.' }));
+    return;
+  }
+
+  const verdict = element('div', { class: 'qa__verdict' });
+  const kind = item.qa.verdict === 'PASS' ? 'ok' : item.qa.verdict === 'FAILED' ? 'error' : item.qa.verdict === 'NOT_VALIDATED' ? 'muted' : 'warn';
+  verdict.append(badge(`Fidelity: ${item.qa.verdict.replace(/_/g, ' ')}`, kind));
+  verdict.append(element('span', { class: 'muted', text: item.qa.summary }));
+  body.append(verdict);
+
+  if (item.qa.checks.length > 0) {
+    const table = element('table', { class: 'table' });
+    table.append(
+      element('thead', {}, [
+        element('tr', {}, [element('th', { text: 'Check' }), element('th', { text: 'Source' }), element('th', { text: 'Re-imported output' }), element('th', { text: 'Result' })]),
+      ])
+    );
+    const tbody = element('tbody');
+    for (const check of item.qa.checks) {
+      const row = element('tr');
+      row.append(element('td', { text: check.name }));
+      row.append(element('td', { class: 'mono', text: check.source }));
+      row.append(element('td', { class: 'mono', text: check.target }));
+      const statusCell = element('td');
+      statusCell.append(badge(check.status, check.status === 'pass' ? 'ok' : check.status === 'fail' ? 'error' : check.status === 'warn' ? 'warn' : 'muted'));
+      if (check.note) statusCell.append(element('div', { class: 'small muted', text: check.note }));
+      row.append(statusCell);
+      tbody.append(row);
+    }
+    table.append(tbody);
+    body.append(element('div', { class: 'scroll-x' }, [table]));
+  }
+}
+
+// --------------------------------------------------------------------- setup
+
+function openSettingsDialog(): void {
+  const dialog = $('settingsDialog') as HTMLDialogElement;
+  const state = store.get();
+  dialog.replaceChildren();
+
+  const head = element('div', { class: 'dialog__head' });
+  head.append(element('span', { class: 'dialog__title', text: 'Settings' }));
+  const close = element('button', { class: 'btn btn--ghost', text: 'Close' });
+  close.addEventListener('click', () => dialog.close());
+  head.append(close);
+
+  const body = element('div', { class: 'dialog__body stack' });
+
+  body.append(element('h3', { class: 'section__title', text: 'Privacy' }));
+  body.append(
+    messageBlock(
+      'info',
+      'Local-only mode is on and cannot be switched off.',
+      'No file byte ever leaves this machine. There is no network code in any conversion path, no telemetry, and host_permissions is empty.',
+      'The only local process ever contacted is the optional DWG helper you install yourself.'
+    )
+  );
+
+  body.append(element('h3', { class: 'section__title', text: 'Native engine' }));
+  body.append(
+    keyValues([
+      ['Status', NATIVE_STATUS_LABEL[state.native.status]],
+      ['Detail', state.native.message],
+      ['Engine', state.native.engine ? `${state.native.engine.name} ${state.native.engine.version}` : '—'],
+      ['Path', state.native.engine?.path || '—'],
+    ])
+  );
+  const rescan = element('button', { class: 'btn', text: 'Re-scan engines' });
+  rescan.addEventListener('click', () => void refreshNative());
+  body.append(rescan);
+
+  body.append(element('h3', { class: 'section__title', text: 'Performance' }));
+  body.append(numberField('Parallel jobs', state.settings.parallelJobs, 1, (value) => void store.patchSettings({ parallelJobs: Math.max(1, Math.round(value)) })));
+  body.append(numberField('Maximum archive expansion (MB)', state.settings.maxArchiveMb, 64, (value) => void store.patchSettings({ maxArchiveMb: value })));
+
+  body.append(element('h3', { class: 'section__title', text: 'Naming' }));
+  const naming = element('select', { class: 'select' }) as HTMLSelectElement;
+  for (const [value, label] of [
+    ['converted-to', '{name}_converted_to_{format}.{ext}'],
+    ['target-suffix', '{name}_{format}.{ext}'],
+    ['dated', '{name}_{date}_{format}.{ext}'],
+  ] as [string, string][]) {
+    naming.append(element('option', { value, text: label }));
+  }
+  naming.value = state.settings.naming;
+  naming.addEventListener('change', () => void store.patchSettings({ naming: naming.value as AppSettings['naming'] }));
+  body.append(naming);
+
+  const foot = element('div', { class: 'dialog__foot' });
+  const reset = element('button', { class: 'btn btn--danger', text: 'Reset to defaults' });
+  reset.addEventListener('click', () => {
+    void store.patchSettings({ ...DEFAULT_SETTINGS });
+    dialog.close();
+    render();
+  });
+  const done = element('button', { class: 'btn btn--primary', text: 'Done' });
+  done.addEventListener('click', () => dialog.close());
+  foot.append(reset, done);
+
+  dialog.append(head, body, foot);
+  dialog.showModal();
+}
+
+function openHelpDialog(): void {
+  const dialog = $('helpDialog') as HTMLDialogElement;
+  dialog.replaceChildren();
+  const head = element('div', { class: 'dialog__head' });
+  head.append(element('span', { class: 'dialog__title', text: 'How this converter behaves' }));
+  const close = element('button', { class: 'btn btn--ghost', text: 'Close' });
+  close.addEventListener('click', () => dialog.close());
+  head.append(close);
+
+  const body = element('div', { class: 'dialog__body stack' });
+  const rules: [string, string][] = [
+    ['Nothing is uploaded', 'Every conversion runs in this browser. The only exception is the optional DWG helper, which is a program on your own machine.'],
+    ['A CRS is never invented', 'If a file declares no coordinate system and the numbers are ambiguous, the conversion stops and asks. The same easting is valid in all 60 UTM zones.'],
+    ['Nothing is dropped silently', 'Unsupported CAD entities, lost attributes, dropped Z values and segmentized curves are all counted by name and reported.'],
+    ['Curves are segmentized with a stated tolerance', 'An arc has no GIS equivalent. It is densified against a sagitta tolerance you control, never replaced by its chord.'],
+    ['LAZ is refused, not guessed', 'No LAZ decoder is bundled, so compressed point data is reported honestly instead of being read as raw LAS coordinates.'],
+    ['GeoTIFF is metadata-only', 'Georeference, dimensions and CRS are read; pixels are not decoded, so raster output from a GeoTIFF source is disabled.'],
+    ['QA means re-import', 'A green PASS means the output was read back and compared with the source — not merely that bytes were written.'],
+    ['Repair is off', 'Geometry repair edits your data, so it stays off until you turn it on, and reports every change it makes.'],
+  ];
+  for (const [title, text] of rules) body.append(messageBlock('info', title, text));
+
+  const foot = element('div', { class: 'dialog__foot' });
+  const done = element('button', { class: 'btn btn--primary', text: 'Close' });
+  done.addEventListener('click', () => dialog.close());
+  foot.append(done);
+
+  dialog.append(head, body, foot);
+  dialog.showModal();
+}
+
+async function refreshNative(): Promise<void> {
+  const health = await checkNativeHealth();
+  store.set({ native: health });
+  const nativeBadge = $('nativeBadge');
+  nativeBadge.textContent = NATIVE_STATUS_LABEL[health.status];
+  nativeBadge.className = `badge badge--${health.status === 'READY' ? 'ok' : health.status === 'NOT_INSTALLED' ? 'muted' : 'warn'}`;
+  nativeBadge.title = health.message;
+  render();
+}
+
+function applyTheme(theme: AppSettings['theme']): void {
+  document.documentElement.dataset.theme = theme === 'system' ? '' : theme;
+}
+
+function wire(): void {
+  const dropzone = $('dropzone');
+  const filePicker = $('filePicker') as HTMLInputElement;
+
+  for (const eventName of ['dragenter', 'dragover'] as const) {
+    document.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      dropzone.classList.add('dropzone--active');
+    });
+  }
+  document.addEventListener('dragleave', (event) => {
+    if (event.relatedTarget === null) dropzone.classList.remove('dropzone--active');
+  });
+  document.addEventListener('drop', (event) => {
+    event.preventDefault();
+    dropzone.classList.remove('dropzone--active');
+    if (event.dataTransfer) void filesFromDataTransfer(event.dataTransfer).then(addFiles);
+  });
+
+  const browse = () => filePicker.click();
+  dropzone.addEventListener('click', browse);
+  dropzone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      browse();
+    }
+  });
+  $('dropBrowseBtn').addEventListener('click', (event) => {
+    event.stopPropagation();
+    browse();
+  });
+  $('addFilesBtn').addEventListener('click', browse);
+  filePicker.addEventListener('change', async () => {
+    const files = await Promise.all(Array.from(filePicker.files ?? []).map((file) => toIngestFile(file)));
+    filePicker.value = '';
+    await addFiles(files);
+  });
+
+  $('clearQueueBtn').addEventListener('click', () => {
+    store.set({ items: [], selectedId: null, manifestCsv: undefined });
+    store.log('info', 'Queue cleared.');
+    render();
+  });
+
+  $('convertBtn').addEventListener('click', () => {
+    const item = store.selected();
+    if (item) void convertItem(item.id, store.get().settings.runQa);
+  });
+  $('convertQaBtn').addEventListener('click', () => {
+    const item = store.selected();
+    if (item) void convertItem(item.id, true);
+  });
+  $('downloadBtn').addEventListener('click', downloadSelected);
+  $('batchZipBtn').addEventListener('click', () => void downloadBatchZip());
+
+  $('settingsBtn').addEventListener('click', openSettingsDialog);
+  $('helpBtn').addEventListener('click', openHelpDialog);
+  $('themeBtn').addEventListener('click', () => {
+    const order: AppSettings['theme'][] = ['system', 'dark', 'light'];
+    const next = order[(order.indexOf(store.get().settings.theme) + 1) % order.length];
+    void store.patchSettings({ theme: next });
+    applyTheme(next);
+  });
+
+  $('formatSearch').addEventListener('input', (event) => {
+    store.set({ formatSearch: (event.target as HTMLInputElement).value });
+    renderFormats();
+  });
+
+  for (const tab of Array.from(document.querySelectorAll('[data-tab]'))) {
+    tab.addEventListener('click', () => {
+      const name = (tab as HTMLElement).dataset.tab!;
+      store.set({ inspectorTab: name });
+      for (const other of Array.from(document.querySelectorAll('[data-tab]'))) {
+        other.classList.toggle('tab--on', other === tab);
+        other.setAttribute('aria-selected', String(other === tab));
+      }
+      render();
+    });
+  }
+  for (const tab of Array.from(document.querySelectorAll('[data-bottom]'))) {
+    tab.addEventListener('click', () => {
+      store.set({ bottomTab: (tab as HTMLElement).dataset.bottom! });
+      for (const other of Array.from(document.querySelectorAll('[data-bottom]'))) other.classList.toggle('tab--on', other === tab);
+      renderBottom();
+    });
+  }
+
+  $('fitBtn').addEventListener('click', () => preview?.fit());
+  $('gridBtn').addEventListener('click', () => preview?.toggleGrid());
+
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'o') {
+      event.preventDefault();
+      browse();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      void convertAll(store.get().settings.runQa);
+    }
+  });
+
+  // The format registry drives even the drop-zone hint, so it can never drift
+  // from what the engines actually support.
+  const importable = FORMATS.filter((format) => format.support.import === 'full').length;
+  $('dropFormats').textContent = `${importable} formats read directly · Shapefile, DXF, KML/KMZ, GeoJSON, LAS, CSV/PNEZD, LandXML, Surpac STR, ASCII grid and more`;
+}
+
+async function boot(): Promise<void> {
+  const settings = await loadSettings();
+  store.set({ settings });
+  applyTheme(settings.theme);
+  wire();
+  store.subscribe(() => {
+    /* views re-render explicitly; the subscription keeps the store honest */
+  });
+  store.log('info', 'Universal Geo Converter ready. All processing is local.');
+  render();
+  void refreshNative();
+}
+
+void boot();
