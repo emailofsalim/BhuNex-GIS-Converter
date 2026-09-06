@@ -68,11 +68,41 @@ export interface CirFeature {
 }
 
 export interface CirLayer {
+  /** Display name — the last segment of `path`. */
   name: string;
+  /**
+   * The layer's position in the source's own hierarchy, outermost first.
+   *
+   * KML folders nest, DXF layer names are flat, GML groups by feature type,
+   * LandXML by section. Keeping the hierarchy as segments rather than a joined
+   * string is what lets the writer rebuild it as real folders on the way out,
+   * so the output tree mirrors the input tree instead of flattening it.
+   */
+  path: string[];
   features: CirFeature[];
   fields: FieldDef[];
   geometryTypes: GeometryType[];
   style?: StyleHint;
+}
+
+/**
+ * Where a dataset sat in the input the user actually handed over.
+ *
+ * A dropped folder of surveys, or a ZIP of ZIPs, has a shape that means
+ * something to the person who assembled it. Recording it here is what allows
+ * "input structure = output structure" to be a property of the tool rather than
+ * something the user reassembles by hand afterwards.
+ */
+export interface SourceOrigin {
+  /** Full relative path as presented, e.g. `Delivery/Survey/plots.dxf`. */
+  path: string;
+  /** Directory part of `path`, '' at the root. */
+  directory: string;
+  /**
+   * Archive nesting chain, outermost first, e.g. `['delivery.zip', 'survey.zip']`.
+   * Each archive becomes a folder level so a nested delivery stays navigable.
+   */
+  containers: string[];
 }
 
 export type PixelType =
@@ -278,6 +308,12 @@ export interface CirDataset {
   axisOrder: 'xy' | 'yx' | 'unknown';
   vertical: VerticalRef;
   layers: CirLayer[];
+  /**
+   * Where the file sat in the input the user handed over. Absent for a dataset
+   * that had no tree (a single picked file), in which case the layout engine
+   * falls back to the bare filename.
+   */
+  origin?: SourceOrigin;
   raster?: CirRaster;
   pointcloud?: CirPointCloud;
   table?: CirTable;
@@ -315,8 +351,36 @@ export function createDataset(init: Partial<CirDataset> & { name: string; kind: 
   };
 }
 
-export function createLayer(name: string, features: CirFeature[] = [], fields: FieldDef[] = []): CirLayer {
-  return { name, features, fields, geometryTypes: collectGeometryTypes(features) };
+/**
+ * Creates a layer. `path` defaults to a single segment, which is right for the
+ * flat-namespace formats (DXF layers, GML feature types); readers with real
+ * nesting (KML folders) pass the full chain.
+ */
+export function createLayer(
+  name: string,
+  features: CirFeature[] = [],
+  fields: FieldDef[] = [],
+  path?: string[]
+): CirLayer {
+  const segments = path && path.length > 0 ? path : [name];
+  return {
+    name: segments[segments.length - 1],
+    path: segments,
+    features,
+    fields,
+    geometryTypes: collectGeometryTypes(features),
+  };
+}
+
+/** Splits a presented path into the origin record the layout engine consumes. */
+export function originFromPath(path: string, containers: string[] = []): SourceOrigin {
+  const normalised = path.replace(/\\/g, '/').replace(/^\/+/, '');
+  const slash = normalised.lastIndexOf('/');
+  return {
+    path: normalised,
+    directory: slash >= 0 ? normalised.slice(0, slash) : '',
+    containers,
+  };
 }
 
 export function collectGeometryTypes(features: CirFeature[]): GeometryType[] {

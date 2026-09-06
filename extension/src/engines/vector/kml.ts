@@ -131,7 +131,10 @@ export function readKml(text: string, source: SourceInfo): CirDataset {
   }
 
   const warnings: Warning[] = [];
-  const layers = new Map<string, CirFeature[]>();
+  // Keyed by the joined folder path, but the segments are kept alongside: KML
+  // folders nest arbitrarily, and that nesting is what the layout engine rebuilds
+  // as real directories on the way out.
+  const layers = new Map<string, { path: string[]; features: CirFeature[] }>();
 
   /** Folder names build the layer path, so "Pit / Bench_Crest" stays legible. */
   const walk = (node: XmlNode, path: string[]): void => {
@@ -157,17 +160,24 @@ export function readKml(text: string, source: SourceInfo): CirDataset {
       const styleUrl = childText(candidate, 'styleUrl');
       if (styleUrl) properties._styleUrl = styleUrl;
 
-      const layerName = path.length > 0 ? path.join(' / ') : source.fileName;
-      const list = layers.get(layerName) ?? [];
-      list.push({ id: attribute(candidate, 'id') ?? list.length, geometry, properties, sourceLayer: layerName, sourceEntity: 'Placemark' });
-      layers.set(layerName, list);
+      const segments = path.length > 0 ? path : [source.fileName];
+      const layerName = segments.join(' / ');
+      const entry = layers.get(layerName) ?? { path: segments, features: [] };
+      entry.features.push({
+        id: attribute(candidate, 'id') ?? entry.features.length,
+        geometry,
+        properties,
+        sourceLayer: layerName,
+        sourceEntity: 'Placemark',
+      });
+      layers.set(layerName, entry);
     }
   };
 
   walk(root, []);
 
   const placemarkCount = descendants(root, 'placemark').length;
-  const readCount = [...layers.values()].reduce((sum, features) => sum + features.length, 0);
+  const readCount = [...layers.values()].reduce((sum, entry) => sum + entry.features.length, 0);
   if (placemarkCount > 0 && readCount === 0) {
     throw new ConversionError({
       code: 'KML_NO_GEOMETRY',
@@ -177,7 +187,9 @@ export function readKml(text: string, source: SourceInfo): CirDataset {
     });
   }
 
-  const cirLayers: CirLayer[] = [...layers.entries()].map(([name, features]) => createLayer(name, features, deriveFields(features)));
+  const cirLayers: CirLayer[] = [...layers.values()].map((entry) =>
+    createLayer(entry.path[entry.path.length - 1], entry.features, deriveFields(entry.features), entry.path)
+  );
 
   return createDataset({
     kind: 'vector',
@@ -361,14 +373,38 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
     `<PolyStyle><color>${kmlColor(options.polygonColor, options.polygonFill ? '80' : '00')}</color><fill>${options.polygonFill ? 1 : 0}</fill><outline>1</outline></PolyStyle></Style>` +
     `<Style id="ugcPoint"><IconStyle><color>${kmlColor(options.lineColor)}</color><scale>0.9</scale></IconStyle></Style>`;
 
-  const body = options.useFolders
-    ? dataset.layers
-        .map(
-          (layer) =>
-            `<Folder><name>${xmlEscape(layer.name)}</name>${layer.features.map(placemark).join('')}</Folder>`
-        )
-        .join('')
-    : dataset.layers.flatMap((layer) => layer.features.map(placemark)).join('');
+  /**
+   * Rebuilds the source's folder nesting rather than emitting one flat Folder
+   * per layer. A mine plan's `Pit / Bench crests / Toe` hierarchy is meaningful
+   * organisation, and flattening it to `Pit - Bench crests - Toe` loses the tree
+   * that Google Earth's places panel would otherwise show.
+   */
+  const buildFolders = (): string => {
+    interface Node {
+      children: Map<string, Node>;
+      placemarks: string[];
+    }
+    const root: Node = { children: new Map(), placemarks: [] };
+    for (const layer of dataset.layers) {
+      let node = root;
+      for (const segment of layer.path.length > 0 ? layer.path : [layer.name]) {
+        const next = node.children.get(segment) ?? { children: new Map(), placemarks: [] };
+        node.children.set(segment, next);
+        node = next;
+      }
+      node.placemarks.push(...layer.features.map(placemark));
+    }
+    // Each node emits its own placemarks and then its child folders. Emitting a
+    // child's placemarks at the parent level as well would duplicate every one.
+    const render = (node: Node): string =>
+      node.placemarks.join('') +
+      [...node.children.entries()]
+        .map(([name, child]) => `<Folder><name>${xmlEscape(name)}</name>${render(child)}</Folder>`)
+        .join('');
+    return render(root);
+  };
+
+  const body = options.useFolders ? buildFolders() : dataset.layers.flatMap((layer) => layer.features.map(placemark)).join('');
 
   const text =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +

@@ -93,6 +93,13 @@ R14  Mixed-format batch conversion is mandatory.
 R15  No CDN, no remote script, no remote stylesheet, no remote font, no runtime
      download of engines. The packaged extension MUST work with the network
      interface disabled.
+R16  Input structure = output structure. Layers, folder nesting and archive
+     nesting present in the source MUST be reconstructible in the delivery. A
+     layer hierarchy is carried as path segments, never as a flattened name, and
+     is rebuilt as real folders (in a ZIP) or real containers (KML folders, DXF
+     layers) on the way out. Where a target format cannot express the hierarchy,
+     the structure is preserved in the delivery tree instead, and the fact is
+     stated - never silently flattened.
 
 
 ================================================================================
@@ -699,6 +706,40 @@ size, status, warnings, errors, engine versions, sha256, timestamp, duration.
 Default {basename}_converted_to_{target}.{ext}
 Alternatives {basename}_{target} and {basename}_{date}_{target}
 Unsafe path characters are sanitised. The source is never overwritten.
+
+12.5 DELIVERY STRUCTURE (rule R16 - core/layout.ts)
+The layout engine plans and packages; it never writes format bytes. That split is
+what makes structure testable on paths alone (tests/structure.test.ts asserts on
+strings like "Mine/Infrastructure/Haul road.geojson").
+
+Three layouts, user-selectable per conversion, in the settings panel beside
+precision because it is a first-class choice and not an advanced one:
+
+  single         One output file. The obvious case stays obvious.
+  per-layer      One file per CIR layer, placed in folders that reproduce the
+                 layer hierarchy: layer path ["Mine","Infrastructure"] becomes
+                 Mine/Infrastructure.<ext>. Several files are packaged as one ZIP
+                 whose folders ARE the hierarchy.
+  mirror-source  As per-layer, but rooted at the source's own directory and
+                 archive nesting. A file read from survey.zip!Delivery/plots.dxf
+                 is delivered under survey/Delivery/.
+
+Invariants the layout engine must hold:
+  - A single layer gets no folder. One output file is never wrapped in a ZIP.
+  - Path segments are sanitised, so a layer named "../etc" cannot escape the
+    delivery root.
+  - Colliding paths get numeric suffixes rather than overwriting each other.
+  - Multi-file targets (Shapefile, MIF/MID) return LOOSE grouped members, not a
+    nested ZIP. The layout engine decides folder placement, so a shapefile inside
+    a batch delivery is Borehole/Borehole.shp, not a ZIP inside a ZIP.
+  - A batch mirrors the input folder tree when mirrorBatchTree is on (default).
+
+Hierarchy across a format hop: GeoJSON carries the layer path in the feature
+property _layer, joined with " / ". The GeoJSON reader regroups on it, so
+DXF -> GeoJSON -> KML rebuilds nested KML folders instead of one flat layer.
+
+The full delivery tree is computed before packaging and shown in the workspace's
+"Delivery structure" tab, so the user sees the folder layout before downloading.
 
 
 ================================================================================

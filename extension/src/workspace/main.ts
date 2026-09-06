@@ -17,6 +17,7 @@ import { groupCompanions, type IngestFile } from '../core/companions';
 import { CONFIRM_THRESHOLD } from '../core/detect';
 import { ConversionError } from '../core/errors';
 import { packageBatch, type ConversionSettings } from '../core/pipeline';
+import { describeTree, OUTPUT_LAYOUT_DESCRIPTION, OUTPUT_LAYOUT_LABEL, type OutputLayout } from '../core/layout';
 import { FULL_PRECISION, fixedPrecision } from '../core/precision';
 import {
   CATEGORY_LABEL,
@@ -122,13 +123,20 @@ async function filesFromDataTransfer(transfer: DataTransfer): Promise<IngestFile
   return out;
 }
 
-async function addFiles(files: IngestFile[]): Promise<void> {
+/**
+ * Adds files to the queue, grouping companions first.
+ *
+ * `containers` names the archive chain these files came out of, so an expanded
+ * ZIP keeps its own name as a folder level in the output tree.
+ */
+async function addFiles(files: IngestFile[], containers?: string[]): Promise<void> {
   if (files.length === 0) return;
   const groups = groupCompanions(files);
   const items: QueueItem[] = groups.map((group) => ({
     id: nextId(),
     fileName: group.primary.name,
     path: group.primary.path,
+    containers,
     size: group.primary.size,
     bytes: group.primary.bytes,
     companions: group.companions.size > 0 ? new Map([...group.companions].map(([key, file]) => [key, file.bytes])) : undefined,
@@ -208,7 +216,15 @@ async function expandArchiveItem(id: string): Promise<void> {
     const expanded = await expand({ fileName: item.fileName, bytes: item.bytes });
     store.removeItem(id);
     await addFiles(
-      expanded.map((entry) => ({ path: entry.fileName, name: entry.fileName.split('/').pop() ?? entry.fileName, size: entry.bytes.length, bytes: entry.bytes }))
+      expanded.map((entry) => ({
+        path: entry.path ?? entry.fileName,
+        name: entry.fileName,
+        size: entry.bytes.length,
+        bytes: entry.bytes,
+      })),
+      // The archive becomes a folder level, so a ZIP of folders expands into
+      // those folders rather than a flat list.
+      expanded[0]?.containers
     );
     store.log('ok', `${item.fileName}: expanded to ${expanded.length} file(s).`);
   } catch (error) {
@@ -228,6 +244,7 @@ function buildSettings(): Partial<ConversionSettings> {
     targetCrs,
     preserveZ: settings.preserveZ,
     naming: { pattern: settings.naming },
+    layout: settings.outputLayout,
     runQa: settings.runQa,
     arcTolerance: settings.arcTolerance,
     embedMetadata: settings.embedMetadata,
@@ -278,7 +295,14 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
   try {
     const settings = { ...buildSettings(), runQa: withQa && store.get().settings.runQa };
     const result = await runConversion(
-      { fileName: item.fileName, bytes: item.bytes, companions: item.companions, siblingExtensions: item.siblingExtensions },
+      {
+        fileName: item.fileName,
+        bytes: item.bytes,
+        companions: item.companions,
+        siblingExtensions: item.siblingExtensions,
+        path: item.path,
+        containers: item.containers,
+      },
       targetId,
       settings,
       item.forcedFormatId
@@ -289,6 +313,7 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
     store.updateItem(id, {
       status: 'done',
       outputs: result.outputs,
+      tree: result.tree,
       qa: result.qa,
       warnings: result.warnings,
       provenance: result.provenance,
@@ -378,10 +403,10 @@ async function downloadBatchZip(): Promise<void> {
     qa: item.qa!,
     provenance: item.provenance,
   }));
-  const { zip, manifestCsv } = await packageBatch(results as never);
+  const { zip, manifestCsv, tree } = await packageBatch(results as never, { mirrorSource: store.get().settings.mirrorBatchTree });
   store.set({ manifestCsv });
   downloadBytes(zip, `universal-geo-converter-batch-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip');
-  store.log('ok', `Batch ZIP written with ${done.length} dataset(s) and a manifest.`);
+  store.log('ok', `Batch ZIP written with ${done.length} dataset(s), ${tree.length} file(s) and a manifest.`);
   render();
 }
 
@@ -486,6 +511,9 @@ function renderQueue(): void {
     if (item.dataset?.crs) meta.append(badge(crsShort(item.dataset.crs), 'muted', crsLabel(item.dataset.crs)));
     else if (item.dataset) meta.append(badge('CRS not declared', 'warn', 'Select a source CRS before transforming coordinates.'));
     if (item.targetFormatId) meta.append(badge(`→ ${getFormat(item.targetFormatId)?.name ?? item.targetFormatId}`, 'accent'));
+    if (item.tree && item.tree.length > 1) {
+      meta.append(badge(`${item.tree.length} files`, 'accent', item.tree.slice(0, 20).join('\n')));
+    }
     if (item.warnings.length > 0) meta.append(badge(`${item.warnings.length} warning${item.warnings.length === 1 ? '' : 's'}`, 'warn'));
     if (item.missingCompanions.length > 0) {
       meta.append(badge(`missing .${item.missingCompanions.join(', .')}`, 'error', 'A required companion file was not supplied.'));
@@ -1015,6 +1043,32 @@ function renderSettingsPanel(): void {
     checkbox('Run QA after conversion', state.settings.runQa, (value) => void store.patchSettings({ runQa: value }), 'Re-imports the output and compares it with the source.')
   );
 
+  // Output structure sits beside precision because it is a first-class choice,
+  // not an advanced one: it decides whether the delivery is one file or a tree.
+  const layoutField = element('div', { class: 'field' });
+  const layoutLabel = element('label', { class: 'field__label', text: 'Output structure' });
+  layoutLabel.append(element('span', { class: 'hint', text: '?', title: OUTPUT_LAYOUT_DESCRIPTION[state.settings.outputLayout] }));
+  layoutField.append(layoutLabel);
+  const layoutSelect = element('select', { class: 'select' }) as HTMLSelectElement;
+  for (const value of ['single', 'per-layer', 'mirror-source'] as OutputLayout[]) {
+    layoutSelect.append(element('option', { value, text: OUTPUT_LAYOUT_LABEL[value] }));
+  }
+  layoutSelect.value = state.settings.outputLayout;
+  layoutSelect.addEventListener('change', () => void store.patchSettings({ outputLayout: layoutSelect.value as OutputLayout }));
+  layoutField.append(layoutSelect);
+  layoutField.append(element('p', { class: 'small faint', text: OUTPUT_LAYOUT_DESCRIPTION[state.settings.outputLayout] }));
+
+  const layerCount = item?.dataset?.layers?.length ?? 0;
+  if (state.settings.outputLayout !== 'single' && layerCount > 1) {
+    layoutField.append(
+      element('p', {
+        class: 'small muted',
+        text: `${layerCount} layers will become ${layerCount} files, packaged as one ZIP whose folders are the layer hierarchy.`,
+      })
+    );
+  }
+  common.append(layoutField);
+
   const precision = element('div', { class: 'field' });
   precision.append(element('label', { class: 'field__label', text: 'Output precision' }));
   const precisionSelect = element('select', { class: 'select' }) as HTMLSelectElement;
@@ -1159,6 +1213,34 @@ function renderBottom(): void {
   }
 
   const item = store.selected();
+
+  if (state.bottomTab === 'delivery') {
+    if (!item?.tree?.length) {
+      body.append(
+        element('p', {
+          class: 'muted',
+          style: 'padding:16px',
+          text: 'Convert a file to see the structure of its delivery — the folders and files it produced.',
+        })
+      );
+      return;
+    }
+    const header = element('div', { class: 'qa__verdict' });
+    header.append(badge(`${item.tree.length} file${item.tree.length === 1 ? '' : 's'}`, 'accent'));
+    header.append(
+      element('span', {
+        class: 'muted',
+        text:
+          item.outputs && item.outputs.length === 1 && item.outputs[0].name.endsWith('.zip')
+            ? `Packaged as ${item.outputs[0].name} — the ZIP's folders are this tree.`
+            : 'Delivered as loose file(s).',
+      })
+    );
+    body.append(header);
+    body.append(element('pre', { class: 'log', text: describeTree(item.tree).join('\n') }));
+    return;
+  }
+
   if (!item?.qa) {
     body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Convert a file to see its fidelity report.' }));
     return;
@@ -1235,6 +1317,16 @@ function openSettingsDialog(): void {
   body.append(element('h3', { class: 'section__title', text: 'Performance' }));
   body.append(numberField('Parallel jobs', state.settings.parallelJobs, 1, (value) => void store.patchSettings({ parallelJobs: Math.max(1, Math.round(value)) })));
   body.append(numberField('Maximum archive expansion (MB)', state.settings.maxArchiveMb, 64, (value) => void store.patchSettings({ maxArchiveMb: value })));
+
+  body.append(element('h3', { class: 'section__title', text: 'Delivery structure' }));
+  body.append(
+    checkbox(
+      'Mirror the input folder tree in a batch ZIP',
+      state.settings.mirrorBatchTree,
+      (value) => void store.patchSettings({ mirrorBatchTree: value }),
+      'Each converted file is placed under the folder its source came from, so two files with the same name in different folders stay apart.'
+    )
+  );
 
   body.append(element('h3', { class: 'section__title', text: 'Naming' }));
   const naming = element('select', { class: 'select' }) as HTMLSelectElement;

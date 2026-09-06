@@ -449,6 +449,7 @@ export function rasterFootprint(dataset: CirDataset): CirDataset {
     layers: [
       {
         name: `${dataset.name} footprint`,
+        path: ['footprint'],
         fields: [],
         geometryTypes: ['Polygon'],
         features: [

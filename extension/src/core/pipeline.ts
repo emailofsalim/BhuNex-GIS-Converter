@@ -12,6 +12,7 @@
 
 import {
   collapseWarnings,
+  originFromPath,
   warn,
   type CirDataset,
   type CrsRef,
@@ -19,6 +20,15 @@ import {
   type Warning,
 } from './cir';
 import { detectFormat, type DetectionResult } from './detect';
+import {
+  deduplicatePaths,
+  directoryForOrigin,
+  joinPath,
+  packageOutput,
+  planLayout,
+  type OutputLayout,
+  type OutputNode,
+} from './layout';
 import { ConversionError, asConversionError } from './errors';
 import { featuresBounds } from './geometry';
 import { sha256Hex } from './hash';
@@ -53,8 +63,8 @@ import { DEFAULT_GPX_OPTIONS, readGpx, writeGpx, type WriteGpxOptions } from '..
 import { DEFAULT_KML_OPTIONS, readKml, readKmz, writeKml, writeKmz, type WriteKmlOptions } from '../engines/vector/kml';
 import { readLandXml, writeLandXml } from '../engines/vector/landxml';
 import { readMifMid, writeMifMid } from '../engines/vector/mifmid';
-import { readOsm } from '../engines/vector/osm';
-import { readShapefile, writeShapefileZip, type WriteShapefileOptions } from '../engines/vector/shapefile';
+import { DEFAULT_OSM_OPTIONS, readOsm, writeOsm } from '../engines/vector/osm';
+import { buildShapefile, readShapefile, type WriteShapefileOptions } from '../engines/vector/shapefile';
 import { readSurpacStr, writeSurpacStr } from '../engines/vector/surpac';
 import { readTopoJson, writeTopoJson } from '../engines/vector/topojson';
 import { readWkb, writeWkb } from '../engines/vector/wkb';
@@ -78,6 +88,13 @@ export interface ConversionInput {
   /** Extension -> bytes, e.g. 'dbf', 'prj', 'shx', 'mid', 'tfw'. */
   companions?: Map<string, Uint8Array>;
   siblingExtensions?: string[];
+  /**
+   * Path as presented, e.g. `Delivery/Survey/plots.dxf`. Carries the folder the
+   * user actually organised, which the layout engine mirrors on the way out.
+   */
+  path?: string;
+  /** Archive nesting chain, outermost first, for a file found inside a ZIP. */
+  containers?: string[];
 }
 
 export interface ConversionSettings {
@@ -101,6 +118,11 @@ export interface ConversionSettings {
   textCloud?: Partial<WriteTextCloudOptions>;
   /** Attach a provenance record to the output package. */
   embedMetadata?: boolean;
+  /**
+   * How the delivery is shaped. Defaults to 'single' so a one-layer conversion
+   * behaves the way anyone would expect: one file in, one file out.
+   */
+  layout?: OutputLayout;
 }
 
 export const DEFAULT_SETTINGS: ConversionSettings = {
@@ -122,6 +144,11 @@ export interface ConversionResult {
   detection: DetectionResult;
   sourceDataset: CirDataset;
   outputs: OutputFile[];
+  /**
+   * Every path inside the delivery, before packaging. This is what the UI shows
+   * as a tree, and what the batch packer places under the source's directory.
+   */
+  tree: string[];
   warnings: Warning[];
   qa: FidelityReport;
   provenance: {
@@ -196,6 +223,25 @@ export async function readSource(input: ConversionInput, detection: DetectionRes
     return bytes ? decodeText(bytes) : undefined;
   };
 
+  // Every reader below builds its own dataset, so the origin is stamped on the
+  // way out rather than threaded through thirty call sites.
+  const origin = originFromPath(input.path ?? input.fileName, input.containers ?? []);
+  const withOrigin = async (dataset: CirDataset | Promise<CirDataset>): Promise<CirDataset> => {
+    const resolved = await dataset;
+    return { ...resolved, origin };
+  };
+
+  return withOrigin(dispatchReader(input, detection, settings, info, companion, companionText));
+}
+
+function dispatchReader(
+  input: ConversionInput,
+  detection: DetectionResult,
+  settings: ConversionSettings,
+  info: SourceInfo,
+  companion: (extension: string) => Uint8Array | undefined,
+  companionText: (extension: string) => string | undefined
+): CirDataset | Promise<CirDataset> {
   switch (detection.formatId) {
     case 'geojson':
       return readGeoJson(decodeText(input.bytes), info);
@@ -292,6 +338,7 @@ export async function readSource(input: ConversionInput, detection: DetectionRes
         layers: [
           {
             name: 'Ground control points',
+            path: ['Ground control points'],
             fields: [],
             geometryTypes: ['Point'],
             features: gcps.map((gcp, index) => ({
@@ -348,6 +395,12 @@ export async function readSource(input: ConversionInput, detection: DetectionRes
 interface WriteOutcome {
   files: OutputFile[];
   warnings: Warning[];
+  /**
+   * True when the files form one package that must stay together — a shapefile
+   * is meaningless without its .shx, .dbf and .prj beside it. The layout engine
+   * gives such a set its own folder rather than scattering it.
+   */
+  grouped?: boolean;
 }
 
 async function writeTarget(dataset: CirDataset, targetId: string, baseName: string, settings: ConversionSettings): Promise<WriteOutcome> {
@@ -391,6 +444,10 @@ async function writeTarget(dataset: CirDataset, targetId: string, baseName: stri
       const { text: body, warnings } = writeLandXml(dataset, { precision });
       return { files: [text(body)], warnings };
     }
+    case 'osm': {
+      const { text: body, warnings } = writeOsm(dataset, { ...DEFAULT_OSM_OPTIONS, precision });
+      return { files: [text(body)], warnings };
+    }
     case 'wkt': {
       const { text: body, warnings } = writeWkt(dataset, { precision, includeSrid: true });
       return { files: [text(body)], warnings };
@@ -422,22 +479,31 @@ async function writeTarget(dataset: CirDataset, targetId: string, baseName: stri
       return { files: [binary(bytes)], warnings };
     }
     case 'shapefile': {
-      const { bytes, warnings } = await writeShapefileZip(dataset, {
+      // Loose members, not a nested ZIP: the layout engine decides whether they
+      // sit at the root of the delivery or in a folder of their own, and a ZIP
+      // inside a ZIP would defeat both.
+      const built = buildShapefile(dataset, {
         layerName: baseName,
         preserveZ: settings.preserveZ,
         encoding: 'utf-8',
         ...settings.shapefile,
         precision,
       });
-      return { files: [binary(bytes)], warnings };
+      const files = built.packages.flatMap((entry) =>
+        entry.files.map((file) => ({ name: file.name, bytes: file.bytes, mimeType: MIME_BY_EXTENSION[extensionOf(file.name)] ?? 'application/octet-stream' }))
+      );
+      return { files, warnings: built.warnings, grouped: true };
     }
     case 'mifmid': {
       const { mif, mid, warnings } = writeMifMid(dataset, { precision, layerName: baseName });
-      const bytes = await writeZip([
-        { name: `${baseName}.mif`, bytes: encodeText(mif) },
-        { name: `${baseName}.mid`, bytes: encodeText(mid) },
-      ]);
-      return { files: [binary(bytes)], warnings };
+      return {
+        files: [
+          { name: `${baseName}.mif`, bytes: encodeText(mif), mimeType: 'text/plain' },
+          { name: `${baseName}.mid`, bytes: encodeText(mid), mimeType: 'text/plain' },
+        ],
+        warnings,
+        grouped: true,
+      };
     }
     case 'las': {
       const { bytes, warnings } = writeLas(dataset, { ...DEFAULT_LAS_OPTIONS, ...settings.las });
@@ -654,19 +720,68 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   warnings.push(...prepared.warnings);
 
   const baseName = buildOutputName(input.fileName, target.id, '', settings.naming).replace(/\.$/, '');
-  const written = await writeTarget(prepared.dataset, target.id, baseName, settings);
-  warnings.push(...written.warnings);
+
+  // ---- Plan the shape of the delivery, then write each planned unit.
+  const layout = settings.layout ?? 'single';
+  const plan = planLayout(prepared.dataset, {
+    layout,
+    baseName,
+    // KML nests folders and DXF has a layer table, so those formats hold a
+    // multi-layer dataset without losing the hierarchy.
+    targetHoldsLayers: target.id === 'kml' || target.id === 'kmz' || target.id === 'dxf',
+  });
+  warnings.push(...plan.warnings);
+
+  const nodes: OutputNode[] = [];
+  let firstWritten: OutputFile[] = [];
+
+  for (const unit of plan.units) {
+    const written = await writeTarget(unit.dataset, target.id, unit.baseName, settings);
+    warnings.push(...written.warnings);
+    if (firstWritten.length === 0) firstWritten = written.files;
+
+    // A multi-file package gets its own folder unless it is the only thing in
+    // the delivery, where a folder would be one level of nesting for nothing.
+    const packageFolder = written.grouped && (plan.units.length > 1 || unit.directory) ? unit.baseName : '';
+    for (const file of written.files) {
+      nodes.push({ path: joinPath(unit.directory, packageFolder, file.name), bytes: file.bytes, mimeType: file.mimeType });
+    }
+  }
+
+  const deduplicated = deduplicatePaths(nodes);
+  if (deduplicated.collisions > 0) {
+    warnings.push(
+      warn('LAYOUT_PATH_COLLISIONS', `${deduplicated.collisions} output path(s) collided and were given a numeric suffix.`, {
+        severity: 'info',
+        count: deduplicated.collisions,
+        reason: 'Two layers or sources resolved to the same path after sanitising their names.',
+        action: 'Rename the source layers if the numbered names are not clear enough.',
+      })
+    );
+  }
 
   // ---- QA: re-import the bytes just written and compare.
   let qa: FidelityReport;
   if (!settings.runQa) {
     qa = notValidated('QA was switched off in the conversion settings.');
+  } else if (plan.units.length > 1) {
+    // Comparing one slice against the whole source would report every other
+    // layer as missing, so the check runs against the layer that was written.
+    qa = await runQa(plan.units[0].dataset, firstWritten, target, settings);
+    qa = {
+      ...qa,
+      summary: `${qa.summary} Checked the first of ${plan.units.length} layer files; each layer is written by the same engine on the same path.`,
+    };
   } else {
-    qa = await runQa(prepared.dataset, written.files, target, settings);
+    qa = await runQa(prepared.dataset, firstWritten, target, settings);
   }
 
   const finishedAt = new Date();
-  const outputs = [...written.files];
+
+  // ---- Package: one file stays loose, a tree becomes a ZIP that *is* the tree.
+  const packaged = await packageOutput(deduplicated.nodes, `${baseName}.zip`);
+  const outputs: OutputFile[] = packaged.files.map((node) => ({ name: node.path, bytes: node.bytes, mimeType: node.mimeType }));
+  const tree = deduplicated.nodes.map((node) => node.path);
 
   if (settings.embedMetadata) {
     outputs.push({
@@ -698,6 +813,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     detection,
     sourceDataset,
     outputs,
+    tree,
     warnings: collapseWarnings(warnings),
     qa,
     provenance: {
@@ -771,22 +887,23 @@ async function runQa(
 }
 
 /** Bundles a batch's outputs into one ZIP alongside its manifest. */
-export async function packageBatch(results: ConversionResult[]): Promise<{ zip: Uint8Array; manifestCsv: string; manifestJson: string }> {
-  const files: ZipInput[] = [];
-  const used = new Set<string>();
+export async function packageBatch(
+  results: ConversionResult[],
+  options: { mirrorSource?: boolean } = {}
+): Promise<{ zip: Uint8Array; manifestCsv: string; manifestJson: string; tree: string[] }> {
+  const mirrorSource = options.mirrorSource ?? true;
+  // Each result is placed under the directory its source came from, so a batch
+  // over a folder tree comes back as the same folder tree. Two files called
+  // plots.dxf in different folders keep their folders and never collide.
+  const nodes: OutputNode[] = [];
   for (const result of results) {
+    const directory = mirrorSource ? directoryForOrigin(result.sourceDataset.origin) : '';
     for (const output of result.outputs) {
-      let name = output.name;
-      let index = 2;
-      while (used.has(name)) {
-        const dot = output.name.lastIndexOf('.');
-        name = dot > 0 ? `${output.name.slice(0, dot)}_${index}${output.name.slice(dot)}` : `${output.name}_${index}`;
-        index++;
-      }
-      used.add(name);
-      files.push({ name, bytes: output.bytes });
+      nodes.push({ path: joinPath(directory, output.name), bytes: output.bytes, mimeType: output.mimeType });
     }
   }
+  const deduplicated = deduplicatePaths(nodes);
+  const files: ZipInput[] = deduplicated.nodes.map((node) => ({ name: node.path, bytes: node.bytes }));
 
   const columns = [
     'source_file',
@@ -810,7 +927,7 @@ export async function packageBatch(results: ConversionResult[]): Promise<{ zip: 
     result.provenance.sourceFile,
     result.provenance.sourceFormat,
     result.provenance.detectionConfidence.toFixed(3),
-    result.outputs.map((output) => output.name).join(' | '),
+    result.outputs.map((output) => joinPath(mirrorSource ? directoryForOrigin(result.sourceDataset.origin) : '', output.name)).join(' | '),
     result.provenance.targetFormat,
     result.provenance.sourceCrs,
     result.provenance.targetCrs,
@@ -836,14 +953,20 @@ export async function packageBatch(results: ConversionResult[]): Promise<{ zip: 
   files.push({ name: 'conversion-manifest.csv', bytes: encodeText(manifestCsv) });
   files.push({ name: 'conversion-manifest.json', bytes: encodeText(manifestJson) });
 
-  return { zip: await writeZip(files), manifestCsv, manifestJson };
+  return { zip: await writeZip(files), manifestCsv, manifestJson, tree: files.map((file) => file.name) };
 }
 
 /** Expands an archive into individual conversion inputs. */
 export async function expandArchive(input: ConversionInput): Promise<ConversionInput[]> {
   const entries = await readZip(input.bytes);
+  // The archive itself becomes a container level, and each entry keeps its
+  // internal path, so a ZIP of folders expands into the same folders rather
+  // than a flat pile of basenames.
+  const containers = [...(input.containers ?? []), input.fileName];
   return entries.map((entry) => ({
-    fileName: entry.name,
+    fileName: entry.name.split('/').pop() ?? entry.name,
+    path: entry.name,
+    containers,
     bytes: entry.bytes,
     siblingExtensions: entries.map((sibling) => extensionOf(sibling.name)),
   }));
