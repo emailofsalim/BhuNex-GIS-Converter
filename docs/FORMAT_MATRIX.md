@@ -40,7 +40,7 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 | KML | `.kml` | **Supported** | **Supported** | 3D, Z, attributes |
 | KMZ | `.kmz` | **Supported** | **Supported** | 3D, Z, attributes |
 | MapInfo MIF/MID | `.mif` | Partial | Partial | attributes, CRS |
-| OpenStreetMap XML | `.osm` | Partial | Not supported | attributes |
+| OpenStreetMap XML | `.osm` | Partial | Partial | attributes |
 | TopoJSON | `.topojson` | **Supported** | Partial | attributes |
 | Well-Known Binary | `.wkb` | **Supported** | **Supported** | 3D, Z, M |
 | Well-Known Text | `.wkt` | **Supported** | **Supported** | 3D, Z, M |
@@ -96,6 +96,8 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 **OpenStreetMap XML**
 
 - Nodes and ways are read. Relations (multipolygons, routes) are not assembled.
+- The writer emits nodes and ways only. Polygon interior rings need a multipolygon relation and are reported rather than written.
+- Exported elements carry negative ids — the OSM convention for objects that do not exist in the database. This is data shaped like OSM, not an upload-ready changeset.
 
 **TopoJSON**
 

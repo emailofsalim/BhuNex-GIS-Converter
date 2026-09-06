@@ -8,7 +8,6 @@
  */
 
 import {
-  collectGeometryTypes,
   createDataset,
   createLayer,
   warn,
@@ -176,6 +175,28 @@ export function readGeoJson(text: string, source: SourceInfo, options: ReadGeoJs
     else pushFeature(parsed, 0);
   }
 
+  // GeoJSON is a flat FeatureCollection, but a file this tool wrote carries the
+  // source hierarchy in each feature's `_layer`. Regrouping by it means a
+  // DXF or KML tree survives a GeoJSON hop instead of collapsing to one layer —
+  // which is what makes "input structure = output structure" hold across formats
+  // rather than only within one.
+  const grouped = new Map<string, CirFeature[]>();
+  for (const feature of features) {
+    const key = typeof feature.properties?._layer === 'string' ? feature.properties._layer : '';
+    const list = grouped.get(key) ?? [];
+    list.push(feature);
+    grouped.set(key, list);
+  }
+  const carriesHierarchy = grouped.size > 1 || (grouped.size === 1 && !grouped.has(''));
+  const layers = carriesHierarchy
+    ? [...grouped.entries()].map(([key, list]) => {
+        // The KML reader joins folder segments with ' / '; splitting on it here
+        // rebuilds the same tree the writer will emit.
+        const segments = key ? key.split(' / ').map((segment) => segment.trim()).filter(Boolean) : [source.fileName];
+        return createLayer(segments[segments.length - 1], list, deriveFields(list), segments);
+      })
+    : [createLayer(source.fileName, features, deriveFields(features))];
+
   const dataset = createDataset({
     kind: 'vector',
     name: source.fileName,
@@ -186,10 +207,9 @@ export function readGeoJson(text: string, source: SourceInfo, options: ReadGeoJs
     crsOrigin: declaredCrs ? 'declared' : 'declared',
     units: declaredCrs && declaredCrs.kind === 'projected' ? 'm' : null,
     axisOrder: 'xy',
-    layers: [createLayer(source.fileName, features, deriveFields(features))],
+    layers,
     warnings,
   });
-  dataset.layers[0].geometryTypes = collectGeometryTypes(features);
   return dataset;
 }
 
