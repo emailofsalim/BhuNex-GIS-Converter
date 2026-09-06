@@ -21,7 +21,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 175 across 6 suites, all green |
+| Tests | 199 across 7 suites, all green |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -50,7 +50,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 6 | Native/advanced: DWG via native host ✅; DGN/E57/GPKG/FGB/Parquet adapters ⛔ | 🟡 partial |
 | 7 | UI: workspace, side panel, popup, preview, QA report, batch | ✅ done |
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
-| 9 | Fidelity prediction, conversion report, project health (spec §22, §29) | ⛔ not started |
+| 9 | Fidelity prediction ✅ + "what will be lost" ✅; conversion report doc ⛔, project health ⛔ (§22, §29) | 🟡 partial |
 | 10 | Full QA catalogue, topology rules, preview-and-apply repair (§23, §24) | ⛔ not started |
 | 11 | Vertex editor, snapping, measurement, geometry ops, attribute table (§25, §26) | ⛔ not started |
 | 12 | Label/attribute burn-in, CAD polygonisation, styled KMZ (§27, §28) | ⛔ not started |
@@ -73,7 +73,7 @@ nobody can preview or undo multiplies damage instead of saving labour.
 **Core** (`extension/src/core/`) — `cir.ts`, `registry.ts`, `detect.ts` (9-layer,
 noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`,
 `naming.ts`, `errors.ts`, `hash.ts`, `layout.ts` (delivery structure),
-`pipeline.ts` (the single dispatch point).
+`predict.ts` (fidelity prediction), `pipeline.ts` (the single dispatch point).
 
 **CRS** (`extension/src/crs/`) — `projection.ts` (Snyder TM, all UTM zones, Web
 Mercator, LCC), `epsg.ts` (bundled subset, Indian zones first), `wkt.ts`
@@ -82,7 +82,8 @@ Mercator, LCC), `epsg.ts` (bundled subset, Indian zones first), `wkt.ts`
 
 **Engines** — `vector/` (geojson, topojson, kml, gpx, wkt, wkb, csv, shapefile, dbf,
 gml, osm, mifmid, landxml, surpac, xlsx), `cad/` (dxf-read, dxf-write), `raster/`
-(asciigrid, worldfile, geotiff), `pointcloud/` (las, text, decimate),
+(asciigrid, worldfile, geotiff, geotiff-write, tiff-codec), `pointcloud/` (las,
+text, decimate),
 `survey/schema.ts`, `archives/zip.ts`, `xml.ts` (worker-safe XML reader).
 
 **QA** — `topology.ts`, `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists
@@ -161,17 +162,14 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 9 — fidelity prediction (spec §22).** Predict loss *before* conversion
-   from the registry flags plus the actual dataset, resolved GREEN/YELLOW/RED per
-   axis, with a "show exactly what will be lost" list of counted statements. The
-   highest-value next item: it makes every existing engine more useful without
-   adding a format.
-2. **Phase 10 — QA catalogue and repair (§23, §24).** Extend `qa/topology.ts` to the
+1. **Phase 10 — QA catalogue and repair (§23, §24).** Extend `qa/topology.ts` to the
    full defect list; every defect needs severity, location, feature id, suggested
    repair, preview and undo before any of it is offered.
-3. **Phase 12 — burn-in (§27).** The distinctive requirement: cadastral text inside
+2. **Phase 12 — burn-in (§27).** The distinctive requirement: cadastral text inside
    polygons becomes polygon attributes. Nothing else in the tool does this, and it
    is why CAD→GIS cadastral conversion is normally redone by hand.
+3. **Phase 9 remainder (§22.4, §29.2).** The per-file conversion report document,
+   and the project health score. The prediction engine they both build on is done.
 4. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter`. Until then the honest refusal stays.
 5. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
@@ -190,5 +188,6 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 | Date | Session | What landed |
 |---|---|---|
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
+| 2026-09-06 | fidelity prediction | Phase 9: `core/predict.ts` — eleven-axis GREEN/YELLOW/RED prediction computed before conversion, from a one-pass `DatasetProfile` so ranking 30 targets costs one walk over the features. `FormatLimits` moved the writer constraints (DBF 10-char names, 254-byte values, shapefile one-shape-type, mandated CRS, layer model) into the registry. Wired into the pipeline as a pre-flight (R22): impossible targets fail with a reason, lossy ones proceed with counted warnings. UI: fidelity badge on every format card, cards ordered by predicted fidelity, and a "What will be lost" tab with the axis grid. 199 tests (`predict.test.ts` new, 24). |
 | 2026-09-06 | GeoTIFF codec + spec merge | Phase 4 raster: `tiff-codec.ts` (LZW with early change, Deflate, PackBits, predictors 2/3, strips/tiles, both planar configs), `geotiff-write.ts`, registry flipped to `full` with 33 new tests. Two real defects fixed: LZW widened a code too late, and a corrupt code could hang the worker for ever. Owner's Master Build Instructions merged into the spec (v2.0): rules R17–R24, sections 21–31, phases 9–13, traceability map. 175 tests. |
 | 2026-09-06 | structure preservation | Phase 8: rule R16. `CirLayer.path` + `CirDataset.origin`, `core/layout.ts`, three output layouts wired through the pipeline / worker / batch ZIP, OSM writer added, hierarchy carried across format hops, Delivery structure tab. 141 tests (new `structure.test.ts`, 25). |

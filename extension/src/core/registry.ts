@@ -8,7 +8,7 @@
  * rule R1).
  */
 
-import type { DataKind } from './cir';
+import type { DataKind, GeometryType } from './cir';
 
 export type SupportLevel = 'full' | 'partial' | 'metadata-only' | 'adapter' | 'none';
 
@@ -29,6 +29,46 @@ export interface MagicRule {
   offset: number;
   /** Literal bytes, or an ASCII string that is compared byte-for-byte. */
   bytes: number[] | string;
+}
+
+/**
+ * Writer constraints the boolean capability flags cannot express.
+ *
+ * These exist for the fidelity predictor (spec §22), which has to say what a
+ * conversion will cost *before* it runs. "supportsAttributes: true" does not
+ * tell a user that DBF will cut `sample_description` to ten characters; this
+ * does. They live in the registry rather than in the predictor so there stays
+ * one source of truth about what a format can hold (rule R1).
+ *
+ * Absent means "no constraint beyond the flags", never "unknown".
+ */
+export interface FormatLimits {
+  /** Longest field name the writer can emit before it must mangle it. */
+  maxFieldNameLength?: number;
+  /** Longest text value, in bytes. */
+  maxTextValueBytes?: number;
+  /** One geometry type per file, as a shapefile requires. */
+  singleGeometryTypePerFile?: boolean;
+  /** Geometry types the writer emits. Absent means all the flags allow. */
+  geometryTypes?: GeometryType[];
+  /** The specification fixes the CRS: GeoJSON RFC 7946, KML, GPX, OSM. */
+  mandatesCrsEpsg?: number;
+  /**
+   * How the source's layer hierarchy survives a write:
+   *   native    the format has layers or typed collections of its own
+   *   folders   written as nested containers (KML)
+   *   property  carried as a feature property and regrouped on read
+   *   files     one file per layer, placed in folders by the layout engine
+   *   none      no representation in the file; hierarchy lives only in the
+   *             delivery tree (rule R16)
+   */
+  layerModel?: 'native' | 'folders' | 'property' | 'files' | 'none';
+  /** Colour, line width and fill survive the write. */
+  stylePreserved?: boolean;
+  /** A label or feature name survives as something a viewer displays. */
+  labelPreserved?: boolean;
+  /** Bands a raster writer emits. */
+  maxBands?: number;
 }
 
 export interface FormatDef {
@@ -54,6 +94,8 @@ export interface FormatDef {
   companions?: string[];
   /** Whether a write produces one file or a package that must be zipped. */
   packaging?: 'single' | 'zip';
+  /** Writer constraints the flags cannot express; read by the fidelity predictor. */
+  limits?: FormatLimits;
   maxRecommendedSizeMb?: number;
   readerEngine?: string;
   writerEngine?: string;
@@ -84,6 +126,9 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'single',
+    // RFC 7946 fixes the CRS at WGS 84; anything else is written with a
+    // non-standard crs member and flagged.
+    limits: { mandatesCrsEpsg: 4326, layerModel: 'property' },
     readerEngine: 'vector/geojson',
     writerEngine: 'vector/geojson',
     notes: 'RFC 7946 writes WGS 84 longitude/latitude. Other CRS are written with a crs member and flagged as non-standard.',
@@ -105,6 +150,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'single',
+    limits: { mandatesCrsEpsg: 4326, layerModel: 'property' },
     readerEngine: 'vector/geojson',
     writerEngine: 'vector/geojson',
     notes: 'One Feature per line. Streams well for very large datasets.',
@@ -126,6 +172,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'native' },
     readerEngine: 'vector/topojson',
     writerEngine: 'vector/topojson',
     warnings: ['The writer emits one arc per ring or line without shared-arc detection, so the output is valid TopoJSON but not topologically minimal.', 'Z values are not carried by TopoJSON.'],
@@ -149,6 +196,15 @@ export const FORMATS: FormatDef[] = [
     supportsCurves: F,
     companions: ['shx', 'dbf', 'prj', 'cpg'],
     packaging: 'zip',
+    // The constraints that make shapefile lossy for survey attributes: DBF
+    // field names are 10 bytes, text values 254, and one file holds exactly one
+    // shape type.
+    limits: {
+      maxFieldNameLength: 10,
+      maxTextValueBytes: 254,
+      singleGeometryTypePerFile: true,
+      layerModel: 'files',
+    },
     readerEngine: 'vector/shapefile',
     writerEngine: 'vector/shapefile',
     warnings: [
@@ -174,6 +230,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'single',
+    limits: { mandatesCrsEpsg: 4326, layerModel: 'folders', stylePreserved: true, labelPreserved: true },
     readerEngine: 'vector/kml',
     writerEngine: 'vector/kml',
     notes: 'KML is defined in WGS 84 longitude/latitude. Projected input is transformed on export, and the transform is recorded.',
@@ -196,6 +253,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'zip',
+    limits: { mandatesCrsEpsg: 4326, layerModel: 'folders', stylePreserved: true, labelPreserved: true },
     readerEngine: 'vector/kml',
     writerEngine: 'vector/kml',
   },
@@ -216,6 +274,14 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    // GPX describes tracks, routes and waypoints. A polygon has no
+    // representation in it at all.
+    limits: {
+      mandatesCrsEpsg: 4326,
+      geometryTypes: ['Point', 'MultiPoint', 'LineString', 'MultiLineString'],
+      layerModel: 'none',
+      labelPreserved: true,
+    },
     readerEngine: 'vector/gpx',
     writerEngine: 'vector/gpx',
     warnings: ['GPX has no polygon type. Polygons are written as closed tracks.'],
@@ -238,6 +304,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'none' },
     readerEngine: 'vector/wkt',
     writerEngine: 'vector/wkt',
     warnings: ['WKT carries geometry only. Attributes are not written.'],
@@ -259,6 +326,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'none' },
     readerEngine: 'vector/wkb',
     writerEngine: 'vector/wkb',
     warnings: ['WKB carries geometry only. Attributes are not written.'],
@@ -280,6 +348,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: T,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'native' },
     readerEngine: 'vector/gml',
     writerEngine: 'vector/gml',
     warnings: [
@@ -304,6 +373,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    limits: { mandatesCrsEpsg: 4326, layerModel: 'property' },
     readerEngine: 'vector/osm',
     writerEngine: 'vector/osm',
     warnings: [
@@ -330,6 +400,7 @@ export const FORMATS: FormatDef[] = [
     supportsCurves: F,
     companions: ['mid'],
     packaging: 'zip',
+    limits: { maxFieldNameLength: 31, layerModel: 'files', stylePreserved: true },
     readerEngine: 'vector/mifmid',
     writerEngine: 'vector/mifmid',
     warnings: ['POINT, LINE, PLINE, REGION and MULTIPOINT are handled. ARC, TEXT, ELLIPSE and ROUNDRECT objects are reported, not converted.', 'MIF is 2D; Z values are dropped.'],
@@ -351,6 +422,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'native' },
     readerEngine: 'vector/landxml',
     writerEngine: 'vector/landxml',
     warnings: [
@@ -375,6 +447,8 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    // A table holds coordinates, not geometry: only points survive a write.
+    limits: { geometryTypes: ['Point', 'MultiPoint'], layerModel: 'property' },
     readerEngine: 'vector/csv',
     writerEngine: 'vector/csv',
     notes: 'Recognises PNEZD, PENZD, NEZ, ENZ, XYZ and header-named schemas. Column mapping is always editable before conversion.',
@@ -397,6 +471,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    limits: { geometryTypes: ['Point', 'MultiPoint'], layerModel: 'property' },
     readerEngine: 'vector/xlsx',
     writerEngine: 'vector/xlsx',
     warnings: ['Cell formatting, formulas and charts are not preserved; values are.'],
@@ -420,6 +495,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: T,
     packaging: 'single',
+    limits: { layerModel: 'native', stylePreserved: true, labelPreserved: true },
     readerEngine: 'cad/dxf-read',
     writerEngine: 'cad/dxf-write',
     warnings: [
@@ -490,6 +566,8 @@ export const FORMATS: FormatDef[] = [
     supportsCurves: F,
     companions: ['prj'],
     packaging: 'single',
+    // One band of elevation, in text. A three-band orthophoto has nowhere to go.
+    limits: { maxBands: 1, layerModel: 'none' },
     readerEngine: 'raster/asciigrid',
     writerEngine: 'raster/asciigrid',
     notes: 'Single-band elevation grid. This is the working DEM path: values round-trip exactly.',
@@ -518,6 +596,7 @@ export const FORMATS: FormatDef[] = [
     supportsCurves: F,
     packaging: 'single',
     companions: ['tfw', 'prj', 'aux.xml'],
+    limits: { layerModel: 'none' },
     readerEngine: 'raster/geotiff',
     writerEngine: 'raster/geotiff-write',
     warnings: [
@@ -609,6 +688,7 @@ export const FORMATS: FormatDef[] = [
     supportsCurves: F,
     packaging: 'single',
     maxRecommendedSizeMb: 800,
+    limits: { layerModel: 'none' },
     readerEngine: 'pointcloud/las',
     writerEngine: 'pointcloud/las',
     notes: 'LAS 1.0–1.4, point record formats 0–10 on read; 0–3 and 6–7 on write. Coordinates use the file scale and offset in double precision.',
@@ -651,6 +731,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'none' },
     readerEngine: 'pointcloud/xyz',
     writerEngine: 'pointcloud/xyz',
   },
@@ -671,6 +752,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'none' },
     readerEngine: 'pointcloud/pts',
     writerEngine: 'pointcloud/pts',
     notes: 'First line is the point count, then X Y Z [intensity] [R G B].',
@@ -693,6 +775,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    limits: { layerModel: 'none' },
     readerEngine: 'pointcloud/ply',
     writerEngine: 'pointcloud/ply',
     warnings: ['The writer emits ASCII PLY vertices only; faces are not written.'],
@@ -735,6 +818,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
+    limits: { geometryTypes: ['Point', 'LineString', 'MultiLineString', 'Polygon'], layerModel: 'native' },
     readerEngine: 'vector/surpac',
     writerEngine: 'vector/surpac',
     warnings: ['String number, Y (northing), X (easting), Z and description fields are handled. Surpac styling and extended D-fields beyond the description are not interpreted.'],

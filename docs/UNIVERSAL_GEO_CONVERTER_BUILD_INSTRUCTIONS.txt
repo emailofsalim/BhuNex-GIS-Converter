@@ -1030,8 +1030,9 @@ the phases above do not cover. It is specified in sections 22-30 and scheduled
 here:
 
   PHASE 9  INSPECT     interoperability matrix with GREEN/YELLOW/RED fidelity
-                       prediction, "show exactly what will be lost", conversion
-                       report, project health score            (sections 22, 29)
+                       prediction and "show exactly what will be lost" - DONE;
+                       still open: per-file conversion report document and the
+                       project health score                    (sections 22, 29)
   PHASE 10 QA/REPAIR   full defect catalogue, configurable topology rules,
                        preview-and-apply repair with undo, fix-safe-issues
                                                                (sections 23, 24)
@@ -1152,7 +1153,7 @@ Every section of the supplied Master Build Instructions, and where it lives now.
   2 universal internal data model    3 (CIR), 22.1 (provenance)    PARTIAL
   3 maximum import support           4.3 target matrix             PARTIAL
   4 maximum export support           4.3 target matrix             PARTIAL
-  5 interoperability matrix          22                            SPECIFIED
+  5 interoperability matrix          22                            BUILT
   6 CRS and geodesy intelligence     6                             PARTIAL
   7 smart geometry QA engine         23                            PARTIAL
   8 smart topology engine            23.2                          SPECIFIED
@@ -1210,11 +1211,11 @@ Every section of the supplied Master Build Instructions, and where it lives now.
 ================================================================================
 22. FIDELITY PREDICTION AND THE CONVERSION CENTRE
 ================================================================================
-STATUS: SPECIFIED (prediction); PARTIAL (reporting after the fact). Phase 9.
+STATUS: BUILT (core/predict.ts, tests/predict.test.ts). PARTIAL for the report
+document itself, which is still the batch manifest rather than a per-file page.
 
-Today the tool reports loss *after* a conversion, in warnings and the QA report.
-The master document requires it *before*, so the engineer chooses a target with
-the cost in view. That is the gap this section closes.
+Loss is now stated BEFORE a conversion runs, so the engineer chooses a target
+with the cost in view rather than discovering it in the QA report afterwards.
 
 22.1 PROVENANCE (R20)
 Every CIR object carries: source file, source layer, source entity/feature id,
@@ -1223,7 +1224,7 @@ Partly built - sourceLayer, sourceEntity and sourceHandle already survive a
 DXF -> GeoJSON -> DXF round trip. Still missing: original coordinates retained
 alongside transformed ones, and the per-object transformation log.
 
-22.2 THE PREDICTION
+22.2 THE PREDICTION (BUILT)
 Given (source CIR, target format) compute, without converting:
   geometry compatibility     curves, 3D, M, multipart, geometry collections
   attribute compatibility    field count, name length, type width, encoding
@@ -1237,19 +1238,57 @@ Given (source CIR, target format) compute, without converting:
   metadata loss risk
 
 Every axis resolves to GREEN (faithful), YELLOW (partial), or RED (loss), and
-every non-GREEN axis MUST name the count and the entity or field involved. The
-registry already holds the capability flags this needs; what is missing is the
-comparison against the actual dataset.
+every non-GREEN axis MUST name the count and the entity or field involved.
 
-22.3 "SHOW EXACTLY WHAT WILL BE LOST"
-A dialog listing every predicted loss as a countable statement -
+Two design decisions carry this section:
+
+  ONE PASS, MANY TARGETS. profileDataset() walks the features once and produces
+  a DatasetProfile; predictFromProfile() compares that profile against a format.
+  Ranking thirty candidates therefore costs one pass, not thirty. It is also
+  what lets the worker profile a dataset where the full CIR lives and hand the
+  UI something it can predict from - the UI only ever receives a truncated
+  feature preview, so predicting there would report counts that are quietly
+  wrong, which is worse than reporting nothing.
+
+  THE REGISTRY HOLDS THE LIMITS. FormatLimits carries what the capability
+  booleans cannot express: DBF's 10-character field names and 254-byte values,
+  shapefile's one-shape-type-per-file, GeoJSON's mandated EPSG:4326, GPX's
+  point-and-line-only geometry, each format's layer model, whether style and
+  labels survive. Putting them in the registry rather than the predictor keeps
+  one source of truth about what a format can hold (R1).
+
+A finding that cannot name its subject is not raised. "Some attributes may be
+truncated" teaches users to ignore the panel; "3 field names exceed DBF's
+10-character limit: sample_description -> sample_des, collar_elevation ->
+collar_ele" is something a surveyor acts on, because it is exactly the silent
+break that ruins a downstream join weeks later.
+
+Precision is graded by GROUND DISTANCE, not by decimal count. Three decimals of
+a metre is a millimetre and passes silently; three decimals of a degree is about
+111 m and is reported. The same number means entirely different things, and a
+predictor that reported "3 decimal places" for both would be useless.
+
+22.3 "SHOW EXACTLY WHAT WILL BE LOST" (BUILT)
+A workspace tab - not a modal - listing every predicted loss as a countable
+statement -
 "17 ARC entities will be densified at 0.01 m sagitta", "field
 `sample_description` will be truncated to 10 characters in DBF" - with the
-option to change target, change setting, or proceed knowingly.
+the axis grid above it, so "geometry is fine, only attributes suffer" is
+readable without going through every row. It is a tab rather than a modal
+because choosing a format IS the comparison: the user sits in it and switches
+targets. The format cards each carry the verdict for the selected data, and the
+list is ordered by it (spec §25.3).
 
-Export validation (R22) runs the same engine: geometry, CRS, attribute,
-coordinate-range, naming and encoding checks resolve to READY TO EXPORT or
-EXPORT BLOCKED with exact reasons.
+Export validation (R22) runs the same engine, in the pipeline, before any writer
+is called: an impossible target fails immediately with a reason instead of
+failing halfway through a batch with a writer-level error.
+
+WHAT BLOCKS AND WHAT DOES NOT. Only genuine impossibility blocks: a target this
+build cannot write, an adapter whose engine is absent, a data-kind pairing no
+engine bridges. A RED finding is a LOSS, and loss does not block - it is a cost
+the engineer is entitled to accept, and refusing it would be this tool deciding
+what someone may do with their own data. Predicted losses are raised as warnings
+up front so they sit in the same list as the ones writers report afterwards.
 
 22.4 CONVERSION REPORT
 Source (name, format, size, CRS, units, layers, feature count), processing

@@ -18,6 +18,15 @@ import { CONFIRM_THRESHOLD } from '../core/detect';
 import { ConversionError } from '../core/errors';
 import { packageBatch, type ConversionSettings } from '../core/pipeline';
 import { describeTree, OUTPUT_LAYOUT_DESCRIPTION, OUTPUT_LAYOUT_LABEL, type OutputLayout } from '../core/layout';
+import {
+  AXIS_LABEL,
+  FIDELITY_AXES,
+  GRADE_LABEL,
+  predictFromProfile,
+  summarisePrediction,
+  type FidelityGrade,
+  type FidelityPrediction,
+} from '../core/predict';
 import { FULL_PRECISION, fixedPrecision } from '../core/precision';
 import {
   CATEGORY_LABEL,
@@ -170,7 +179,7 @@ async function inspectItem(id: string): Promise<void> {
   render();
 
   try {
-    const { detection, dataset } = await inspect(
+    const { detection, dataset, profile } = await inspect(
       {
         fileName: item.fileName,
         bytes: item.bytes,
@@ -184,6 +193,7 @@ async function inspectItem(id: string): Promise<void> {
     store.updateItem(id, {
       detection,
       dataset,
+      profile,
       warnings: dataset.warnings ?? [],
       status: blocked ? 'blocked' : 'ready',
       // Suggest the global target, or the first valid one for this data kind.
@@ -314,6 +324,7 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
       status: 'done',
       outputs: result.outputs,
       tree: result.tree,
+      prediction: result.prediction,
       qa: result.qa,
       warnings: result.warnings,
       provenance: result.provenance,
@@ -576,6 +587,35 @@ function crsShort(crs: any): string {
 
 // ------------------------------------------------------------- format picker
 
+/**
+ * Options the predictor needs, taken from the settings the user has actually set.
+ *
+ * Kept in one place so the format cards, the "what will be lost" dialog and the
+ * conversion itself all predict against identical inputs — a card promising
+ * GREEN while the conversion reports loss would destroy the feature's whole
+ * point.
+ */
+function predictOptions(): Parameters<typeof predictFromProfile>[2] {
+  const settings = store.get().settings;
+  return {
+    sourceCrsEpsg: settings.sourceCrsEpsg,
+    targetCrsEpsg: settings.targetCrsEpsg,
+    preserveZ: settings.preserveZ,
+    precisionDecimals: settings.precisionMode === 'fixed' ? settings.precisionDecimals : undefined,
+  };
+}
+
+/** The prediction for one candidate target, or null when nothing is inspected yet. */
+function predictionFor(targetFormatId: string): FidelityPrediction | null {
+  const item = store.selected();
+  if (!item?.profile) return null;
+  return predictFromProfile(item.profile, targetFormatId, predictOptions());
+}
+
+function gradeTone(grade: FidelityGrade): 'ok' | 'warn' | 'error' {
+  return grade === 'green' ? 'ok' : grade === 'yellow' ? 'warn' : 'error';
+}
+
 function renderFormats(): void {
   const state = store.get();
   const selected = store.selected();
@@ -606,11 +646,28 @@ function renderFormats(): void {
         format.extensions.some((extension) => extension.includes(search)) ||
         format.id.includes(search)
     )
-    // Recent formats first, then supported before adapter-only.
+    // Recent formats first — a user converting a hundred files to the same
+    // target should not have to hunt for it. After that, and only once a file
+    // has been inspected, the ranking is by what this particular data would
+    // actually cost in each format (spec §25.3): a faithful target above a
+    // lossy one above an impossible one. Before inspection there is nothing to
+    // predict from, so it falls back to declared support.
     .sort((a, b) => {
       const recentA = state.settings.recentFormats.indexOf(a.id);
       const recentB = state.settings.recentFormats.indexOf(b.id);
       if (recentA !== recentB) return (recentA < 0 ? 99 : recentA) - (recentB < 0 ? 99 : recentB);
+
+      const profile = selected?.profile;
+      if (profile) {
+        const score = (format: FormatDef) => {
+          const prediction = predictFromProfile(profile, format.id, predictOptions());
+          if (prediction.blocked) return 4;
+          return prediction.overall === 'green' ? 0 : prediction.overall === 'yellow' ? 1 : 2;
+        };
+        const byFidelity = score(a) - score(b);
+        if (byFidelity !== 0) return byFidelity;
+      }
+
       const rank = (format: FormatDef) => (format.support.export === 'full' ? 0 : format.support.export === 'partial' ? 1 : 2);
       return rank(a) - rank(b) || a.name.localeCompare(b.name);
     });
@@ -643,7 +700,24 @@ function renderFormats(): void {
     if (format.requiresNative) badges.append(badge(nativeReady ? 'native ready' : 'native required', nativeReady ? 'ok' : 'error'));
     if (format.requiresWasm) badges.append(badge('engine required', 'error'));
     if (format.packaging === 'zip') badges.append(badge('ZIP package', 'muted', 'Multiple files are packaged automatically.'));
+
+    // The fidelity verdict for THIS data, not a generic capability claim. It is
+    // the first badge because it is the one that decides whether this format is
+    // the right choice.
+    const prediction = available ? predictionFor(format.id) : null;
+    if (prediction) {
+      const tone = prediction.blocked ? 'error' : gradeTone(prediction.overall);
+      badges.prepend(
+        badge(prediction.blocked ? 'Not possible' : GRADE_LABEL[prediction.overall], tone, summarisePrediction(prediction))
+      );
+      if (prediction.blocked) card.disabled = true;
+    }
     card.append(badges);
+
+    if (prediction && !prediction.blocked && prediction.findings.length > 0) {
+      const detail = element('span', { class: 'fcard__detail', text: summarisePrediction(prediction) });
+      card.append(detail);
+    }
 
     card.addEventListener('click', () => {
       if (selected) store.updateItem(selected.id, { targetFormatId: format.id });
@@ -690,6 +764,9 @@ function renderInspector(): void {
       break;
     case 'metadata':
       body.append(keyValues(Object.entries(item.dataset?.metadata ?? {}).map(([key, value]) => [key, formatValue(value)])));
+      break;
+    case 'fidelity':
+      body.append(...fidelityTab(item));
       break;
     case 'warnings':
       body.append(...warningsTab(item));
@@ -966,6 +1043,82 @@ function columnMappingPanel(item: QueueItem): HTMLElement {
   wrap.append(element('div', { class: 'scroll-x' }, [preview]));
   wrap.append(element('p', { class: 'small faint', style: 'padding:0 12px 12px', text: `${table.rowCount.toLocaleString()} rows total; first ${Math.min(12, table.previewRows.length)} shown.` }));
   return wrap;
+}
+
+/**
+ * "Show exactly what will be lost" (spec §22.3).
+ *
+ * Deliberately not a modal that interrupts: it is a tab the user can sit in
+ * while trying different targets, because choosing a format IS the comparison.
+ * Every row is one counted, named statement with the remedy beside it — a list
+ * of vague risks would be worse than nothing, since it teaches people to ignore
+ * the panel.
+ */
+function fidelityTab(item: QueueItem): HTMLElement[] {
+  const wrap = element('div', { style: 'padding:12px' });
+  const targetId = item.targetFormatId ?? store.get().settings.globalTargetFormatId;
+
+  if (!item.profile) {
+    wrap.append(element('p', { class: 'muted', text: 'Inspect the file first — the prediction is computed from the data, not from the format alone.' }));
+    return [wrap];
+  }
+  if (!targetId) {
+    wrap.append(element('p', { class: 'muted', text: 'Pick an output format to see what the conversion would cost.' }));
+    return [wrap];
+  }
+
+  // The prediction the conversion itself would make, recomputed live so it
+  // tracks the settings panel as the user changes precision or Z handling.
+  const prediction = item.prediction?.targetFormatId === targetId ? item.prediction : predictFromProfile(item.profile, targetId, predictOptions());
+
+  const head = element('div', { class: 'fidelity__head' });
+  head.append(
+    badge(prediction.blocked ? 'Not possible' : GRADE_LABEL[prediction.overall], prediction.blocked ? 'error' : gradeTone(prediction.overall))
+  );
+  head.append(element('span', { class: 'fidelity__target', text: `${item.dataset?.name ?? item.fileName} → ${prediction.targetFormatName}` }));
+  wrap.append(head);
+
+  if (item.prediction && item.prediction.targetFormatId === targetId) {
+    wrap.append(element('p', { class: 'muted small', text: 'This is the prediction made before the conversion that has already run.' }));
+  }
+
+  // The axis grid: eleven verdicts at a glance, so an engineer can see that
+  // geometry is fine and only attributes suffer, without reading every row.
+  const grid = element('div', { class: 'fidelity__axes' });
+  for (const axis of FIDELITY_AXES) {
+    const grade = prediction.axes[axis];
+    const cell = element('div', { class: `fidelity__axis fidelity__axis--${grade}` });
+    cell.append(element('span', { class: 'fidelity__axis-name', text: AXIS_LABEL[axis] }));
+    cell.append(element('span', { class: 'fidelity__axis-grade', text: GRADE_LABEL[grade] }));
+    grid.append(cell);
+  }
+  wrap.append(grid);
+
+  if (prediction.findings.length === 0) {
+    wrap.append(element('p', { class: 'msg msg--info', text: 'Nothing is lost in this conversion. Every axis is faithful.' }));
+    return [wrap];
+  }
+
+  // Losses first: a user scanning this list should meet the expensive news
+  // before the merely-interesting news.
+  const ordered = [...prediction.findings].sort((left, right) => (left.grade === right.grade ? 0 : left.grade === 'red' ? -1 : 1));
+  for (const finding of ordered) {
+    const node = element('div', { class: `msg msg--${finding.grade === 'red' ? 'error' : 'warn'}` });
+    node.append(element('span', { class: 'msg__icon', text: finding.grade === 'red' ? '✕' : '!' }));
+    const body = element('div', { class: 'msg__body' });
+    body.append(element('div', { class: 'msg__what', text: finding.statement }));
+    body.append(element('div', { class: 'msg__why', text: `${AXIS_LABEL[finding.axis]} · ${GRADE_LABEL[finding.grade]}` }));
+    if (finding.remedy) body.append(element('div', { class: 'msg__action', text: finding.remedy }));
+    node.append(body);
+    wrap.append(node);
+  }
+
+  const foot = element('p', { class: 'muted small' });
+  foot.textContent =
+    'Predicted from what this data holds and what the format can store — no conversion has been run. ' +
+    'Nothing here blocks the export: the trade-off is yours to make.';
+  wrap.append(foot);
+  return [wrap];
 }
 
 function warningsTab(item: QueueItem): HTMLElement[] {

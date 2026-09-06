@@ -12,6 +12,7 @@
 import type { ConversionSettings } from '../core/pipeline';
 import { convert, expandArchive, readSource } from '../core/pipeline';
 import { detectFormat, type DetectionResult } from '../core/detect';
+import { profileDataset, type DatasetProfile, type FidelityPrediction } from '../core/predict';
 import { ConversionError } from '../core/errors';
 import type { TransferableFile, WorkerRequest, WorkerResponse } from './convert.worker';
 
@@ -42,6 +43,8 @@ export interface ConvertPayload {
   outputs: OutputBlobFile[];
   /** Every path inside the delivery, before packaging — the structure preview. */
   tree: string[];
+  /** What the pre-flight said this conversion would cost. */
+  prediction: FidelityPrediction;
   warnings: any[];
   qa: any;
   provenance: any;
@@ -137,7 +140,10 @@ export function detect(file: QueuedFile): DetectionResult {
   });
 }
 
-export async function inspect(file: QueuedFile, forcedFormatId?: string): Promise<{ detection: DetectionResult; dataset: any }> {
+export async function inspect(
+  file: QueuedFile,
+  forcedFormatId?: string
+): Promise<{ detection: DetectionResult; dataset: any; profile: DatasetProfile }> {
   if (file.bytes.length < WORKER_THRESHOLD_BYTES) {
     const detection = forcedFormatId
       ? { formatId: forcedFormatId, formatName: forcedFormatId, confidence: 1, evidence: [], alternatives: [], requiresConfirmation: false }
@@ -145,7 +151,7 @@ export async function inspect(file: QueuedFile, forcedFormatId?: string): Promis
     // Small files are read in full: the pixel statistics and histogram the
     // inspector shows are worth the milliseconds at this size.
     const dataset = await readSource(toInput(file), detection, { preserveZ: true } as ConversionSettings);
-    return { detection, dataset };
+    return { detection, dataset, profile: profileDataset(dataset) };
   }
   return request(( id) => {
     const { file: transferable, transfer } = toTransferable(file);
@@ -171,6 +177,7 @@ export async function runConversion(
       dataset: result.sourceDataset,
       outputs: result.outputs.map((output) => ({ name: output.name, mimeType: output.mimeType, bytes: output.bytes })),
       tree: result.tree,
+      prediction: result.prediction,
       warnings: result.warnings,
       qa: result.qa,
       provenance: result.provenance,
@@ -182,6 +189,7 @@ export async function runConversion(
     dataset: any;
     outputs: { name: string; mimeType: string; buffer: ArrayBuffer }[];
     tree: string[];
+    prediction: FidelityPrediction;
     warnings: any[];
     qa: any;
     provenance: any;
