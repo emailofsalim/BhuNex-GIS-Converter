@@ -189,7 +189,10 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         const detection = request.forcedFormatId
           ? { formatId: request.forcedFormatId, formatName: request.forcedFormatId, confidence: 1, evidence: [], alternatives: [], requiresConfirmation: false }
           : detectFormat({ fileName: input.fileName, bytes: input.bytes, mimeType: input.mimeType, siblings: input.siblingExtensions });
-        const dataset = await readSource(input, detection, { preserveZ: true } as ConversionSettings);
+        // Anything routed to the worker is above the inline threshold, so the
+        // inspector reads structure only: decoding a large raster's pixels here
+        // would be thrown away and paid for again by the conversion itself.
+        const dataset = await readSource(input, detection, { preserveZ: true, metadataOnly: true } as ConversionSettings);
         const summary = summarise(dataset);
         const transfer: ArrayBuffer[] = [];
         if (summary.pointcloud) {

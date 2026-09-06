@@ -8,8 +8,33 @@ Repository : emailofsalim/Universal-Converter
 Branch     : claude/gis-cad-chrome-converter-hk8uwg
 Base       : Universal-Conveter.zip (Pakhar CAD GIS Local Server prototype)
 Engines    : ported/adapted from Geo-Studio-Pro-main.zip
-Document   : v1.0  (authoritative build instruction - implementation grade)
+Document   : v2.0  (authoritative build instruction - implementation grade)
+Merged     : "Universal Geo-Converter Pro - Master Build Instructions" as
+             supplied by the product owner, kept verbatim at
+             docs/reference/MASTER_INSTRUCTIONS_AS_SUPPLIED.txt
 ================================================================================
+
+ON THE MERGE
+------------
+This document is now the single authoritative specification. The supplied
+Master Build Instructions have been folded into it rather than kept alongside
+it, because two specifications that disagree are worse than either alone.
+
+Where the two agreed, the wording that was already implementation-grade was
+kept. Where the master document asked for something not yet built, it appears
+here as a numbered section with an explicit STATUS line and a phase assignment -
+never as prose implying it exists. Section 21 is the traceability map from every
+master section to its home here.
+
+Status vocabulary used throughout:
+
+  STATUS: BUILT       implemented and covered by a passing test
+  STATUS: PARTIAL     some of the contract exists; the gap is stated
+  STATUS: SPECIFIED   contract defined, not yet built, assigned to a phase
+
+A section marked SPECIFIED is a commitment, not a claim. Rule R1 governs this
+document as much as it governs the registry: nothing here may read as delivered
+until it is.
 
 HOW TO READ THIS DOCUMENT
 -------------------------
@@ -100,6 +125,39 @@ R16  Input structure = output structure. Layers, folder nesting and archive
      layers) on the way out. Where a target format cannot express the hierarchy,
      the structure is preserved in the delivery tree instead, and the fact is
      stated - never silently flattened.
+
+The following are carried over from the supplied Master Build Instructions.
+Its rules 3, 4, 5, 6, 10, 11, 12, 13, 20 are already stated above as R2, R4,
+R3, R3, R1, R8, R8, R9 and R11 respectively and are not restated.
+
+R17  Additive change only. Working functionality MUST NOT be removed to make
+     room for new functionality. A replacement is permitted only when the
+     implementation being replaced is defective, and the commit MUST say so.
+     (Master rules 1 and 2.)
+R18  Never silently repair uncertain geometry. Repair is off by default,
+     previewed before it is applied, counted when it is, and never applied to
+     cadastral, lease or other legally operative boundaries without explicit
+     per-operation confirmation. (Master rules 7 and 18.)
+R19  Every edit is reversible. Any operation that changes geometry, attributes
+     or CRS MUST be undoable, and the operation history MUST be inspectable.
+     (Master rule 8.)
+R20  Preserve source provenance. Source file, source layer, source entity or
+     feature id, original coordinates, original attributes and the
+     transformation history travel with every object through the CIR, so a
+     conversion can be explained after the fact and reversed. (Master rule 16.)
+R21  Every geometry-changing operation is tolerance-aware, and the tolerance is
+     an explicit, displayed, unit-labelled setting. No tolerance is hard-coded.
+     (Master rules 17 and section 32.)
+R22  Export only after validation. Geometry, CRS, attributes, coordinate range,
+     encoding and format compatibility are checked before bytes are written, and
+     a blocked export states exactly what blocked it. (Master rule 19.)
+R23  No secrets in exports. Credentials, tokens and hosted-report keys MUST NOT
+     appear in KML, KMZ, project files or exported HTML. Imported HTML and SVG
+     are sanitised; every imported file is treated as untrusted. (Master rule 12
+     and section 34.)
+R24  The first screen stays minimal. Advanced capability is reached through
+     contextual panels and the command palette, never by crowding the default
+     view. (Master rules 14 and 15.)
 
 
 ================================================================================
@@ -561,14 +619,62 @@ Positional schemas: PNEZD, PENZD, NEZ, ENZ, XYZ, ID-X-Y-Z, ID-Y-X-Z.
 The user can always override the mapping in a preview table. Coordinate order
 is ALWAYS shown explicitly; latitude and longitude are never swapped silently.
 
-9.7 GEOTIFF (engines/raster/geotiff.ts)
-Implemented: TIFF/BigTIFF IFD walk, ModelPixelScale, ModelTiepoint,
+9.7 GEOTIFF (engines/raster/geotiff.ts, geotiff-write.ts, tiff-codec.ts)
+Structure: TIFF/BigTIFF IFD walk, ModelPixelScale, ModelTiepoint,
 ModelTransformation, GeoKeyDirectory (EPSG code extraction), sample format,
-bits per sample, band count, nodata, tile/strip layout.
-NOT implemented: pixel decode for compressed variants.
-Therefore the registry level is metadata-only and the UI says
-"Georeference and structure read. Pixel data not decoded - raster output is
-disabled for this source." (R2, spec item 14).
+bits per sample, band count, nodata, predictor, planar config, tile/strip
+layout.
+
+Pixel decode (tiff-codec.ts, kept separate from TIFF structure so each codec is
+testable against a spec vector without a TIFF around it):
+  compression   uncompressed, LZW, Deflate (codes 8 and 32946), PackBits
+  predictors    2 horizontal differencing, 3 floating point
+  layout        strips and tiles, planar configurations 1 and 2
+  samples       1/2/4/8/16/32/64-bit unsigned, 8/16/32/64 signed,
+                16/32/64-bit float, little and big endian
+  bands         decoded into Float64Array per band, row-major, top row first
+  ceiling       MAX_SAMPLES bounds an in-browser decode; beyond it the refusal
+                names the size and the crop command rather than crashing
+
+NOT implemented: JPEG, JPEG 2000, LERC, WebP and Zstandard compression, and
+multi-IFD pyramids (only the first image of a file is read).
+
+Two details that decide correctness, both regression-tested:
+  - LZW "early change". The decoder cannot add a table entry until it has read
+    the code after the one the entry describes, so at any moment its table holds
+    one entry fewer than the encoder's did. The encoder widens 9->10 bits after
+    adding entry 510; the decoder must therefore widen when its own next free
+    code reaches 510, not 511. Matching the encoder's threshold decodes the
+    first few hundred pixels correctly and then shifts every later code by one
+    bit - a raster that looks like plausible terrain and is not.
+  - Predictor 3 is not horizontal differencing over floats. The encoder splits
+    each row into byte planes (all high bytes, then all second bytes, ...) so
+    that the near-identical exponent bytes of neighbouring elevations group and
+    compress. Reversing it is two steps: accumulate the byte deltas, then
+    de-interleave the planes. Skipping the second step yields NaN and absurd
+    values.
+
+An LZW code beyond the next free table entry is corrupt and stops the decode.
+Accepting it would store a forward reference in the prefix chain, and walking
+that chain would never terminate: a corrupt strip must not be able to hang the
+conversion worker.
+
+A file whose compression is not bundled is NOT a failed read. Pixels are
+refused by name, hasPixelData stays false, and the georeference, extent,
+statistics and footprint that were readable are still returned - losing those
+as well would serve nobody (R1, R2).
+
+Writing (geotiff-write.ts): single IFD, little-endian, strip-based, chunky
+planar, no predictor, no BigTIFF - the settings every GIS package reads without
+complaint. Deflate by default, uncompressed available. The sample type is
+chosen from the data so that no value is silently rounded: integers stay
+integers, fractional values become float32, and values beyond float32's exact
+range keep float64; nodata participates in that choice, because picking uint8
+for data that fits it would clamp a -9999 nodata cell to zero and turn holes
+into sea level. An explicitly chosen narrower type is honoured but reports the
+counts of clamped and rounded pixels (R3). Rotated georeference is reported and
+not written, because ModelPixelScale/ModelTiepoint describe an axis-aligned
+raster only.
 
 9.8 ASCII GRID (engines/raster/asciigrid.ts)
 Full read and write of ncols/nrows/xllcorner|xllcenter/yllcorner|yllcenter/
@@ -681,6 +787,21 @@ Preview data is NEVER the export data.
 Full keyboard operation, visible focus rings, ARIA roles on the queue,
 drop zone and dialogs, minimum 4.5:1 contrast for text, tooltips that explain
 survey/CAD terminology (sagitta, PNEZD, ACI, LWPOLYLINE, orthometric height).
+
+11.9 SETTINGS (PARTIAL - categories below; the grouped panel is Phase 13)
+  General     theme, units, coordinate display, precision, autosave
+  Processing  worker count, parallel jobs, memory ceiling, streaming and
+              archive thresholds
+  GIS         default CRS, default datum, axis order display
+  CAD         layer defaults, entity handling, text handling, arc tolerance
+  KML/KMZ     template, label settings, balloon style
+  QA          tolerances, topology rules, run QA automatically
+  Delivery    output layout, batch tree mirroring, naming pattern
+  Privacy     local-only mode (default and, today, the only mode); any future
+              remote service is opt-in per feature and states what it sends
+Built today: theme, precision, QA, repair, decimation, naming, CRS defaults,
+parallel jobs, archive ceiling, delivery layout. The rest are specified here so
+the grouping is decided before the panel is built.
 
 
 ================================================================================
@@ -806,6 +927,18 @@ budget, refuse with:
 14.4 REPORTED METRICS
 read speed, conversion speed, output size, elapsed time, peak memory estimate.
 
+14.5 ALGORITHM SELECTION BY DATASET SIZE (STATUS: SPECIFIED, Phase 11)
+The engine picks the strategy; the user never has to know which:
+  small       direct geometry operations
+  medium      indexed spatial queries (R-tree or equivalent)
+  large       tiling, chunking, streaming
+  very large  progressive visualisation and selective processing
+Spatial indexing is not needed by format conversion, which is why none is built
+yet: a reader walks its input once. It becomes necessary the moment topology,
+overlap detection, snapping and burn-in arrive, because each of those is a
+pairwise query that is quadratic without an index. The index therefore lands in
+the same phase as the first feature that needs it, not before.
+
 
 ================================================================================
 15. SECURITY AND PRIVACY
@@ -879,14 +1012,43 @@ with chrome://extensions -> Load unpacked (dist/) or as the packaged zip.
                        WKT/WKB, Shapefile, DXF read+write, TopoJSON
   PHASE 3 SURVEY/ENG   LandXML, Surpac STR, MIF/MID, GML, OSM, ASCII Grid,
                        world files, QGIS GCP, XLSX
-  PHASE 4 RASTER       full GeoTIFF codec, resampling, raster reprojection,
-                       DEM/DSM products
-  PHASE 5 POINT CLOUD  LAS complete, real LAZ codec, PLY, PTS/PTX, filtering
-                       and decimation
-  PHASE 6 NATIVE/ADV   DWG via native host, DGN, E57, GeoPackage, FlatGeobuf,
-                       GeoParquet, vendor mining adapters
+  PHASE 4 RASTER       GeoTIFF codec DONE (read + write); still open:
+                       resampling, raster reprojection, DEM/DSM products,
+                       contour generation, clip by polygon, rasterize/vectorize
+  PHASE 5 POINT CLOUD  LAS complete; still open: real LAZ codec, PTX, ground
+                       filtering, DTM/DSM generation
+  PHASE 6 NATIVE/ADV   DWG via native host DONE; still open: DGN, E57,
+                       GeoPackage, FlatGeobuf, GeoParquet, vendor mining
+                       adapters
+  PHASE 7 UI           workspace, side panel, popup, preview, QA report, batch
+                       - DONE
+  PHASE 8 STRUCTURE    layer hierarchy, delivery layout engine, archive
+                       mirroring - DONE (R16)
+
+The supplied master document adds a body of intelligence and editing work that
+the phases above do not cover. It is specified in sections 22-30 and scheduled
+here:
+
+  PHASE 9  INSPECT     interoperability matrix with GREEN/YELLOW/RED fidelity
+                       prediction, "show exactly what will be lost", conversion
+                       report, project health score            (sections 22, 29)
+  PHASE 10 QA/REPAIR   full defect catalogue, configurable topology rules,
+                       preview-and-apply repair with undo, fix-safe-issues
+                                                               (sections 23, 24)
+  PHASE 11 EDIT        vertex editor, snapping, measurement, advanced geometry
+                       operations, attribute table              (sections 25, 26)
+  PHASE 12 SEMANTICS   label and attribute burn-in, label placement, CAD
+                       polygonisation, styled KML/KMZ templates and borehole
+                       core-log balloons                        (sections 27, 28)
+  PHASE 13 WORKFLOW    dual canvas with visual diff, command palette, presets,
+                       saved workflows, project file, undo history
+                                                               (sections 30, 31)
 
 Each phase ends green: lint + tests + build + a loadable extension.
+
+Phase order is deliberate. Inspection before repair, repair before editing,
+editing before automation: a workflow engine that replays an operation nobody
+can preview or undo would multiply damage rather than save labour.
 
 
 ================================================================================
@@ -905,13 +1067,66 @@ Each phase ends green: lint + tests + build + a loadable extension.
 11  QA re-import runs for every supported round trip.
 12  Unsupported entities and dropped attributes are counted and named.
 13  LAZ is genuinely decoded or explicitly refused - never mis-parsed.
-14  GeoTIFF is presented as metadata-only until a real codec ships.
+14  GeoTIFF pixels are decoded for every compression the build claims, and
+    refused by name for every one it does not.
 15  DWG shows native-required status and never fakes an output.
 16  No source bytes leave the machine.
 17  A 100 MB dataset does not freeze the UI.
 18  Companion files are grouped, and missing ones warn by name.
 19  Exported Shapefile packages are complete and re-import cleanly.
 20  Logs, warnings and errors state what happened, why, and what to do next.
+
+19.1 MASTER ACCEPTANCE CHECKLIST (from the supplied document, section 55)
+The master document's checklist is reproduced here in full with honest current
+status. It is the definition of "complete" for the product; the list above is
+the definition of "correct" for what has shipped so far. A box is only ticked
+when a test covers it.
+
+  [x] Format detection works                          core/detect.ts, tested
+  [x] CRS detection works                              crs/, tested
+  [x] CRS transformation works                         crs/transform.ts, tested
+  [x] Universal internal model works                   core/cir.ts, tested
+  [x] Drag-and-drop works                              workspace + side panel
+  [x] Raster import works                              incl. GeoTIFF pixels
+  [x] Survey import works                              survey/schema.ts, tested
+  [x] Mining data workflow works                       Surpac, borehole schemas
+  [x] Batch conversion works                           error-isolated, tested
+  [x] Conversion reports work                          manifest CSV + JSON
+  [x] Fidelity warnings work                           qa/fidelity.ts, tested
+  [x] Offline processing works                         CI asserts it
+  [x] Large-file processing does not freeze UI         workers above threshold
+  [x] Security checks work                             no host_permissions
+  [~] LiDAR workflow works where supported             LAS yes; LAZ refused
+  [~] CAD layer tools work                             layers read/written; no
+                                                       isolate/freeze/merge UI
+  [~] Geometry QA works                                qa/topology.ts subset
+  [~] Geometry repair works                            four repairs, no preview
+  [~] Export validation works                          writers refuse; no
+                                                       pre-flight report
+  [ ] Source canvas works                              single canvas today
+  [ ] Target canvas works                              section 30
+  [ ] Side-by-side comparison works                    section 30
+  [ ] Collapse/expand behavior works                   section 30
+  [ ] Vertex editor works                              section 25
+  [ ] Snap works                                       section 25
+  [ ] Individual shared-edge snap works                section 25
+  [ ] Overlap detection works                          section 24
+  [ ] Gap detection works                              section 24
+  [ ] Point-in-polygon detection works                 section 27
+  [ ] Text-in-polygon detection works                  section 27
+  [ ] Label burn-in works                              section 27
+  [ ] Attribute burn-in works                          section 27
+  [ ] CAD closed-boundary polygonization works         section 27.4
+  [ ] PDF/image map workflow works where supported     section 28.3
+  [ ] Borehole KMZ generation works                    section 28
+  [ ] Styled KML balloons work                         section 28
+  [ ] Undo/redo works                                  section 31 (R19)
+  [ ] Project save/reopen works                        section 31
+
+  [x] built and tested   [~] partial, gap stated   [ ] specified, not built
+
+This checklist is rewritten at the end of every session in the same commit as
+the work it describes. A tick that no test supports is a rule R1 violation.
 
 
 ================================================================================
@@ -924,6 +1139,433 @@ picks this work up MUST:
   3. run `npm ci && npm run verify` to confirm the tree is green,
   4. do the next task, update BUILD_STATE.md, commit, push.
 The branch for all work is claude/gis-cad-chrome-converter-hk8uwg.
+
+
+================================================================================
+21. TRACEABILITY: MASTER DOCUMENT -> THIS DOCUMENT
+================================================================================
+Every section of the supplied Master Build Instructions, and where it lives now.
+
+ master section                     here                          status
+ ---------------------------------- ----------------------------- ---------
+  1 core application architecture    2, 3, 22                      BUILT
+  2 universal internal data model    3 (CIR), 22.1 (provenance)    PARTIAL
+  3 maximum import support           4.3 target matrix             PARTIAL
+  4 maximum export support           4.3 target matrix             PARTIAL
+  5 interoperability matrix          22                            SPECIFIED
+  6 CRS and geodesy intelligence     6                             PARTIAL
+  7 smart geometry QA engine         23                            PARTIAL
+  8 smart topology engine            23.2                          SPECIFIED
+  9 advanced geometry repair         24                            PARTIAL
+ 10 smart vertex editor              25                            SPECIFIED
+ 11 overlap/gap intelligence         23.3                          SPECIFIED
+ 12 point/text burn-in               27                            SPECIFIED
+ 13 intelligent label placement      27.3                          SPECIFIED
+ 14 CAD intelligence                 9.1, 9.2, 27.4                PARTIAL
+ 15 CAD <-> GIS intelligence         27.4                          PARTIAL
+ 16 raster intelligence              9.7, 9.8, 28.2                PARTIAL
+ 17 PDF / image map intelligence     28.3                          SPECIFIED
+ 18 point cloud / LiDAR              9.4, 26.3                     PARTIAL
+ 19 survey intelligence              9.6, 26.4                     PARTIAL
+ 20 mining intelligence              9.6, 28.1                     PARTIAL
+ 21 styled KML/KMZ engine            28                            SPECIFIED
+ 22 smart map canvas                 30                            SPECIFIED
+ 23 visual diff mode                 30.2                          SPECIFIED
+ 24 minimal UI / powerful UX         11, 30.3                      PARTIAL
+ 25 smart conversion center          22.2                          PARTIAL
+ 26 batch conversion                 12.1                          BUILT
+ 27 automation / workflow builder    31.2                          SPECIFIED
+ 28 smart presets                    31.3                          SPECIFIED
+ 29 intelligent error handling       10.6                          BUILT
+ 30 undo / version history           31.1                          SPECIFIED
+ 31 project file                     31.4                          SPECIFIED
+ 32 precision and tolerance engine   8, R21                        PARTIAL
+ 33 performance requirements         14                            BUILT
+ 34 security / privacy               15, R23                       BUILT
+ 35 export validation                22.3, R22                     PARTIAL
+ 36 export preview                   30.1                          SPECIFIED
+ 37 professional reporting           12.3, 22.4                    PARTIAL
+ 38 smart intelligence layer         29                            SPECIFIED
+ 39 spatial index / performance      14.5                          SPECIFIED
+ 40 file drop experience             5.1, 11.3                     BUILT
+ 41 layer management                 25.4                          PARTIAL
+ 42 attribute table                  25.5                          SPECIFIED
+ 43 measurement tools                26.1                          SPECIFIED
+ 44 advanced geometry operations     26.2                          SPECIFIED
+ 45 smart data normalization         7, 9.6                        PARTIAL
+ 46 georeferencing control panel     28.4                          PARTIAL
+ 47 KML/KMZ template system          28.5                          SPECIFIED
+ 48 extension navigation             30.3                          PARTIAL
+ 49 command palette                  31.5                          SPECIFIED
+ 50 settings                         11.9                          PARTIAL
+ 51 automatic project health         29.2                          SPECIFIED
+ 52 fix all safe issues              24.3                          SPECIFIED
+ 53 interoperability design rule     0.4                           BUILT
+ 54 testing requirements             16                            BUILT
+ 55 acceptance criteria              19.1                          -
+ 56 development priority             18                            -
+ 57 non-negotiable rules             1 (R17-R24)                   BUILT
+
+
+================================================================================
+22. FIDELITY PREDICTION AND THE CONVERSION CENTRE
+================================================================================
+STATUS: SPECIFIED (prediction); PARTIAL (reporting after the fact). Phase 9.
+
+Today the tool reports loss *after* a conversion, in warnings and the QA report.
+The master document requires it *before*, so the engineer chooses a target with
+the cost in view. That is the gap this section closes.
+
+22.1 PROVENANCE (R20)
+Every CIR object carries: source file, source layer, source entity/feature id,
+original coordinates, original attributes, and an ordered transformation log.
+Partly built - sourceLayer, sourceEntity and sourceHandle already survive a
+DXF -> GeoJSON -> DXF round trip. Still missing: original coordinates retained
+alongside transformed ones, and the per-object transformation log.
+
+22.2 THE PREDICTION
+Given (source CIR, target format) compute, without converting:
+  geometry compatibility     curves, 3D, M, multipart, geometry collections
+  attribute compatibility    field count, name length, type width, encoding
+  CRS compatibility          transform available, datum shift required
+  Z compatibility            target stores Z at all
+  style / label compatibility
+  layer compatibility        hierarchy expressible, or flattened to folders
+  precision risk             target's numeric width vs the data's range
+  unsupported entity risk    counted by entity type
+  topology loss risk
+  metadata loss risk
+
+Every axis resolves to GREEN (faithful), YELLOW (partial), or RED (loss), and
+every non-GREEN axis MUST name the count and the entity or field involved. The
+registry already holds the capability flags this needs; what is missing is the
+comparison against the actual dataset.
+
+22.3 "SHOW EXACTLY WHAT WILL BE LOST"
+A dialog listing every predicted loss as a countable statement -
+"17 ARC entities will be densified at 0.01 m sagitta", "field
+`sample_description` will be truncated to 10 characters in DBF" - with the
+option to change target, change setting, or proceed knowingly.
+
+Export validation (R22) runs the same engine: geometry, CRS, attribute,
+coordinate-range, naming and encoding checks resolve to READY TO EXPORT or
+EXPORT BLOCKED with exact reasons.
+
+22.4 CONVERSION REPORT
+Source (name, format, size, CRS, units, layers, feature count), processing
+(transformations, repairs, edits, warnings), output (format, CRS, counts),
+fidelity per axis, and QA (errors, warnings, repaired, unresolved). The batch
+manifest already carries most of these fields; the per-conversion report is the
+same data rendered for one file.
+
+
+================================================================================
+23. GEOMETRY QA, TOPOLOGY AND SPATIAL RELATIONSHIPS
+================================================================================
+STATUS: PARTIAL. qa/topology.ts implements a subset. Phase 10.
+
+23.1 DEFECT CATALOGUE
+Built: unclosed rings, duplicate and consecutive-duplicate vertices,
+zero-length segments, ring orientation, self-intersection, duplicate features.
+Specified: bow-ties, invalid rings, sliver polygons, spikes, overshoots,
+undershoots, gaps, overlaps, multipart inconsistency, nested polygons, invalid
+holes, hole outside shell, nearly coincident vertices, near-duplicate
+geometries, dangling lines, unconnected endpoints, crossing lines,
+polygon/line and polygon/point conflicts, Z anomalies, coordinate outliers.
+
+Every defect MUST carry: severity, location, feature id, explanation, suggested
+repair, preview, apply, undo. A defect the user cannot locate on the canvas is
+not reported usefully.
+
+23.2 CONFIGURABLE TOPOLOGY RULES
+Must not overlap; must not have gaps; must contain; must be within; must touch;
+must be covered by; must not self-intersect; shared boundaries must match;
+lines must connect; polygons must close.
+
+Scope is selectable: whole dataset, one layer, selected features, one parcel.
+Global repair MUST NOT be forced when the user asked to fix one feature.
+
+23.3 OVERLAP AND GAP INTELLIGENCE
+Classify each pair: overlaps, contains, touches, crosses, separated, gap.
+For cadastral parcels additionally detect duplicate boundaries and shared-edge
+mismatch, and propose the most conservative correction.
+Legal boundaries are never modified without explicit per-operation confirmation
+(R18).
+
+
+================================================================================
+24. GEOMETRY REPAIR
+================================================================================
+STATUS: PARTIAL. Four repairs exist, all off by default. Phase 10.
+
+24.1 BUILT
+Close rings, remove duplicate vertices, normalise orientation, deduplicate
+features - each off by default, each counted when applied.
+
+24.2 SPECIFIED
+Remove zero-length segments; snap vertices; snap shared edges; regularise;
+smooth; simplify; densify; fix ring direction; repair self-intersection; remove
+slivers; merge adjacent polygons; split polygon; split line; extend, trim and
+join lines; make and explode multipart; fill and remove holes; rebuild topology.
+
+Every operation: previewable before commit, tolerance-aware with the tolerance
+displayed in the data's own units (R21), undoable (R19).
+
+24.3 FIX ALL SAFE ISSUES
+One action, restricted to repairs that are safe and reversible: consecutive
+duplicate vertices, zero-length segments, ring closure strictly within
+tolerance, encoding normalisation, and exact duplicate records where the user
+has approved that policy. It MUST refuse to touch uncertain cadastral, lease or
+mining geometry, and MUST list what it changed.
+
+
+================================================================================
+25. EDITING, LAYERS AND ATTRIBUTES
+================================================================================
+STATUS: SPECIFIED. Phase 11.
+
+25.1 VERTEX EDITOR
+Add, delete, move, insert-on-segment, drag, multi-select. Coordinate entry in
+X/Y/Z and by bearing/distance. Live readout of X, Y, Z, segment length,
+bearing/azimuth, perimeter and area, in the dataset's units.
+
+25.2 SNAPPING
+To vertex, segment, intersection, grid, nearest feature, and shared edge.
+Shared-edge snap MUST be applicable to a single boundary between two parcels
+without moving anything else - the case cadastral work actually needs.
+Orthogonal, parallel and perpendicular modes; angle and distance lock.
+
+25.3 UNDO (R19)
+One history across import, CRS change, repair, edit, snap, burn-in, reproject,
+simplify and export, with undo, redo and restore-to-checkpoint.
+
+25.4 LAYER MANAGEMENT
+PARTIAL - layers are read, written and preserved as hierarchy (R16); the
+preview renderer already supports per-layer visibility. Specified: layer list
+UI with search, visibility, lock, isolate, opacity, reorder, rename, merge,
+split, export-selected and style-selected. CAD layer names for CAD, GIS layer
+names for GIS, folder hierarchy for KML.
+
+25.5 ATTRIBUTE TABLE
+Sort, filter, search, edit, bulk edit, calculate field, create and delete field,
+field type, null handling, unique values. Selection stays synchronised between
+table and canvas.
+
+
+================================================================================
+26. MEASUREMENT, GEOMETRY OPERATIONS AND DOMAIN TOOLS
+================================================================================
+STATUS: SPECIFIED except where noted. Phase 11.
+
+26.1 MEASUREMENT
+Distance, area, perimeter, bearing, azimuth, coordinate, elevation difference,
+slope, angle - all CRS-aware. Geographic coordinates use geodesic computation,
+never planar arithmetic on degrees, which is the classic silent error in this
+class of tool.
+
+26.2 GEOMETRY OPERATIONS
+Buffer, offset, union, intersection, difference, symmetric difference, convex
+hull, dissolve, centroid, envelope, clip, erase, split by line, polygonize, line
+merge, line substring, explode, multipart conversion. Preview before commit.
+
+26.3 POINT CLOUD (PARTIAL)
+Built: LAS 1.0-1.4 read/write, XYZ/PTS/PLY, nth/grid/voxel decimation,
+classification, crop, elevation and intensity filters, bounds, counts, density.
+Specified: ground filtering, DTM/DSM/DEM generation, contour generation, merge,
+split, and classification/intensity/RGB/return-number colouring in the preview.
+LAZ stays refused until a genuine codec ships (R5).
+
+26.4 SURVEY (PARTIAL)
+Built: PNEZD/PENZD/NEZ/ENZ/XYZ and header-alias schema recognition, point code
+parsing, units.
+Specified: traverse processing, closure calculation, surface and contour
+generation, and the quality checks - duplicate point numbers, duplicate
+coordinates, outlier elevations, impossible coordinates, suspicious codes,
+missing fields.
+
+
+================================================================================
+27. LABEL AND ATTRIBUTE BURN-IN, CAD POLYGONISATION
+================================================================================
+STATUS: SPECIFIED. Phase 12. This is the master document's most distinctive
+requirement and has no equivalent in the current build.
+
+27.1 THE PROBLEM
+A cadastral DXF typically holds plot boundaries on one layer and plot numbers as
+TEXT or MTEXT on another. The association between them is spatial and implicit.
+Exported naively, the polygons arrive unlabelled and the text arrives as
+detached points - which is why CAD-to-GIS cadastral conversion is usually redone
+by hand.
+
+27.2 DETECTION AND MODES
+Detect points, TEXT, MTEXT, block text and attribute labels inside polygons.
+Then offer:
+  A ATTRIBUTE burn-in   text content becomes a polygon attribute
+  B LABEL burn-in       a label representation bound to the polygon
+  C GEOMETRY burn-in    a permanent text feature placed inside the polygon
+  D CAD burn-in         CAD-compatible annotation
+  E KML/KMZ burn-in     polygon name and description for Google Earth
+
+When several candidates fall inside one polygon: configurable priority,
+concatenate, nearest, largest, or a named attribute field.
+
+The source point or text is NEVER deleted unless the user explicitly chooses
+"replace source" (R17, R18).
+
+27.3 LABEL PLACEMENT
+Centroid, pole of inaccessibility, largest empty area, interior point, with
+collision avoidance, rotation and scale. A label MUST NOT be placed outside its
+polygon; narrow polygons rotate or reposition their label instead.
+
+27.4 CAD CLOSED-BOUNDARY POLYGONISATION (PARTIAL)
+Built: closed LWPOLYLINE and POLYLINE become polygons; layer names and entity
+handles are preserved.
+Specified: nearly-closed boundary detection within a stated tolerance, boundary
+loop assembly from separate segments, nested boundary and hole resolution.
+Closing a gap is a geometry change and obeys R18 and R21 - within tolerance,
+counted, previewed, undoable.
+
+
+================================================================================
+28. STYLED KML/KMZ, MINING OUTPUT AND GEOREFERENCING
+================================================================================
+STATUS: SPECIFIED except where noted. Phase 12.
+
+28.1 BOREHOLE AND MINING MODEL (PARTIAL)
+Built: borehole, bench, crest/toe, blast-hole and cadastral field recognition
+(Khasra, Khewat, Khatian included); Surpac STR.
+Specified as a first-class CIR object: hole id, collar E/N/RL, total depth,
+azimuth, dip, from/to intervals, lithology, sample id, assay fields, core
+recovery, remarks, linked photographs and reports.
+
+28.2 STYLED KML/KMZ ENGINE
+Built: folders (nested, R16), placemarks, geometry, extended data.
+Specified: styles, icons, labels, line styles, polygon fills, transparency,
+altitude modes, ground and screen overlays, NetworkLink, HTML descriptions.
+
+BOREHOLE CORE-LOG BALLOON. A styled, self-contained Google Earth balloon:
+header (hole id, site, coordinates, RL, depth, azimuth, dip) and core log
+(from, to, thickness, lithology, recovery, RQD, sample, assay, remarks), with
+collapsible sections, clean tables, responsive layout and a design that reads in
+both Earth themes. Optional photographs and an optional hosted report link.
+No credential, token or signed URL secret may appear in the output (R23).
+
+28.3 PDF AND IMAGE MAP GEOREFERENCING
+Render a scanned map at its true aspect ratio; zoom, pan, place, crop, rotate.
+2, 3 and 4-point georeferencing with GCP entry, residuals and RMS error, affine
+transformation, and higher-order only where the control geometry justifies it.
+An image MUST NOT be described as georeferenced without actual reference
+information (R2).
+
+28.4 GEOREFERENCING PANEL (PARTIAL)
+Built: QGIS GCP point files read and written; world files read and written.
+Specified: the panel itself - GCP table, canvas, coordinate entry, residuals,
+RMS, transformation type, target CRS, and add/delete/move/import/export GCP.
+
+28.5 KML/KMZ TEMPLATE SYSTEM
+Reusable templates: Simple GIS, Cadastral, Survey, Mining, Borehole, Core Log,
+Drill Pattern, Stockpile, Contour, DEM/DSM, Custom - each carrying logo, title,
+colours, icons, HTML layout, table fields, footer and links.
+
+
+================================================================================
+29. SPATIAL INTELLIGENCE LAYER
+================================================================================
+STATUS: SPECIFIED. Phase 9.
+
+29.1 DETERMINISTIC FIRST
+Every statement the intelligence layer makes MUST come from a deterministic
+spatial computation, and MUST be explainable by naming the features and the
+threshold that produced it. Examples, all computable:
+  "42 polygons overlap by more than the 0.01 m tolerance."
+  "18 polygons contain text labels."
+  "12 CAD boundaries are closed to within 0.05 m but not closed."
+  "Coordinates look UTM-like but no CRS is declared."
+  "The selected target would lose Z on 1,204 features."
+  "7 labels would collide after export at this scale."
+  "Layers PLOT and PLOT_2 have identical geometry."
+  "Point codes match a borehole collar pattern."
+  "Fields E, N, RL look like Easting/Northing/Reduced Level."
+  "From/To fields look like geological intervals."
+
+It suggests; it never edits. No statistical or generative model may modify
+engineering data (R18).
+
+29.2 PROJECT HEALTH
+A single score from CRS certainty, geometry validity, topology, duplicate data,
+missing attributes, conversion risk and unresolved warnings - always expandable
+into the exact contributing items. A score with no drill-down is decoration.
+
+
+================================================================================
+30. DUAL CANVAS, VISUAL DIFF AND NAVIGATION
+================================================================================
+STATUS: SPECIFIED. Phase 13. Today there is one preview canvas.
+
+30.1 TWO CANVASES
+LEFT: import/source. RIGHT: export/target, showing the actual converted
+representation before export. Both support pan, zoom, fit-to-data, coordinate
+readout, layer control, selection, measurement, visibility and render
+diagnostics.
+
+A draggable vertical divider; either side maximisable; when one collapses the
+other takes the space. Pan, zoom and extent synchronise, and can be unlinked.
+
+Nobody should have to export a file to discover that the conversion damaged it.
+
+30.2 VISUAL DIFF
+Compare source with output by geometry overlay, vertex difference, boundary
+difference, attribute difference, CRS, extent, point count, and area/perimeter,
+against a configured tolerance. Report in the data's units:
+  Source polygon area  1250.21 m2
+  Output polygon area  1250.20 m2
+  Difference           0.01 m2   PASS (tolerance 0.05 m2)
+This is the QA engine's existing comparison, rendered.
+
+30.3 NAVIGATION (PARTIAL)
+Primary navigation: PROJECT | IMPORT | CONVERT | QA | EDIT | EXPORT | SETTINGS.
+Home: drop files, recent projects, quick conversions, saved workflows.
+Status bar: CRS, units, features, vertices, file size, processing status,
+warnings.
+Progressive disclosure throughout - advanced functions stay hidden until the
+task needs them (R24).
+
+
+================================================================================
+31. PROJECT, HISTORY, WORKFLOWS AND COMMAND PALETTE
+================================================================================
+STATUS: SPECIFIED. Phase 13.
+
+31.1 OPERATION HISTORY (R19)
+Import, CRS change, repair, edit, snap, burn-in, reproject, simplify, export -
+each recorded, each reversible, with checkpoints and project snapshots.
+
+31.2 WORKFLOW BUILDER
+Record a sequence and replay it on new data. Example:
+  IMPORT DXF -> detect CRS -> repair topology -> polygonise closed polylines
+  -> burn text into polygons -> reproject to WGS 84 -> KML -> KMZ -> report
+saved as "CAD Parcel to KMZ".
+A workflow step that would trigger a confirmation prompt when run by hand MUST
+still prompt when replayed, unless the user has explicitly marked that step
+unattended. Automation must not become a way to bypass R18.
+
+31.3 PRESETS
+CAD -> GIS; GIS -> CAD; GIS -> KML/KMZ; Survey CSV -> GIS; Borehole CSV ->
+styled KMZ; LiDAR -> DTM; LiDAR -> contours; DEM -> contours; image ->
+georeferenced GeoTIFF; cadastral DXF -> polygon GIS; polygon + point labels ->
+labelled KMZ; mine survey -> KML; drone survey -> GIS package.
+
+31.4 PROJECT FILE
+Saves source references, imported data, transformations, CRS, styles, edits, QA
+results, workflows and export configuration, and reopens without losing editing
+state. It MUST NOT contain credentials or tokens (R23).
+
+31.5 COMMAND PALETTE
+Ctrl/Cmd + K, searchable, configurable shortcuts: import, export, reproject,
+repair, validate, snap, burn labels, polygonize, convert CAD, generate KMZ,
+generate borehole report, generate contours, compare, measure, georeference.
+It is how advanced capability stays reachable without crowding the UI (R24).
+
 
 ================================================================================
 END OF INSTRUCTION

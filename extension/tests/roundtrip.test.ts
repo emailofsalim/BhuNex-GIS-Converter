@@ -609,14 +609,51 @@ describe('raster', () => {
     expect(raster.statistics?.[0].min).toBeCloseTo(408.75, 6);
   });
 
-  it('reports a GeoTIFF as metadata-only and refuses raster output from it', async () => {
-    // A minimal little-endian TIFF: header plus an IFD with width/height/bits.
-    const bytes = new Uint8Array(200);
+  it('converts an ASCII Grid DEM to GeoTIFF and back without changing a height', async () => {
+    // The full raster round trip: text grid → binary GeoTIFF → text grid. Every
+    // elevation, the nodata cell and the georeference must survive both hops,
+    // because this is the path a surveyor uses to hand a DEM to a package that
+    // will not read .asc.
+    const toTiff = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'geotiff',
+      settings: { precision: FULL_PRECISION, sourceCrs: UTM45N },
+    });
+    expect(toTiff.outputs).toHaveLength(1);
+    expect(toTiff.outputs[0].name).toMatch(/\.tif$/);
+
+    const backToAsc = await convert({
+      input: input('terrain.tif', toTiff.outputs[0].bytes),
+      targetFormatId: 'asciigrid',
+      settings: { precision: FULL_PRECISION },
+    });
+    const raster = backToAsc.sourceDataset.raster!;
+    expect(raster.hasPixelData).toBe(true);
+    expect(raster.width).toBe(4);
+    expect(raster.height).toBe(3);
+    expect(raster.bands![0][0]).toBeCloseTo(410.25, 3);
+    expect(raster.noData).toBe(-9999);
+    // Origin and pixel size come back unchanged, so the grid lands where it started.
+    expect(raster.geotransform?.[0]).toBeCloseTo(412000, 6);
+    expect(raster.geotransform?.[1]).toBeCloseTo(10, 6);
+    expect(raster.geotransform?.[5]).toBeCloseTo(-10, 6);
+    expect(backToAsc.sourceDataset.crs?.epsg).toBe(32645);
+
+    const text = decoder.decode(backToAsc.outputs[0].bytes);
+    expect(text).toContain('410.25');
+    expect(text).toContain('-9999');
+  });
+
+  it('reports a GeoTIFF it cannot decode instead of inventing its pixels', async () => {
+    // A JPEG-compressed TIFF. No JPEG codec is bundled, so the pixels are
+    // refused by name — but the georeference still reads, and raster export is
+    // blocked rather than filled with noise.
+    const bytes = new Uint8Array(220);
     const view = new DataView(bytes.buffer);
     bytes.set([0x49, 0x49], 0);
     view.setUint16(2, 42, true);
     view.setUint32(4, 8, true);
-    view.setUint16(8, 4, true); // four entries
+    view.setUint16(8, 6, true);
     const entry = (index: number, tag: number, type: number, count: number, value: number) => {
       const at = 10 + index * 12;
       view.setUint16(at, tag, true);
@@ -627,20 +664,28 @@ describe('raster', () => {
     entry(0, 256, 3, 1, 640); // ImageWidth
     entry(1, 257, 3, 1, 480); // ImageLength
     entry(2, 258, 3, 1, 8); // BitsPerSample
-    entry(3, 277, 3, 1, 3); // SamplesPerPixel
-    view.setUint32(10 + 4 * 12, 0, true);
+    entry(3, 259, 3, 1, 7); // Compression = JPEG
+    entry(4, 273, 4, 1, 200); // StripOffsets
+    entry(5, 277, 3, 1, 3); // SamplesPerPixel
+    view.setUint32(10 + 6 * 12, 0, true);
 
     const result = await convert({
       input: input('ortho.tif', bytes),
       targetFormatId: 'geojson',
       settings: { precision: FULL_PRECISION },
     });
-    expect(result.warnings.some((warning) => warning.code === 'GEOTIFF_METADATA_ONLY')).toBe(true);
+    const warning = result.warnings.find((entry_) => entry_.code === 'GEOTIFF_PIXELS_NOT_DECODED');
+    expect(warning?.message).toMatch(/JPEG/);
     expect(result.sourceDataset.raster?.hasPixelData).toBe(false);
+    // The structure that *was* readable is still reported honestly.
+    expect(result.sourceDataset.raster?.width).toBe(640);
 
     await expect(
       convert({ input: input('ortho.tif', bytes), targetFormatId: 'asciigrid', settings: { precision: FULL_PRECISION } })
     ).rejects.toMatchObject({ code: 'ASC_NO_PIXEL_DATA' });
+    await expect(
+      convert({ input: input('ortho.tif', bytes), targetFormatId: 'geotiff', settings: { precision: FULL_PRECISION } })
+    ).rejects.toMatchObject({ code: 'TIFF_NO_PIXEL_DATA' });
   });
 });
 

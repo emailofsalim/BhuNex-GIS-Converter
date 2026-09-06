@@ -23,7 +23,7 @@ here exactly as its engines actually behave.
 A format is never listed above what its engine has earned: a `full` claim without a
 covering test fails the build (`extension/tests/registry.test.ts`).
 
-**21 formats read directly**, 5 partially, 1 metadata-only, 8 through adapters that are not bundled.
+**22 formats read directly**, 5 partially, 0 metadata-only, 8 through adapters that are not bundled.
 
 ## GIS
 
@@ -199,7 +199,7 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 | Format | Extensions | Import | Export | Carries |
 |---|---|---|---|---|
 | ESRI ASCII Grid / DEM | `.asc` `.grd` `.agr` | **Supported** | **Supported** | 3D, Z, CRS |
-| GeoTIFF | `.tif` `.tiff` | Metadata only | Not supported | CRS |
+| GeoTIFF | `.tif` `.tiff` | **Supported** | **Supported** | CRS |
 | QGIS GCP points | `.points` | **Supported** | **Supported** | attributes, CRS |
 | World file | `.tfw` `.jgw` `.pgw` `.wld` `.gfw` `.bpw` | **Supported** | **Supported** | — |
 
@@ -210,9 +210,10 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 
 **GeoTIFF**
 
-- A full raster codec is Phase 4 work. Until it ships, this format stays metadata-only rather than claiming conversion it cannot do.
-- Georeference, dimensions, band layout and EPSG code are read. Pixel data is not decoded, so raster output from a GeoTIFF source is disabled.
-- Footprint and extent can still be exported as vector.
+- Reading covers the compressions GDAL and QGIS produce by default. Overviews, masks and multi-IFD pyramids are not read: only the first image of the file.
+- Pixels are decoded for uncompressed, LZW, Deflate and PackBits data, in strips or tiles, with predictors 2 and 3.
+- JPEG, JPEG 2000, LERC, WebP and Zstandard compression are refused by name rather than misread — the georeference, extent and footprint of such a file are still read.
+- Output is written as a single-IFD, strip-based, Deflate-compressed TIFF. Rotated georeference is reported and not written; the sample type is chosen from the data so no value is silently rounded.
 - Companion files: `.tfw`, `.prj`, `.aux.xml`.
 
 **World file**

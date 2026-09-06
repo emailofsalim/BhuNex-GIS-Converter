@@ -142,6 +142,8 @@ export async function inspect(file: QueuedFile, forcedFormatId?: string): Promis
     const detection = forcedFormatId
       ? { formatId: forcedFormatId, formatName: forcedFormatId, confidence: 1, evidence: [], alternatives: [], requiresConfirmation: false }
       : detect(file);
+    // Small files are read in full: the pixel statistics and histogram the
+    // inspector shows are worth the milliseconds at this size.
     const dataset = await readSource(toInput(file), detection, { preserveZ: true } as ConversionSettings);
     return { detection, dataset };
   }

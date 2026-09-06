@@ -54,6 +54,7 @@ import {
 } from '../engines/pointcloud/text';
 import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
+import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
 import { DEFAULT_CSV_OPTIONS, readCsvTable, tableToPoints, writeCsv, type WriteCsvOptions } from '../engines/vector/csv';
@@ -116,6 +117,7 @@ export interface ConversionSettings {
   shapefile?: Partial<WriteShapefileOptions>;
   las?: Partial<WriteLasOptions>;
   textCloud?: Partial<WriteTextCloudOptions>;
+  geotiff?: Partial<WriteGeoTiffOptions>;
   /** Attach a provenance record to the output package. */
   embedMetadata?: boolean;
   /**
@@ -123,6 +125,14 @@ export interface ConversionSettings {
    * behaves the way anyone would expect: one file in, one file out.
    */
   layout?: OutputLayout;
+  /**
+   * Read structure and georeference but skip the expensive payload decode.
+   *
+   * Set only by the inspector when opening a file too large to decode twice —
+   * once for the preview and again for the conversion. A conversion never sets
+   * it, so no output is ever produced from a partial read.
+   */
+  metadataOnly?: boolean;
 }
 
 export const DEFAULT_SETTINGS: ConversionSettings = {
@@ -300,6 +310,7 @@ function dispatchReader(
       return readGeoTiff(input.bytes, info, {
         worldFileText: companionText('tfw') ?? companionText('wld'),
         prjText: companionText('prj'),
+        metadataOnly: settings.metadataOnly,
       });
     case 'prj': {
       const parsed = parsePrj(decodeText(input.bytes));
@@ -524,6 +535,10 @@ async function writeTarget(dataset: CirDataset, targetId: string, baseName: stri
     case 'asciigrid': {
       const { text: body, warnings } = writeAsciiGrid(dataset, { precision });
       return { files: [text(body)], warnings };
+    }
+    case 'geotiff': {
+      const { bytes, warnings } = await writeGeoTiff(dataset, { ...DEFAULT_GEOTIFF_OPTIONS, ...settings.geotiff });
+      return { files: [binary(bytes)], warnings };
     }
     case 'worldfile': {
       const geotransform = dataset.raster?.geotransform;
