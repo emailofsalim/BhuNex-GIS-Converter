@@ -1,16 +1,17 @@
 /**
- * GeoTIFF — metadata and georeference only.
+ * GeoTIFF reader — structure, georeference and pixels.
  *
- * This reader walks the TIFF IFD (and BigTIFF's 64-bit variant), reads the GeoTIFF
- * keys, and reports dimensions, bands, pixel type, nodata and extent. It does
- * **not** decode pixels.
+ * Walks the TIFF IFD (and BigTIFF's 64-bit variant), reads the GeoTIFF keys,
+ * and decodes pixel data for the compressions in `tiff-codec.ts`: uncompressed,
+ * LZW, Deflate and PackBits, in strips or tiles, in either planar
+ * configuration, with predictors 2 and 3.
  *
- * That limit is deliberate and is surfaced everywhere: the registry marks the
- * format `metadata-only`, raster export from such a source is refused, and the
- * inspector says so. Claiming raster conversion without a codec would violate
- * rule R1, and quietly emitting an empty raster would violate rule R2. What is
- * genuinely useful — the footprint, extent and CRS — is available and can be
- * exported as vector.
+ * Where a codec genuinely is not bundled — JPEG, JPEG 2000, LERC, WebP,
+ * Zstandard — the file is refused **by name** rather than read as raw bytes.
+ * A JPEG-compressed tile decoded as raw samples produces a raster that looks
+ * like plausible terrain and is entirely fictional, which is precisely what
+ * rules R1 and R2 exist to prevent. Metadata, extent and footprint remain
+ * available for those files, so nothing that was readable before is lost.
  */
 
 import {
@@ -26,6 +27,14 @@ import {
 import { ConversionError } from '../../core/errors';
 import { crsFromEpsg } from '../../crs/epsg';
 import { parsePrj } from '../../crs/wkt';
+import {
+  decompressBlock,
+  sampleFormatOf,
+  sampleReaderFor,
+  SUPPORTED_COMPRESSIONS,
+  undoFloatingPointPredictor,
+  undoHorizontalDifferencing,
+} from './tiff-codec';
 import { parseWorldFile, worldFileToGeotransform, type Geotransform, type WorldFileTerms } from './worldfile';
 
 const TAG = {
@@ -39,8 +48,11 @@ const TAG = {
   rowsPerStrip: 278,
   stripByteCounts: 279,
   planarConfiguration: 284,
+  predictor: 317,
   tileWidth: 322,
   tileLength: 323,
+  tileOffsets: 324,
+  tileByteCounts: 325,
   sampleFormat: 339,
   modelPixelScale: 33550,
   modelTiepoint: 33922,
@@ -50,6 +62,15 @@ const TAG = {
   geoAsciiParams: 34737,
   gdalNoData: 42113,
 } as const;
+
+/**
+ * Pixel budget for an in-browser decode.
+ *
+ * Bands are Float64Array, so each band costs 8 bytes per pixel. 120 million
+ * samples is roughly a gigabyte — beyond that the honest answer is to say so
+ * up front rather than let the tab die halfway through a conversion.
+ */
+const MAX_SAMPLES = 120_000_000;
 
 const COMPRESSION_NAMES: Record<number, string> = {
   1: 'none',
@@ -83,10 +104,18 @@ export interface GeoTiffInfo {
   sampleFormat: number;
   compression: number;
   compressionName: string;
+  /** 1 = no prediction, 2 = horizontal differencing, 3 = floating point. */
+  predictor: number;
+  /** 1 = samples interleaved per pixel, 2 = one plane per band. */
+  planarConfiguration: number;
+  photometric: number;
   tiled: boolean;
   tileWidth?: number;
   tileLength?: number;
   rowsPerStrip?: number;
+  /** Byte offsets of each strip or tile, in reading order. */
+  blockOffsets: number[];
+  blockByteCounts: number[];
   geotransform: Geotransform | null;
   epsg?: number;
   noData: number | null;
@@ -298,6 +327,7 @@ export function readGeoTiffInfo(bytes: Uint8Array): GeoTiffInfo {
   const noData = noDataText !== undefined && Number.isFinite(Number(noDataText)) ? Number(noDataText) : null;
   const compression = first(TAG.compression, 1);
   const geoAsciiEntry = byTag.get(TAG.geoAsciiParams);
+  const tiled = byTag.has(TAG.tileWidth);
 
   return {
     width,
@@ -307,10 +337,15 @@ export function readGeoTiffInfo(bytes: Uint8Array): GeoTiffInfo {
     sampleFormat: first(TAG.sampleFormat, 1),
     compression,
     compressionName: COMPRESSION_NAMES[compression] ?? `unknown (${compression})`,
-    tiled: byTag.has(TAG.tileWidth),
-    tileWidth: byTag.has(TAG.tileWidth) ? first(TAG.tileWidth, 0) : undefined,
-    tileLength: byTag.has(TAG.tileLength) ? first(TAG.tileLength, 0) : undefined,
+    predictor: first(TAG.predictor, 1),
+    planarConfiguration: first(TAG.planarConfiguration, 1),
+    photometric: first(TAG.photometric, 1),
+    tiled,
+    tileWidth: tiled ? first(TAG.tileWidth, 0) : undefined,
+    tileLength: tiled ? first(TAG.tileLength, 0) : undefined,
     rowsPerStrip: byTag.has(TAG.rowsPerStrip) ? first(TAG.rowsPerStrip, 0) : undefined,
+    blockOffsets: tiled ? numbers(TAG.tileOffsets) : numbers(TAG.stripOffsets),
+    blockByteCounts: tiled ? numbers(TAG.tileByteCounts) : numbers(TAG.stripByteCounts),
     geotransform,
     epsg,
     noData,
@@ -318,6 +353,140 @@ export function readGeoTiffInfo(bytes: Uint8Array): GeoTiffInfo {
     littleEndian,
     geoAscii: typeof geoAsciiEntry?.values === 'string' ? geoAsciiEntry.values : undefined,
   };
+}
+
+/**
+ * Decodes every band into a Float64Array laid out row-major, top row first.
+ *
+ * One numeric type for every band regardless of the file's own sample width is
+ * a deliberate simplification of the CIR: a DEM's float32 elevations, a
+ * classification raster's uint8 codes and a 16-bit intensity band all become
+ * doubles, which every downstream writer can consume without a type switch.
+ * Float64 represents every one of those exactly, so nothing is lost on the way
+ * in — the cost is memory, which `MAX_SAMPLES` bounds.
+ */
+export async function decodeGeoTiffPixels(bytes: Uint8Array, info: GeoTiffInfo): Promise<Float64Array[]> {
+  const { width, height, bandCount } = info;
+  const totalSamples = width * height * bandCount;
+  if (totalSamples > MAX_SAMPLES) {
+    throw new ConversionError({
+      code: 'TIFF_TOO_LARGE',
+      what: `This raster holds ${totalSamples.toLocaleString()} samples (${width} × ${height} × ${bandCount} bands), beyond what can be decoded in the browser.`,
+      why: `Decoding needs roughly ${Math.round((totalSamples * 8) / 1024 / 1024).toLocaleString()} MB of contiguous memory, above the ${Math.round((MAX_SAMPLES * 8) / 1024 / 1024).toLocaleString()} MB ceiling this build sets to avoid crashing mid-conversion.`,
+      action: 'Crop or downsample the raster first (gdal_translate -srcwin, or QGIS → Raster → Extraction → Clip), or convert one band at a time.',
+    });
+  }
+
+  if (!SUPPORTED_COMPRESSIONS.has(info.compression)) {
+    throw new ConversionError({
+      code: 'TIFF_COMPRESSION_UNSUPPORTED',
+      what: `This GeoTIFF uses ${info.compressionName} compression, which this build cannot decode.`,
+      why: 'Only uncompressed, LZW, Deflate and PackBits data are decoded here. Reading the compressed bytes as if they were pixels would produce a convincing but entirely false raster.',
+      action: 'Re-export the file with Deflate or LZW compression (gdal_translate -co COMPRESS=DEFLATE, or QGIS → Raster → Conversion → Translate), then convert it again. Its georeference, extent and footprint are still readable as they are.',
+    });
+  }
+
+  const bitsPerSample = info.bitsPerSample[0] ?? 8;
+  if (info.bitsPerSample.some((bits) => bits !== bitsPerSample)) {
+    throw new ConversionError({
+      code: 'TIFF_MIXED_SAMPLE_WIDTHS',
+      what: `The bands of this GeoTIFF use different sample widths (${info.bitsPerSample.join(', ')} bits).`,
+      why: 'Mixed-width bands are legal TIFF but vanishingly rare, and guessing the packing would risk misreading every pixel.',
+      action: 'Re-export the raster with a single sample width for all bands.',
+    });
+  }
+
+  const format = sampleFormatOf(info.sampleFormat);
+  const read = sampleReaderFor(format, bitsPerSample, info.littleEndian);
+  const bands: Float64Array[] = [];
+  for (let band = 0; band < bandCount; band++) bands.push(new Float64Array(width * height));
+
+  // Planar configuration 2 stores each band as its own sequence of blocks, so a
+  // block index maps to (band, block-within-band) rather than to all bands.
+  const planar = info.planarConfiguration === 2;
+  const samplesPerBlockPixel = planar ? 1 : bandCount;
+
+  const blockWidth = info.tiled ? (info.tileWidth ?? width) : width;
+  const blockHeight = info.tiled ? (info.tileLength ?? height) : (info.rowsPerStrip || height);
+  const blocksAcross = Math.ceil(width / blockWidth);
+  const blocksDown = Math.ceil(height / blockHeight);
+  const blocksPerPlane = blocksAcross * blocksDown;
+
+  for (let index = 0; index < info.blockOffsets.length; index++) {
+    const offset = info.blockOffsets[index];
+    const byteCount = info.blockByteCounts[index] ?? 0;
+    if (byteCount <= 0 || offset < 0 || offset + byteCount > bytes.length) continue;
+
+    const planeIndex = planar ? Math.floor(index / blocksPerPlane) : 0;
+    if (planeIndex >= bandCount) break;
+    const blockIndex = planar ? index % blocksPerPlane : index;
+    const blockRow = Math.floor(blockIndex / blocksAcross);
+    const blockCol = blockIndex % blocksAcross;
+    const originX = blockCol * blockWidth;
+    const originY = blockRow * blockHeight;
+    if (originY >= height) continue;
+
+    // A strip is clipped to the image; a tile is always full-size and padded,
+    // which is why the padding has to be skipped rather than written.
+    const rowsInBlock = info.tiled ? blockHeight : Math.min(blockHeight, height - originY);
+    const expectedBytes = Math.ceil((blockWidth * samplesPerBlockPixel * bitsPerSample) / 8) * rowsInBlock;
+
+    const decoded = await decompressBlock(bytes.subarray(offset, offset + byteCount), info.compression, expectedBytes, info.compressionName);
+    // An uncompressed block comes back as a view onto the source file, and the
+    // predictors below mutate in place. Copying only in that case keeps the
+    // common compressed path allocation-free.
+    const block = info.predictor !== 1 && decoded.buffer === bytes.buffer ? decoded.slice() : decoded;
+
+    if (info.predictor === 2) {
+      undoHorizontalDifferencing(block, blockWidth, rowsInBlock, samplesPerBlockPixel, bitsPerSample, info.littleEndian);
+    } else if (info.predictor === 3) {
+      undoFloatingPointPredictor(block, blockWidth, rowsInBlock, samplesPerBlockPixel, bitsPerSample, info.littleEndian);
+    }
+
+    const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
+    const rowSampleCount = blockWidth * samplesPerBlockPixel;
+    const rowBytes = Math.ceil((rowSampleCount * bitsPerSample) / 8);
+
+    for (let row = 0; row < rowsInBlock; row++) {
+      const imageRow = originY + row;
+      if (imageRow >= height) break;
+      const rowAt = row * rowBytes;
+      if (rowAt + rowBytes > block.length) break;
+      const columns = Math.min(blockWidth, width - originX);
+      for (let column = 0; column < columns; column++) {
+        const target = imageRow * width + originX + column;
+        if (planar) {
+          bands[planeIndex][target] = read(view, rowAt, column);
+        } else {
+          for (let band = 0; band < bandCount; band++) {
+            bands[band][target] = read(view, rowAt, column * bandCount + band);
+          }
+        }
+      }
+    }
+  }
+
+  return bands;
+}
+
+/** Min/max/mean per band, ignoring nodata — computed once so the UI need not. */
+export function bandStatistics(bands: Float64Array[], noData: number | null): { min: number; max: number; mean?: number }[] {
+  return bands.map((values) => {
+    let min = Infinity;
+    let max = -Infinity;
+    let sum = 0;
+    let counted = 0;
+    for (let index = 0; index < values.length; index++) {
+      const value = values[index];
+      if (!Number.isFinite(value)) continue;
+      if (noData !== null && value === noData) continue;
+      if (value < min) min = value;
+      if (value > max) max = value;
+      sum += value;
+      counted++;
+    }
+    return counted > 0 ? { min, max, mean: sum / counted } : { min: 0, max: 0 };
+  });
 }
 
 function pixelTypeOf(info: GeoTiffInfo): PixelType {
@@ -333,9 +502,14 @@ export interface ReadGeoTiffOptions {
   worldFileText?: string;
   /** .prj text, when one accompanies the image. */
   prjText?: string;
+  /**
+   * Skip the pixel decode and read structure only. The inspector uses this to
+   * show a 2 GB raster's georeference instantly; conversion never does.
+   */
+  metadataOnly?: boolean;
 }
 
-export function readGeoTiff(bytes: Uint8Array, source: SourceInfo, options: ReadGeoTiffOptions = {}): CirDataset {
+export async function readGeoTiff(bytes: Uint8Array, source: SourceInfo, options: ReadGeoTiffOptions = {}): Promise<CirDataset> {
   const info = readGeoTiffInfo(bytes);
   const warnings: Warning[] = [];
 
@@ -360,6 +534,25 @@ export function readGeoTiff(bytes: Uint8Array, source: SourceInfo, options: Read
       }
     : null;
 
+  // Pixels are decoded unless the caller asked for structure only or the file
+  // uses a codec that is not bundled. A refusal here is reported as a named
+  // warning and the dataset still carries everything that *was* readable —
+  // failing the whole read would lose the georeference too.
+  let bands: Float64Array[] | undefined;
+  let statistics: { min: number; max: number; mean?: number }[] | undefined;
+  let undecodable: ConversionError | null = null;
+
+  if (!options.metadataOnly) {
+    try {
+      bands = await decodeGeoTiffPixels(bytes, info);
+      statistics = bandStatistics(bands, info.noData);
+    } catch (error) {
+      if (!(error instanceof ConversionError)) throw error;
+      undecodable = error;
+      bands = undefined;
+    }
+  }
+
   const raster: CirRaster = {
     width: info.width,
     height: info.height,
@@ -368,12 +561,15 @@ export function readGeoTiff(bytes: Uint8Array, source: SourceInfo, options: Read
     noData: info.noData,
     geotransform,
     extent,
-    // No decoder is bundled, so no pixel values are produced. Writers check this
-    // flag and refuse rather than emitting a blank raster.
-    hasPixelData: false,
+    statistics,
+    bands,
+    // Writers check this flag and refuse rather than emitting a blank raster.
+    hasPixelData: Boolean(bands),
     isElevation,
     metadata: {
       compression: info.compressionName,
+      predictor: info.predictor === 2 ? 'horizontal differencing' : info.predictor === 3 ? 'floating point' : 'none',
+      planarConfiguration: info.planarConfiguration === 2 ? 'separate planes' : 'interleaved',
       tiled: info.tiled,
       tileSize: info.tiled ? `${info.tileWidth} × ${info.tileLength}` : undefined,
       rowsPerStrip: info.rowsPerStrip,
@@ -384,17 +580,22 @@ export function readGeoTiff(bytes: Uint8Array, source: SourceInfo, options: Read
     },
   };
 
-  warnings.push(
-    warn(
-      'GEOTIFF_METADATA_ONLY',
-      `Georeference and structure were read (${info.width} × ${info.height}, ${info.bandCount} band(s), ${info.compressionName} compression). Pixel data was not decoded.`,
-      {
-        reason: 'No raster codec is bundled with the extension, so pixel values are not available and raster output from this source is disabled.',
-        action: 'The extent and footprint can still be exported as vector. To convert the pixels, use GDAL (gdal_translate) or QGIS.',
-        detail: { width: info.width, height: info.height, bands: info.bandCount, compression: info.compressionName },
-      }
-    )
-  );
+  if (undecodable) {
+    warnings.push(
+      warn('GEOTIFF_PIXELS_NOT_DECODED', undecodable.what, {
+        reason: undecodable.why,
+        action: `${undecodable.action} The georeference, extent and footprint of this file were read normally and can still be exported.`,
+        detail: { width: info.width, height: info.height, bands: info.bandCount, compression: info.compressionName, code: undecodable.code },
+      })
+    );
+  } else if (options.metadataOnly) {
+    warnings.push(
+      warn('GEOTIFF_METADATA_ONLY', 'Only the georeference and structure were read for this preview.', {
+        reason: 'The inspector reads structure first so a large raster opens immediately; the conversion itself decodes every pixel.',
+        action: 'No action needed — converting this file will read its pixel data in full.',
+      })
+    );
+  }
 
   if (!geotransform) {
     warnings.push(

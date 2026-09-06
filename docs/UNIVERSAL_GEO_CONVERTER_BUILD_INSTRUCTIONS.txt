@@ -561,14 +561,62 @@ Positional schemas: PNEZD, PENZD, NEZ, ENZ, XYZ, ID-X-Y-Z, ID-Y-X-Z.
 The user can always override the mapping in a preview table. Coordinate order
 is ALWAYS shown explicitly; latitude and longitude are never swapped silently.
 
-9.7 GEOTIFF (engines/raster/geotiff.ts)
-Implemented: TIFF/BigTIFF IFD walk, ModelPixelScale, ModelTiepoint,
+9.7 GEOTIFF (engines/raster/geotiff.ts, geotiff-write.ts, tiff-codec.ts)
+Structure: TIFF/BigTIFF IFD walk, ModelPixelScale, ModelTiepoint,
 ModelTransformation, GeoKeyDirectory (EPSG code extraction), sample format,
-bits per sample, band count, nodata, tile/strip layout.
-NOT implemented: pixel decode for compressed variants.
-Therefore the registry level is metadata-only and the UI says
-"Georeference and structure read. Pixel data not decoded - raster output is
-disabled for this source." (R2, spec item 14).
+bits per sample, band count, nodata, predictor, planar config, tile/strip
+layout.
+
+Pixel decode (tiff-codec.ts, kept separate from TIFF structure so each codec is
+testable against a spec vector without a TIFF around it):
+  compression   uncompressed, LZW, Deflate (codes 8 and 32946), PackBits
+  predictors    2 horizontal differencing, 3 floating point
+  layout        strips and tiles, planar configurations 1 and 2
+  samples       1/2/4/8/16/32/64-bit unsigned, 8/16/32/64 signed,
+                16/32/64-bit float, little and big endian
+  bands         decoded into Float64Array per band, row-major, top row first
+  ceiling       MAX_SAMPLES bounds an in-browser decode; beyond it the refusal
+                names the size and the crop command rather than crashing
+
+NOT implemented: JPEG, JPEG 2000, LERC, WebP and Zstandard compression, and
+multi-IFD pyramids (only the first image of a file is read).
+
+Two details that decide correctness, both regression-tested:
+  - LZW "early change". The decoder cannot add a table entry until it has read
+    the code after the one the entry describes, so at any moment its table holds
+    one entry fewer than the encoder's did. The encoder widens 9->10 bits after
+    adding entry 510; the decoder must therefore widen when its own next free
+    code reaches 510, not 511. Matching the encoder's threshold decodes the
+    first few hundred pixels correctly and then shifts every later code by one
+    bit - a raster that looks like plausible terrain and is not.
+  - Predictor 3 is not horizontal differencing over floats. The encoder splits
+    each row into byte planes (all high bytes, then all second bytes, ...) so
+    that the near-identical exponent bytes of neighbouring elevations group and
+    compress. Reversing it is two steps: accumulate the byte deltas, then
+    de-interleave the planes. Skipping the second step yields NaN and absurd
+    values.
+
+An LZW code beyond the next free table entry is corrupt and stops the decode.
+Accepting it would store a forward reference in the prefix chain, and walking
+that chain would never terminate: a corrupt strip must not be able to hang the
+conversion worker.
+
+A file whose compression is not bundled is NOT a failed read. Pixels are
+refused by name, hasPixelData stays false, and the georeference, extent,
+statistics and footprint that were readable are still returned - losing those
+as well would serve nobody (R1, R2).
+
+Writing (geotiff-write.ts): single IFD, little-endian, strip-based, chunky
+planar, no predictor, no BigTIFF - the settings every GIS package reads without
+complaint. Deflate by default, uncompressed available. The sample type is
+chosen from the data so that no value is silently rounded: integers stay
+integers, fractional values become float32, and values beyond float32's exact
+range keep float64; nodata participates in that choice, because picking uint8
+for data that fits it would clamp a -9999 nodata cell to zero and turn holes
+into sea level. An explicitly chosen narrower type is honoured but reports the
+counts of clamped and rounded pixels (R3). Rotated georeference is reported and
+not written, because ModelPixelScale/ModelTiepoint describe an axis-aligned
+raster only.
 
 9.8 ASCII GRID (engines/raster/asciigrid.ts)
 Full read and write of ncols/nrows/xllcorner|xllcenter/yllcorner|yllcenter/

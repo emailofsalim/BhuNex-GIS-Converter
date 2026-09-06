@@ -14,9 +14,12 @@ import { describe, expect, it } from 'vitest';
 import { FORMATS, exportTargetsFor, getFormat, isAvailable, SUPPORT_LABEL } from '@core/registry';
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
-const roundTripSource = readFileSync(resolve(testsDir, 'roundtrip.test.ts'), 'utf8');
-const coreSource = readFileSync(resolve(testsDir, 'core.test.ts'), 'utf8');
-const allTestSource = `${roundTripSource}\n${coreSource}`;
+// Every suite that can constitute evidence for a support claim is read here. A
+// file left out of this list is invisible to the guard, so adding a new suite
+// that covers a format means adding it here too.
+const allTestSource = ['roundtrip.test.ts', 'core.test.ts', 'raster.test.ts', 'structure.test.ts']
+  .map((name) => readFileSync(resolve(testsDir, name), 'utf8'))
+  .join('\n');
 
 /**
  * True when a format is exercised somewhere in the suite: as a conversion
@@ -101,11 +104,23 @@ describe('format registry integrity', () => {
 });
 
 describe('honesty invariants', () => {
-  it('keeps GeoTIFF metadata-only until a real raster codec ships', () => {
+  it('states which GeoTIFF compressions it decodes and which it refuses', () => {
+    // GeoTIFF earned `full` when the codec landed, but "full" must not be read
+    // as "every TIFF ever written". The registry has to keep naming the codecs
+    // that are absent, because a user whose file is JPEG-compressed needs to
+    // know that before they trust the output — not after.
     const geotiff = getFormat('geotiff')!;
-    expect(geotiff.support.import).toBe('metadata-only');
-    expect(geotiff.support.export).toBe('none');
-    expect(geotiff.warnings?.join(' ')).toMatch(/not decoded/i);
+    expect(geotiff.support.import).toBe('full');
+    expect(geotiff.support.export).toBe('full');
+    const text = geotiff.warnings?.join(' ') ?? '';
+    expect(text).toMatch(/LZW/i);
+    expect(text).toMatch(/Deflate/i);
+    expect(text).toMatch(/PackBits/i);
+    expect(text).toMatch(/JPEG/i);
+    expect(text).toMatch(/refused by name/i);
+    // Multi-IFD pyramids and overviews are still out of scope, and saying so is
+    // the difference between a documented limit and a surprise.
+    expect(geotiff.notes).toMatch(/overview|first image/i);
   });
 
   it('keeps LAZ an adapter rather than claiming LAS-compatible reads', () => {
@@ -160,7 +175,7 @@ describe('target filtering', () => {
   it('offers raster targets for a raster source', () => {
     const targets = exportTargetsFor('raster').map((format) => format.id);
     expect(targets).toContain('asciigrid');
-    expect(targets).not.toContain('geotiff');
+    expect(targets).toContain('geotiff');
   });
 
   it('labels every support level for the UI', () => {
