@@ -1,0 +1,1847 @@
+UNIVERSAL GEO-CONVERTER PRO — MASTER BUILD INSTRUCTIONS
+Chrome Extension | GIS + Geomatics + CAD + Survey + Mining Intelligence
+
+DOCUMENT PURPOSE
+Build an advanced, browser-first Chrome Extension that functions as a professional universal conversion, inspection, repair, editing, visualization and export suite for GIS, Geomatics, CAD, Surveying, Cadastral Mapping, Drone Mapping, LiDAR and Mining data.
+
+The extension must be designed as a serious engineering tool, not a simple file-format converter.
+
+PRIMARY OBJECTIVE
+Create maximum practical IMPORT support and maximum practical EXPORT support while preserving:
+- Geometry
+- Coordinates
+- CRS/projection
+- Units
+- Elevations/Z values
+- Attributes
+- Layers
+- Styling
+- Labels
+- Metadata
+- Precision
+- Topology
+- Spatial relationships
+- CAD/GIS semantics wherever the target format supports them
+
+The application must be browser-first, local/offline-first and privacy-preserving. Files should be processed locally whenever technically possible. Do not upload user project data to a server by default.
+
+IMPORTANT IMPLEMENTATION PRINCIPLE
+Do NOT fake format support.
+A format may only appear as supported when the extension can actually parse/import or generate/export it correctly.
+Unsupported features must be reported explicitly in a Conversion/Fidelity Report.
+
+============================================================
+1. CORE APPLICATION ARCHITECTURE
+============================================================
+
+Use a modular architecture:
+
+A. FILE INGESTION ENGINE
+B. FORMAT DETECTION ENGINE
+C. CRS/GEOREFERENCING ENGINE
+D. UNIVERSAL INTERNAL GEOMETRY MODEL
+E. CAD SEMANTICS MODEL
+F. GIS ATTRIBUTE MODEL
+G. RASTER ENGINE
+H. POINT-CLOUD/LiDAR ENGINE
+I. TOPOLOGY/QA ENGINE
+J. GEOMETRY REPAIR ENGINE
+K. SMART EDITOR ENGINE
+L. LABEL/BURN-IN ENGINE
+M. STYLING ENGINE
+N. KML/KMZ REPORT ENGINE
+O. CONVERSION ENGINE
+P. EXPORT ENGINE
+Q. PREVIEW/RENDER ENGINE
+R. BATCH PROCESSING ENGINE
+S. JOB/QUEUE ENGINE
+T. REPORTING ENGINE
+U. FORMAT CAPABILITY/FIDELITY ENGINE
+V. OPTIONAL AI/HEURISTIC INTELLIGENCE ENGINE
+
+Every module must be independently testable.
+
+Use Web Workers/WASM where appropriate so large datasets do not freeze the UI.
+
+Use streaming/chunked processing for large files.
+
+Never load a huge point cloud, raster or geometry dataset into the DOM.
+
+============================================================
+2. UNIVERSAL INTERNAL DATA MODEL
+============================================================
+
+Create a canonical internal representation capable of representing:
+
+- Point
+- MultiPoint
+- LineString
+- MultiLineString
+- Polygon
+- MultiPolygon
+- GeometryCollection
+- 3D geometry
+- 4D geometry where applicable
+- Arc/curve entities
+- Circle
+- Ellipse
+- Spline
+- Polyline
+- 3D polyline
+- Text
+- MText
+- Block/reference
+- Dimension
+- Hatch
+- Annotation
+- Raster
+- Grid
+- TIN
+- DEM/DSM/DTM
+- Point cloud
+- Mesh
+- Borehole
+- Survey observation
+- Control point
+- Parcel
+- Mine lease
+- Drill hole
+- Sample interval
+
+Maintain source provenance for every object:
+- Source file
+- Source layer
+- Source entity ID
+- Source feature ID
+- Original coordinates
+- Original attributes
+- Transformation history
+
+This enables reversible editing and detailed conversion reports.
+
+============================================================
+3. MAXIMUM PRACTICAL IMPORT SUPPORT
+============================================================
+
+Implement adapters wherever reliable browser/local libraries or custom parsers are available.
+
+GIS VECTOR:
+- Shapefile: SHP/SHX/DBF/PRJ
+- GeoJSON
+- GeoPackage
+- KML
+- KMZ
+- GML
+- GPX
+- CSV
+- TSV
+- WKT
+- WKB
+- FlatGeobuf
+- TopoJSON
+- Mapbox/GeoJSON-compatible vector data
+- DXF
+- DWG through an appropriate supported local/native/WASM route
+- DGN where technically supported
+- LandXML
+- CityGML where practical
+- OGC API compatible datasets where explicitly supported
+
+CAD:
+- DXF
+- DWG where technically supported
+- DGN where technically supported
+- SVG
+- IFC where practical
+- LandXML
+- CAD text/point exports
+- Survey point formats where parser specifications are available
+
+RASTER:
+- GeoTIFF
+- TIFF
+- PNG
+- JPEG/JPEG2000 where supported
+- BMP
+- WebP
+- ASCII Grid
+- XYZ grid
+- DEM/DTM/DSM raster forms
+- World-file referenced images
+- PRJ/world-file combinations
+
+POINT CLOUD:
+- LAS
+- LAZ
+- XYZ
+- PTS
+- PLY
+- E57 where browser support is technically viable
+- CSV point clouds
+
+SURVEY:
+- CSV
+- TXT
+- XYZ
+- PNEZD
+- PENZD
+- ENZ
+- NEZ
+- custom delimiter formats
+- LandXML
+- survey observation tables
+- coordinate lists
+- total-station style point exports
+
+MINING:
+- drill-hole collar CSV
+- survey CSV
+- assay CSV
+- lithology CSV
+- geology intervals
+- blast-hole CSV
+- blast pattern coordinates
+- bench/lease/orebody polygons
+- stockpile point clouds
+- mine surface grids
+- contour datasets
+- triangulation/TIN-compatible data
+- block-model tabular data where format is documented and parseable
+
+For every import:
+1. Detect extension.
+2. Inspect magic bytes/signature where applicable.
+3. Identify companion files.
+4. Detect CRS.
+5. Detect units.
+6. Detect dimensionality.
+7. Detect geometry types.
+8. Detect encoding.
+9. Detect attribute schema.
+10. Produce an Import Diagnostic Report.
+
+============================================================
+4. MAXIMUM PRACTICAL EXPORT SUPPORT
+============================================================
+
+Support export to every format that can faithfully represent the source content.
+
+Core outputs:
+- GeoJSON
+- Shapefile package
+- GeoPackage
+- KML
+- KMZ
+- CSV
+- DXF
+- DWG only through a technically valid supported route
+- SVG
+- GPX
+- GML
+- WKT
+- WKB
+- FlatGeobuf
+- TopoJSON
+- GeoTIFF
+- TIFF
+- PNG
+- JPEG
+- ASCII Grid
+- XYZ
+- LAS
+- LAZ where technically supported
+- PLY
+- LandXML
+- TXT survey formats
+- custom CSV templates
+
+Export must have:
+- Coordinate transformation
+- Unit conversion
+- Attribute mapping
+- Layer mapping
+- Geometry simplification
+- Precision controls
+- Z handling
+- NoData handling
+- Styling preservation where possible
+- Label generation
+- Metadata preservation
+- Validation before writing
+
+============================================================
+5. FORMAT INTEROPERABILITY MATRIX
+============================================================
+
+Before conversion, automatically calculate:
+
+SOURCE
+TARGET
+Geometry compatibility
+Attribute compatibility
+CRS compatibility
+Z compatibility
+Style compatibility
+Label compatibility
+Layer compatibility
+Precision risk
+Unsupported entity risk
+Potential topology loss
+Potential metadata loss
+
+Show:
+GREEN = high fidelity
+YELLOW = partial fidelity
+RED = information loss
+
+Never silently discard information.
+
+Provide:
+"Show exactly what will be lost"
+
+============================================================
+6. CRS AND GEODESY INTELLIGENCE
+============================================================
+
+Build a dedicated CRS engine.
+
+Automatically detect:
+- EPSG
+- WKT CRS
+- PRJ
+- UTM
+- geographic coordinates
+- projected coordinates
+- local grids where identifiable
+
+Support:
+- WGS84
+- UTM zones
+- common EPSG systems
+- compound CRS where possible
+- vertical CRS where possible
+
+Provide:
+- CRS search
+- source CRS
+- target CRS
+- transformation preview
+- axis-order correction
+- unit conversion
+- datum transformation where supported
+- coordinate epoch fields where relevant
+
+SMART DETECTION:
+If CRS is missing, analyze coordinate ranges and dataset context and provide candidate CRS suggestions.
+
+Never silently assign a CRS.
+Require confirmation before committing an inferred CRS.
+
+============================================================
+7. SMART GEOMETRY QA ENGINE
+============================================================
+
+After every import, optionally run "Smart QA".
+
+Detect:
+- Self-intersections
+- Bow-ties
+- Invalid rings
+- Unclosed polygons
+- Duplicate vertices
+- Consecutive duplicate points
+- Zero-length segments
+- Tiny sliver polygons
+- Spikes
+- Overshoots
+- Undershoots
+- Gaps
+- Overlaps
+- Multipart inconsistencies
+- Nested polygons
+- Invalid holes
+- Hole outside shell
+- Ring orientation problems
+- Nearly coincident vertices
+- Near-duplicate geometries
+- Duplicate features
+- Broken topology
+- Dangling lines
+- Unconnected line endpoints
+- Crossing lines
+- Polygon/line conflicts
+- Polygon/point conflicts
+- Z anomalies
+- Extreme coordinate outliers
+
+Every defect must have:
+- Severity
+- Location
+- Feature ID
+- Explanation
+- Suggested repair
+- Preview
+- Apply button
+- Undo
+
+============================================================
+8. SMART TOPOLOGY ENGINE
+============================================================
+
+Provide configurable topology rules:
+
+- Must not overlap
+- Must not have gaps
+- Must contain
+- Must be within
+- Must touch
+- Must be covered by
+- Must not self-intersect
+- Shared boundaries must match
+- Lines must connect
+- Polygons must close
+
+Support:
+- Whole dataset topology
+- Selected layer topology
+- Selected feature topology
+- Individual parcel topology
+
+Do not force global repair when the user only wants one feature repaired.
+
+============================================================
+9. ADVANCED GEOMETRY REPAIR
+============================================================
+
+Provide one-click repair operations:
+
+- Close polygon
+- Remove duplicate vertices
+- Remove zero-length segments
+- Snap vertices
+- Snap shared edges
+- Regularize polygon
+- Smooth geometry
+- Simplify geometry
+- Densify geometry
+- Fix ring direction
+- Repair self-intersection
+- Remove slivers
+- Merge adjacent polygons
+- Split polygon
+- Split line
+- Extend line
+- Trim line
+- Join line
+- Make multipart
+- Explode multipart
+- Fill holes
+- Remove holes
+- Rebuild topology
+
+Every operation must be previewable.
+
+Every destructive operation must support undo/redo.
+
+============================================================
+10. SMART VERTEX EDITOR
+============================================================
+
+The map/canvas must support:
+
+- Add vertex
+- Delete vertex
+- Move vertex
+- Insert vertex on segment
+- Drag vertex
+- Multi-select vertices
+- Coordinate entry
+- X/Y/Z editing
+- Bearing/distance entry
+- Snap to vertex
+- Snap to segment
+- Snap to intersection
+- Snap to grid
+- Snap to nearest feature
+- Snap shared edge
+- Orthogonal mode
+- Parallel mode
+- Perpendicular mode
+- Angle lock
+- Distance lock
+
+Show live:
+- X
+- Y
+- Z
+- segment length
+- bearing/azimuth
+- total perimeter
+- area
+
+============================================================
+11. ADVANCED OVERLAP/GAP INTELLIGENCE
+============================================================
+
+Automatically identify:
+
+A overlaps B
+A contains B
+A touches B
+A crosses B
+A is separated from B
+A has a gap with B
+
+For cadastral parcels:
+- Detect overlapping parcels
+- Detect gaps between parcels
+- Detect duplicate parcel boundaries
+- Detect shared-edge mismatch
+- Suggest the most conservative correction
+
+Never automatically modify legal cadastral boundaries without explicit user confirmation.
+
+============================================================
+12. POINT/TEXT UNDER POLYGON — SMART BURN-IN
+============================================================
+
+Implement a powerful "Burn Labels Into Geometry" engine.
+
+Detect:
+- Points inside polygons
+- Text inside polygons
+- MText inside polygons
+- CAD block text inside polygons
+- Attribute labels inside polygons
+
+Provide options:
+
+A. ATTRIBUTE BURN-IN
+Convert detected point/text content into polygon attributes.
+
+B. LABEL BURN-IN
+Create a label representation associated with the polygon.
+
+C. GEOMETRY BURN-IN
+Create a permanent text/label feature positioned inside the polygon.
+
+D. CAD BURN-IN
+Convert text/block information into CAD-compatible annotation.
+
+E. KML/KMZ BURN-IN
+Create polygon descriptions/labels for Google Earth.
+
+Example:
+Polygon 101 contains point "PLOT-101"
+=> Polygon attribute LABEL = "PLOT-101"
+
+If multiple texts exist:
+- configurable priority
+- concatenate
+- choose nearest
+- choose largest
+- choose attribute-defined field
+
+Provide collision detection and label placement optimization.
+
+Never delete the original point/text unless the user explicitly selects "replace source".
+
+============================================================
+13. INTELLIGENT LABEL PLACEMENT
+============================================================
+
+Calculate optimal label location using:
+- polygon centroid
+- pole of inaccessibility where practical
+- largest empty area
+- interior-point calculation
+- collision avoidance
+- rotation
+- scale
+- text priority
+
+Prevent labels from being placed outside polygons.
+
+For narrow polygons, automatically rotate or reposition labels.
+
+============================================================
+14. CAD INTELLIGENCE
+============================================================
+
+DXF/DWG workflows must understand common CAD entities where supported:
+
+- POINT
+- LINE
+- POLYLINE
+- LWPOLYLINE
+- 3DPOLY
+- ARC
+- CIRCLE
+- ELLIPSE
+- SPLINE
+- HATCH
+- TEXT
+- MTEXT
+- BLOCK
+- INSERT
+- DIMENSION
+- LEADER
+- layers
+- linetypes
+- colors
+- lineweights
+- blocks
+
+Provide:
+- CAD layer browser
+- isolate layer
+- hide layer
+- freeze layer
+- rename layer
+- merge layers
+- purge duplicates
+- entity statistics
+- block detection
+- text extraction
+- coordinate extraction
+- polygonization of closed CAD boundaries
+
+============================================================
+15. CAD ↔ GIS INTELLIGENCE
+============================================================
+
+Closed CAD boundaries can be converted into GIS polygons.
+
+Detect:
+- closed polylines
+- nearly closed polylines
+- boundary loops
+- nested boundaries
+- holes
+
+Provide:
+"Convert Closed CAD Boundaries to Polygons"
+
+Automatically:
+- identify boundaries
+- close only within user tolerance
+- build polygons
+- preserve layer names
+- preserve source entity IDs
+
+GIS polygons exported to CAD should support:
+- layer assignment
+- line type
+- color
+- lineweight
+- label text
+- block/annotation options
+
+============================================================
+16. RASTER INTELLIGENCE
+============================================================
+
+Provide:
+- raster preview
+- pixel dimensions
+- CRS detection
+- georeferencing status
+- bounds
+- resolution
+- NoData
+- min/max
+- histogram
+- coordinate readout
+
+Tools:
+- crop
+- clip by polygon
+- merge
+- mosaic
+- resample
+- reproject
+- rotate
+- scale
+- translate
+- georeference
+- world-file generation
+- rasterize vector
+- vectorize raster where practical
+- contour generation from elevation raster
+
+Image/PDF-style map imports should be:
+- scalable
+- positionable
+- crop-able
+- rotatable
+- georeferenceable
+- exportable
+
+============================================================
+17. PDF / IMAGE MAP INTELLIGENCE
+============================================================
+
+When a PDF or image is a scanned map:
+- render it accurately
+- preserve original aspect ratio
+- allow zoom/pan
+- allow placement
+- allow 2-point/3-point/4-point georeferencing where applicable
+- support GCP entry
+- display residual/error
+- support affine transformation
+- support higher-order transformation only when technically appropriate
+
+Never claim a raster image is georeferenced without actual reference information.
+
+============================================================
+18. POINT CLOUD / LiDAR INTELLIGENCE
+============================================================
+
+Provide:
+- LAS/LAZ import
+- metadata inspection
+- point count
+- bounds
+- CRS
+- point classification
+- RGB
+- intensity
+- elevation statistics
+- density estimation
+
+Visualization:
+- elevation
+- classification
+- intensity
+- RGB
+- return number where supported
+
+Tools:
+- crop by AOI
+- clip
+- classify
+- filter
+- decimate
+- thin
+- merge
+- split
+- ground filtering where technically supported
+- DTM generation
+- DSM generation
+- DEM generation
+- contour generation
+- export
+
+Large datasets must use streaming/chunked processing.
+
+============================================================
+19. SURVEY INTELLIGENCE
+============================================================
+
+Provide survey data tools:
+
+- Coordinate list import
+- Point code recognition
+- Easting/Northing/Elevation
+- NEZ/ENZ/PNEZD/PENZD
+- Point numbering
+- Description/code parsing
+- Units
+- Bearing/azimuth
+- Distance
+- Traverse processing where feasible
+- Closure calculation
+- Coordinate transformation
+- Surface/contour generation
+
+Quality checks:
+- duplicate point numbers
+- duplicate coordinates
+- outlier elevations
+- impossible coordinates
+- suspicious point codes
+- missing fields
+
+============================================================
+20. MINING INTELLIGENCE
+============================================================
+
+Provide specialized workflows for:
+
+- Mine lease boundaries
+- Pit boundaries
+- Bench polygons
+- Boreholes
+- Drill holes
+- Blast patterns
+- Stockpiles
+- Survey points
+- Contours
+- DEM/DTM
+- Mine surfaces
+- Geological polygons
+- Sampling intervals
+
+Borehole model should support:
+- Hole ID
+- Collar Easting
+- Collar Northing
+- Collar RL
+- Total depth
+- Azimuth
+- Dip
+- From/To intervals
+- Lithology
+- Sample ID
+- Assay fields
+- Core recovery where available
+- Remarks
+- linked photographs/reports where available
+
+============================================================
+21. STYLED KML/KMZ ENGINE
+============================================================
+
+Create a professional KML/KMZ generation system.
+
+Support:
+- folders
+- layers
+- styles
+- icons
+- labels
+- line styles
+- polygon fills
+- transparency
+- altitude modes
+- ground overlays
+- screen overlays where appropriate
+- NetworkLink where appropriate
+- descriptions
+- HTML tables
+- embedded/generated reports
+
+BOREHOLE CORE LOG BALLOON:
+Generate styled Google Earth-compatible balloons containing:
+
+Header:
+- Borehole ID
+- Mine/Site
+- Coordinates
+- RL
+- Depth
+- Azimuth
+- Dip
+
+Core log:
+- From
+- To
+- Thickness
+- Lithology
+- Recovery
+- RQD
+- Sample
+- Assay
+- Remarks
+
+Add:
+- collapsible sections
+- clean tables
+- responsive layout
+- professional styling
+- day/night compatible design
+- optional photographs
+- optional secure hosted report link
+- optional map/location summary
+
+Do not store sensitive credentials/tokens inside KML/KMZ.
+
+============================================================
+22. SMART MAP CANVAS
+============================================================
+
+The main UI must have TWO primary canvases:
+
+LEFT:
+IMPORT / SOURCE CANVAS
+
+RIGHT:
+EXPORT / TARGET CANVAS
+
+Both must support:
+- pan
+- zoom
+- fit-to-data
+- coordinate readout
+- layer control
+- selection
+- measurement
+- visibility control
+- rendering diagnostics
+
+BEHAVIOR:
+When both are visible:
+- side-by-side comparison
+
+When one collapses:
+- the other automatically expands and occupies the released space.
+
+Allow:
+- vertical divider
+- drag divider
+- maximize source
+- maximize target
+- synchronized pan
+- synchronized zoom
+- synchronized extent
+- independent extent
+
+============================================================
+23. VISUAL DIFF MODE
+============================================================
+
+Provide:
+"Compare Source vs Output"
+
+Modes:
+- geometry overlay
+- vertex difference
+- boundary difference
+- attribute difference
+- CRS difference
+- extent difference
+- point count difference
+- area/perimeter difference
+
+Use tolerance-based comparison.
+
+Example:
+Source polygon area: 1250.21 m²
+Output polygon area: 1250.20 m²
+Difference: 0.01 m²
+
+Show pass/fail based on configured tolerance.
+
+============================================================
+24. MINIMAL UI / POWERFUL UX
+============================================================
+
+UI must be minimal and professional.
+
+Do NOT create a crowded toolbar.
+
+Primary structure:
+
+TOP:
+Project | Import | Convert | QA | Edit | Export | Settings
+
+MAIN:
+Source Canvas | Conversion Center | Target Canvas
+
+RIGHT/CONTEXT:
+Properties / Layers / QA / Attributes depending on current task.
+
+BOTTOM:
+Status bar:
+- CRS
+- Units
+- Features
+- Vertices
+- File size
+- Processing status
+- Warnings
+
+Use progressive disclosure.
+
+Advanced functions remain hidden until needed.
+
+Use command/search palette:
+Ctrl/Cmd + K
+
+Examples:
+"Convert DXF to KML"
+"Repair self intersections"
+"Burn text into polygons"
+"Snap shared edges"
+"Reproject to UTM 45N"
+"Export boreholes to KMZ"
+
+============================================================
+25. SMART CONVERSION CENTER
+============================================================
+
+When a file is loaded:
+
+STEP 1
+Analyze file.
+
+STEP 2
+Show:
+Detected format
+Detected CRS
+Units
+Geometry
+Feature count
+Layers
+Attributes
+Warnings
+
+STEP 3
+Recommend compatible output formats.
+
+Example:
+"Recommended: GeoPackage"
+"High fidelity: DXF"
+"Visualization: KMZ"
+"Exchange: GeoJSON"
+
+Explain why.
+
+============================================================
+26. BATCH CONVERSION
+============================================================
+
+Support:
+- multiple files
+- folder-like batches
+- drag/drop
+- batch CRS conversion
+- batch repair
+- batch export
+- batch naming rules
+- templates
+- repeatable jobs
+
+Example:
+100 DXF files -> KML + GeoJSON + CSV
+
+Provide:
+- progress
+- individual failure reporting
+- retry
+- skip
+- cancel
+- final report
+
+============================================================
+27. AUTOMATION / WORKFLOW BUILDER
+============================================================
+
+Allow users to save workflows.
+
+Example:
+
+IMPORT DXF
+→ Detect CRS
+→ Repair topology
+→ Convert closed polylines
+→ Burn text into polygons
+→ Reproject WGS84
+→ Generate KML
+→ Generate KMZ
+→ Create report
+
+Save as:
+"CAD Parcel to KMZ"
+
+Allow workflow re-execution on future datasets.
+
+============================================================
+28. SMART PRESETS
+============================================================
+
+Built-in presets:
+
+- CAD → GIS
+- GIS → CAD
+- GIS → KML/KMZ
+- Survey CSV → GIS
+- Borehole CSV → Styled KMZ
+- LiDAR → DTM
+- LiDAR → Contours
+- DEM → Contours
+- Image → Georeferenced GeoTIFF
+- Cadastral DXF → Polygon GIS
+- Polygon + Point Labels → Labelled KMZ
+- Mine Survey → KML
+- Drone Survey → GIS package
+
+============================================================
+29. INTELLIGENT ERROR HANDLING
+============================================================
+
+Never show generic errors such as:
+"Conversion failed."
+
+Instead:
+"Conversion failed because 17 ARC entities cannot be represented by the selected target format."
+
+Provide:
+- affected entity types
+- count
+- feature IDs
+- reason
+- possible alternatives
+
+============================================================
+30. UNDO / VERSION HISTORY
+============================================================
+
+Maintain operation history:
+
+Import
+CRS change
+Repair
+Edit
+Snap
+Burn-in
+Reproject
+Simplify
+Export
+
+Every edit must be reversible.
+
+Provide:
+Undo
+Redo
+Restore checkpoint
+
+Allow project snapshots.
+
+============================================================
+31. PROJECT FILE
+============================================================
+
+Create a native project format capable of saving:
+
+- source references
+- imported data
+- transformations
+- CRS
+- styles
+- edits
+- QA results
+- workflows
+- export configuration
+
+The project must reopen without losing the editing state.
+
+============================================================
+32. PRECISION AND TOLERANCE ENGINE
+============================================================
+
+Never hard-code a single tolerance.
+
+Allow:
+- coordinate tolerance
+- snapping tolerance
+- topology tolerance
+- closure tolerance
+- simplification tolerance
+- area comparison tolerance
+- elevation tolerance
+
+Display units clearly.
+
+Avoid accidental geometry movement due to floating-point rounding.
+
+============================================================
+33. PERFORMANCE REQUIREMENTS
+============================================================
+
+Target:
+- responsive UI during processing
+- Web Workers for CPU-heavy operations
+- WASM for suitable computational engines
+- streaming parsers
+- chunked point-cloud/raster operations
+- spatial indexing
+- R-tree or equivalent indexing
+- geometry caching
+- viewport-based rendering
+- progressive rendering
+
+Never block the main UI thread for large operations.
+
+============================================================
+34. SECURITY / PRIVACY
+============================================================
+
+Default processing:
+LOCAL ONLY.
+
+Do not upload:
+- CAD
+- GIS
+- mine data
+- survey data
+- borehole data
+- credentials
+- sensitive coordinates
+
+to external servers unless the user explicitly enables a feature requiring remote processing.
+
+Never put secrets in:
+- KML
+- KMZ
+- project files
+- exported HTML
+
+Sanitize imported HTML.
+
+Prevent malicious SVG/script execution.
+
+Treat all imported files as untrusted.
+
+============================================================
+35. EXPORT VALIDATION
+============================================================
+
+Before export:
+
+Run:
+- geometry validation
+- CRS validation
+- attribute validation
+- format compatibility validation
+- coordinate range validation
+- file naming validation
+- encoding validation
+
+Then show:
+
+READY TO EXPORT
+
+or
+
+EXPORT BLOCKED
+
+with exact reasons.
+
+============================================================
+36. EXPORT PREVIEW
+============================================================
+
+The target canvas must show the actual converted representation as closely as possible before export.
+
+The user must be able to:
+- inspect
+- edit
+- repair
+- compare
+- approve
+- export
+
+Never require exporting just to discover that conversion damaged geometry.
+
+============================================================
+37. PROFESSIONAL REPORTING
+============================================================
+
+Generate a Conversion Report containing:
+
+Source:
+- filename
+- format
+- size
+- CRS
+- units
+- layers
+- feature count
+
+Processing:
+- transformations
+- repairs
+- edits
+- warnings
+
+Output:
+- format
+- CRS
+- feature count
+- geometry count
+- attribute count
+
+Fidelity:
+- geometry
+- attributes
+- styling
+- CRS
+- Z
+- metadata
+
+QA:
+- errors
+- warnings
+- repaired items
+- unresolved items
+
+============================================================
+38. SMART INTELLIGENCE LAYER
+============================================================
+
+Add an intelligence layer that can reason over dataset structure using deterministic spatial algorithms first.
+
+Examples:
+
+"These 42 polygons overlap by more than the configured tolerance."
+
+"These 18 polygons contain text labels."
+
+"12 CAD boundaries are nearly closed."
+
+"Dataset appears to be UTM-like but CRS is missing."
+
+"Output would lose Z values."
+
+"These 7 labels would collide after export."
+
+"These two layers appear to represent the same geometry."
+
+"Point codes appear to represent borehole collars."
+
+"Detected fields look like Easting/Northing/RL."
+
+"Detected From/To fields appear to represent geological intervals."
+
+Intelligence must be explainable.
+Do not silently modify engineering data.
+
+============================================================
+39. SPATIAL INDEX / PERFORMANCE INTELLIGENCE
+============================================================
+
+Automatically choose algorithms based on dataset size.
+
+Small:
+direct geometry operations.
+
+Medium:
+indexed spatial queries.
+
+Large:
+tiling/chunking/streaming.
+
+Very large:
+progressive visualization and selective processing.
+
+The user must not need to understand these implementation details.
+
+============================================================
+40. FILE DROP EXPERIENCE
+============================================================
+
+Drag any supported file onto the source canvas.
+
+The system should immediately display:
+"Analyzing..."
+
+Then:
+- format
+- CRS
+- units
+- geometry
+- size
+- warnings
+- suggested actions
+
+Allow drag-and-drop directly between source and target workflows where meaningful.
+
+============================================================
+41. LAYER MANAGEMENT
+============================================================
+
+Provide:
+- layer list
+- search
+- visibility
+- lock
+- isolate
+- opacity
+- reorder
+- rename
+- merge
+- split
+- export selected
+- style selected
+
+For CAD:
+show CAD layer names.
+
+For GIS:
+show GIS layer names.
+
+For KML:
+show folder hierarchy.
+
+============================================================
+42. ATTRIBUTE TABLE
+============================================================
+
+Professional attribute table:
+
+- sort
+- filter
+- search
+- edit
+- bulk edit
+- calculate field
+- create field
+- delete field
+- field type
+- null handling
+- unique values
+
+Spatial selection and table selection must remain synchronized.
+
+============================================================
+43. MEASUREMENT TOOLS
+============================================================
+
+Provide:
+
+- distance
+- area
+- perimeter
+- bearing
+- azimuth
+- coordinate
+- elevation difference
+- slope
+- angle
+
+Use CRS-aware calculations.
+
+For geographic coordinates, use appropriate geodesic calculations where required.
+
+============================================================
+44. ADVANCED GEOMETRY OPERATIONS
+============================================================
+
+Add:
+- buffer
+- offset
+- union
+- intersection
+- difference
+- symmetric difference
+- convex hull
+- dissolve
+- centroid
+- envelope
+- clip
+- erase
+- split by line
+- polygonize
+- line merge
+- line substring
+- explode
+- multipart conversion
+
+Provide preview before committing.
+
+============================================================
+45. SMART DATA NORMALIZATION
+============================================================
+
+Automatically detect and normalize:
+- field names
+- numeric strings
+- decimal separators
+- units
+- coordinate order
+- encodings
+- null values
+- date formats
+
+Never alter original source data.
+Maintain a transformation log.
+
+============================================================
+46. GEOREFERENCING CONTROL PANEL
+============================================================
+
+Provide:
+- source image/raster
+- GCP table
+- map canvas
+- coordinate entry
+- residuals
+- RMS error
+- transformation type
+- target CRS
+
+Allow:
+- add GCP
+- delete GCP
+- move GCP
+- import GCP CSV
+- export GCP CSV
+
+============================================================
+47. KML/KMZ PROFESSIONAL TEMPLATE SYSTEM
+============================================================
+
+Templates:
+- Simple GIS
+- Cadastral
+- Survey
+- Mining
+- Borehole
+- Core Log
+- Drill Pattern
+- Stockpile
+- Contour
+- DEM/DSM
+- Custom
+
+Allow:
+- logo
+- title
+- colors
+- icons
+- HTML layout
+- table fields
+- footer
+- links
+
+Template must be reusable.
+
+============================================================
+48. EXTENSION NAVIGATION
+============================================================
+
+Minimum primary navigation:
+
+1. PROJECT
+2. IMPORT
+3. CONVERT
+4. QA
+5. EDIT
+6. EXPORT
+7. SETTINGS
+
+Do not clutter the first screen.
+
+Home screen should have:
+- Drop files here
+- Recent projects
+- Quick conversions
+- Saved workflows
+
+============================================================
+49. COMMAND PALETTE
+============================================================
+
+Implement searchable commands.
+
+Examples:
+- Import
+- Export
+- Reproject
+- Repair
+- Validate
+- Snap
+- Burn Labels
+- Polygonize
+- Convert CAD
+- Generate KMZ
+- Generate Borehole Report
+- Generate Contours
+- Compare
+- Measure
+- Georeference
+
+Keyboard shortcuts should be configurable.
+
+============================================================
+50. SETTINGS
+============================================================
+
+Settings categories:
+
+General
+- theme
+- units
+- precision
+- autosave
+
+Processing
+- worker count
+- memory limits where meaningful
+- streaming thresholds
+
+GIS
+- default CRS
+- default datum
+- coordinate display
+
+CAD
+- layer defaults
+- entity handling
+- text handling
+
+KML/KMZ
+- template
+- label settings
+- balloon style
+
+QA
+- tolerances
+- topology rules
+- automatic QA
+
+Privacy
+- local-only mode
+- remote services permissions
+
+============================================================
+51. AUTOMATIC PROJECT HEALTH
+============================================================
+
+Display a project health score based on:
+- CRS certainty
+- geometry validity
+- topology
+- duplicate data
+- missing attributes
+- conversion risk
+- unresolved warnings
+
+Example:
+PROJECT HEALTH: 92/100
+
+Click to see exactly why.
+
+============================================================
+52. SMART "FIX ALL SAFE ISSUES"
+============================================================
+
+Provide:
+
+FIX SAFE ISSUES
+
+Only automatically repair issues classified as safe and reversible:
+- duplicate consecutive vertices
+- zero-length segments
+- obvious ring closure issues within tolerance
+- harmless encoding normalization
+- exact duplicate records where user approves policy
+
+Never automatically repair uncertain cadastral/mining/legal geometry.
+
+============================================================
+53. INTEROPERABILITY DESIGN RULE
+============================================================
+
+The canonical internal model is the heart of the system.
+
+DO NOT build every converter directly against every other converter.
+
+Correct architecture:
+
+FORMAT A
+   ↓
+IMPORT ADAPTER
+   ↓
+UNIVERSAL INTERNAL MODEL
+   ↓
+INTELLIGENCE / QA / EDITING
+   ↓
+EXPORT ADAPTER
+   ↓
+FORMAT B
+
+This prevents an unmaintainable N×N converter architecture.
+
+============================================================
+54. TESTING REQUIREMENTS
+============================================================
+
+Create automated tests for:
+
+- format import
+- format export
+- round-trip conversion
+- CRS transformation
+- geometry validity
+- topology
+- attributes
+- Z values
+- labels
+- CAD entities
+- KML/KMZ
+- borehole balloons
+- raster georeferencing
+- point cloud processing
+
+ROUND-TRIP TEST:
+Import A → Export B → Import B → Compare against A.
+
+Generate quantitative fidelity metrics.
+
+============================================================
+55. ACCEPTANCE CRITERIA
+============================================================
+
+The extension is NOT complete until:
+
+[ ] Source canvas works
+[ ] Target canvas works
+[ ] Side-by-side comparison works
+[ ] Collapse/expand behavior works
+[ ] Drag-and-drop works
+[ ] Format detection works
+[ ] CRS detection works
+[ ] CRS transformation works
+[ ] Universal internal model works
+[ ] Geometry QA works
+[ ] Geometry repair works
+[ ] Vertex editor works
+[ ] Snap works
+[ ] Individual shared-edge snap works
+[ ] Overlap detection works
+[ ] Gap detection works
+[ ] Point-in-polygon detection works
+[ ] Text-in-polygon detection works
+[ ] Label burn-in works
+[ ] Attribute burn-in works
+[ ] CAD layer tools work
+[ ] CAD closed-boundary polygonization works
+[ ] Raster import works
+[ ] PDF/image map workflow works where supported
+[ ] LiDAR workflow works where supported
+[ ] Survey import works
+[ ] Mining data workflow works
+[ ] Borehole KMZ generation works
+[ ] Styled KML balloons work
+[ ] Batch conversion works
+[ ] Conversion reports work
+[ ] Fidelity warnings work
+[ ] Undo/redo works
+[ ] Project save/reopen works
+[ ] Offline processing works
+[ ] Large-file processing does not freeze UI
+[ ] Security checks work
+[ ] Export validation works
+
+============================================================
+56. DEVELOPMENT PRIORITY
+============================================================
+
+PHASE 1 — FOUNDATION
+- Extension shell
+- source/target canvases
+- drag/drop
+- project model
+- universal internal model
+- file detection
+- worker architecture
+
+PHASE 2 — CORE CONVERSION
+- GeoJSON
+- KML/KMZ
+- Shapefile
+- GeoPackage
+- CSV
+- DXF
+- raster
+- LAS/LAZ where viable
+
+PHASE 3 — GIS/CAD INTELLIGENCE
+- topology
+- geometry repair
+- vertex editing
+- snapping
+- polygonization
+- attribute tools
+- burn-in
+
+PHASE 4 — SURVEY/MINING
+- survey formats
+- boreholes
+- drill holes
+- contours
+- DEM/DTM
+- mining templates
+
+PHASE 5 — PROFESSIONAL OUTPUT
+- styled KMZ
+- borehole core-log balloons
+- reports
+- fidelity engine
+- batch workflows
+
+PHASE 6 — ADVANCED INTELLIGENCE
+- dataset classification
+- anomaly detection
+- intelligent recommendations
+- workflow automation
+- command palette
+- project health
+
+============================================================
+57. NON-NEGOTIABLE RULES
+============================================================
+
+1. Do not remove existing working functionality while adding new functionality.
+2. New features must be additive unless explicitly replacing a defective implementation.
+3. Do not hard-code CRS assumptions.
+4. Do not silently change coordinates.
+5. Do not silently discard attributes.
+6. Do not silently discard Z values.
+7. Do not silently repair uncertain geometry.
+8. Always provide undo for edits.
+9. Always provide a conversion/fidelity report.
+10. Never claim unsupported formats are supported.
+11. Keep sensitive engineering/mining data local by default.
+12. Do not expose secrets in exports.
+13. Do not freeze the browser during heavy processing.
+14. Keep the main UI minimal.
+15. Advanced functionality must remain accessible through contextual panels and command search.
+16. Preserve source provenance.
+17. All geometry-changing operations must be tolerance-aware.
+18. Preview before destructive operations.
+19. Export only after validation.
+20. Test round-trip fidelity for every major converter.
+
+============================================================
+FINAL PRODUCT VISION
+============================================================
+
+The finished extension should behave like a compact browser-based:
+
+GIS Converter
++
+CAD Converter
++
+Geomatics Toolkit
++
+Survey Data Processor
++
+Cadastral Geometry Repair Tool
++
+Raster/Map Georeferencer
++
+LiDAR Utility
++
+Mining Data Converter
++
+KML/KMZ Production Studio
++
+Geometry QA/Repair Engine
++
+Smart Spatial Editor
++
+Interoperability/Fidelity Inspector
+
+The key differentiator is NOT simply the number of formats.
+
+The key differentiator is:
+
+IMPORT → UNDERSTAND → VALIDATE → REPAIR → EDIT → TRANSFORM → COMPARE → STYLE → EXPORT
+
+The extension should understand what the data represents, identify risks before conversion, preserve as much information as technically possible, and give the engineer direct control over every important transformation.
+
+Build this as an engineering-grade product with a minimal interface, powerful spatial intelligence, strong interoperability, deterministic processing, transparent diagnostics, and professional GIS/CAD/Survey/Mining output.

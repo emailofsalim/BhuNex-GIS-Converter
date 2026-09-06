@@ -16,11 +16,12 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Product | Chrome MV3 extension — GIS / geomatics / survey / CAD / LiDAR / mining converter |
 | Base project | `vendor/reference/Universal-Conveter.zip` (Flask + ODA DWG→DXF prototype) |
 | Engine donor | `vendor/reference/Geo-Studio-Pro-main.zip` (React/TS, `src/lib/*`) |
-| Spec of record | `docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt` |
+| Spec of record | `docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt` (v2.0) |
+| Owner's master doc | merged into the spec; verbatim copy at `docs/reference/MASTER_INSTRUCTIONS_AS_SUPPLIED.txt` |
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 141 across 5 suites, all green |
+| Tests | 175 across 6 suites, all green |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -44,13 +45,23 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 1 | Foundation: CIR, registry, detector, companions, ZIP, workers, state | ✅ done |
 | 2 | Core vector: CSV/survey tables, GeoJSON(+seq), KML/KMZ, GPX, WKT/WKB, Shapefile, DXF r/w, TopoJSON | ✅ done |
 | 3 | Survey/engineering: LandXML, Surpac STR, MIF/MID, GML, OSM, ASCII Grid, world files, QGIS GCP, XLSX | ✅ done |
-| 4 | Raster: full GeoTIFF codec, resampling, reprojection, DEM products | ⛔ not started — GeoTIFF stays **metadata-only** until then |
+| 4 | Raster: GeoTIFF codec ✅ (read + write); resampling/reprojection/DEM products ⛔ | 🟡 partial |
 | 5 | Point cloud: LAS ✅, LAZ codec ⛔, PLY ✅, PTS ✅, XYZ ✅, decimation ✅ | 🟡 partial |
 | 6 | Native/advanced: DWG via native host ✅; DGN/E57/GPKG/FGB/Parquet adapters ⛔ | 🟡 partial |
 | 7 | UI: workspace, side panel, popup, preview, QA report, batch | ✅ done |
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
+| 9 | Fidelity prediction, conversion report, project health (spec §22, §29) | ⛔ not started |
+| 10 | Full QA catalogue, topology rules, preview-and-apply repair (§23, §24) | ⛔ not started |
+| 11 | Vertex editor, snapping, measurement, geometry ops, attribute table (§25, §26) | ⛔ not started |
+| 12 | Label/attribute burn-in, CAD polygonisation, styled KMZ (§27, §28) | ⛔ not started |
+| 13 | Dual canvas + visual diff, command palette, workflows, project file (§30, §31) | ⛔ not started |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
+
+Phases 9–13 come from the owner's Master Build Instructions, merged into the spec
+as sections 22–31. Order is deliberate: inspection before repair, repair before
+editing, editing before automation — a workflow engine replaying an operation
+nobody can preview or undo multiplies damage instead of saving labour.
 
 > This board is rewritten at the end of every session. If it disagrees with the
 > tree, the tree wins — run `npm run verify` and correct the board.
@@ -89,9 +100,11 @@ no tiles), `state/store.ts`, `workers/`.
 
 ## Known gaps — deliberate and documented, not bugs
 
-1. **GeoTIFF is metadata-only.** Georeference/structure read; pixels not decoded.
-   Registry level `metadata-only`; raster export from such a source is refused.
-   Closing this is Phase 4.
+1. **GeoTIFF decodes uncompressed, LZW, Deflate and PackBits only.** JPEG, JPEG
+   2000, LERC, WebP and Zstandard are refused *by name*; the georeference,
+   extent and footprint of such a file are still read. Multi-IFD pyramids and
+   overviews are not read — only the first image. Resampling, raster
+   reprojection and DEM products remain Phase 4 work.
 2. **LAZ is refused, never mis-parsed.** No codec bundled, so the compressed
    payload is reported honestly (rule R5).
 3. **DWG requires the native host.** No browser-native DWG; status states surface
@@ -120,6 +133,8 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | KML writer emitted every placemark twice — the recursive folder render appended a child's placemarks, and the parent appended them again | Each node emits its own placemarks, then its child folders |
 | GeoJSON→KML lost the layer hierarchy: a multi-layer source came back as one flat layer | GeoJSON carries `_layer` as a " / "-joined path; the reader regroups on it |
 | Shapefile/MIF-MID writers returned a nested ZIP, producing a ZIP inside the batch ZIP | Writers return loose grouped members; `core/layout.ts` decides folder placement |
+| TIFF LZW widened the code one entry too late — a decoder's table always lags the encoder's by one, so ~250 entries in, every later code shifted by a bit and produced plausible-looking false terrain | Widen when the decoder's next free code reaches 510, not 511; a differential test encodes the same data with the GIF rule and asserts it does **not** decode |
+| A corrupt LZW code beyond the next free entry was accepted, storing a forward reference in the prefix chain; walking that chain never terminated and hung the conversion worker with no error | A code greater than `next` ends the decode and returns what was read |
 
 ---
 
@@ -146,16 +161,26 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 4 — GeoTIFF codec.** Uncompressed + LZW + Deflate, strips and tiles.
-   Flip the registry to `full` **in the same commit as its round-trip test**.
-2. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
+1. **Phase 9 — fidelity prediction (spec §22).** Predict loss *before* conversion
+   from the registry flags plus the actual dataset, resolved GREEN/YELLOW/RED per
+   axis, with a "show exactly what will be lost" list of counted statements. The
+   highest-value next item: it makes every existing engine more useful without
+   adding a format.
+2. **Phase 10 — QA catalogue and repair (§23, §24).** Extend `qa/topology.ts` to the
+   full defect list; every defect needs severity, location, feature id, suggested
+   repair, preview and undo before any of it is offered.
+3. **Phase 12 — burn-in (§27).** The distinctive requirement: cadastral text inside
+   polygons becomes polygon attributes. Nothing else in the tool does this, and it
+   is why CAD→GIS cadastral conversion is normally redone by hand.
+4. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter`. Until then the honest refusal stays.
-3. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
-4. **Preview** — classification colour ramps, raster band selection, layer toggles
-   in the UI (the renderer already supports per-layer visibility).
-5. **Perf** — add the measured performance test from instruction §14.2 (targets are
-   to be measured, not claimed).
-6. **Batch** — pause/resume and retry-failed controls; the pipeline already isolates
+5. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
+6. **Phase 4 remainder** — resampling, raster reprojection, contour generation,
+   clip-by-polygon, rasterize/vectorize.
+7. **Perf** — the measured performance test from spec §14.2 (targets are to be
+   measured, not claimed), and the spatial index of §14.5 in the same phase as the
+   first feature that needs it.
+8. **Batch** — pause/resume and retry-failed controls; the pipeline already isolates
    errors per file.
 
 ---
@@ -165,4 +190,5 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 | Date | Session | What landed |
 |---|---|---|
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
+| 2026-09-06 | GeoTIFF codec + spec merge | Phase 4 raster: `tiff-codec.ts` (LZW with early change, Deflate, PackBits, predictors 2/3, strips/tiles, both planar configs), `geotiff-write.ts`, registry flipped to `full` with 33 new tests. Two real defects fixed: LZW widened a code too late, and a corrupt code could hang the worker for ever. Owner's Master Build Instructions merged into the spec (v2.0): rules R17–R24, sections 21–31, phases 9–13, traceability map. 175 tests. |
 | 2026-09-06 | structure preservation | Phase 8: rule R16. `CirLayer.path` + `CirDataset.origin`, `core/layout.ts`, three output layouts wired through the pipeline / worker / batch ZIP, OSM writer added, hierarchy carried across format hops, Delivery structure tab. 141 tests (new `structure.test.ts`, 25). |
