@@ -11,6 +11,7 @@ import type { DetectionResult } from '../core/detect';
 import type { CrsRef, Warning } from '../core/cir';
 import type { FidelityReport } from '../qa/fidelity';
 import type { NamingPattern } from '../core/naming';
+import type { OutputLayout } from '../core/layout';
 import type { NativeHealth } from '../adapters/native-messaging/client';
 import type { OutputBlobFile } from '../workers/client';
 
@@ -20,6 +21,8 @@ export interface QueueItem {
   id: string;
   fileName: string;
   path: string;
+  /** Archive nesting chain, when this file came out of a ZIP. */
+  containers?: string[];
   size: number;
   bytes: Uint8Array;
   companions?: Map<string, Uint8Array>;
@@ -35,6 +38,8 @@ export interface QueueItem {
   warnings: Warning[];
   error?: { code: string; what: string; why: string; action: string };
   outputs?: OutputBlobFile[];
+  /** Every path inside the delivery, for the structure preview. */
+  tree?: string[];
   qa?: FidelityReport;
   provenance?: any;
   durationMs?: number;
@@ -68,6 +73,10 @@ export interface AppSettings {
   decimationMode: 'none' | 'nth' | 'grid' | 'voxel';
   decimationFactor: number;
   decimationCell: number;
+  /** How the delivery is shaped: one file, one per layer, or mirroring the input. */
+  outputLayout: OutputLayout;
+  /** Place each batch result under the folder its source came from. */
+  mirrorBatchTree: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -96,6 +105,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   decimationMode: 'none',
   decimationFactor: 10,
   decimationCell: 1,
+  // 'single' by default so the obvious case stays obvious: one file in, one out.
+  outputLayout: 'single',
+  mirrorBatchTree: true,
 };
 
 export interface LogEntry {

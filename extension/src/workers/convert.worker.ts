@@ -27,6 +27,9 @@ export interface TransferableFile {
   mimeType?: string;
   companions?: { extension: string; buffer: ArrayBuffer }[];
   siblingExtensions?: string[];
+  /** Path as presented, so mirror-source layout works off the main thread too. */
+  path?: string;
+  containers?: string[];
 }
 
 export type WorkerResponse =
@@ -42,6 +45,8 @@ function toInput(file: TransferableFile): ConversionInput {
       ? new Map(file.companions.map((companion) => [companion.extension, new Uint8Array(companion.buffer)]))
       : undefined,
     siblingExtensions: file.siblingExtensions,
+    path: file.path,
+    containers: file.containers,
   };
 }
 
@@ -210,6 +215,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
               detection: result.detection,
               dataset: summarise(result.sourceDataset, 2000),
               outputs,
+              tree: result.tree,
               warnings: result.warnings,
               qa: result.qa,
               provenance: result.provenance,
@@ -225,6 +231,8 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
           fileName: entry.fileName,
           buffer: entry.bytes.buffer as ArrayBuffer,
           siblingExtensions: entry.siblingExtensions,
+          path: entry.path,
+          containers: entry.containers,
         }));
         post({ id: request.id, ok: true, op: request.op, payload: files }, files.map((file) => file.buffer));
         break;

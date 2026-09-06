@@ -24,6 +24,10 @@ export interface QueuedFile {
   mimeType?: string;
   companions?: Map<string, Uint8Array>;
   siblingExtensions?: string[];
+  /** Path as presented, so the output can mirror the folder it came from. */
+  path?: string;
+  /** Archive nesting chain for a file found inside a ZIP. */
+  containers?: string[];
 }
 
 export interface OutputBlobFile {
@@ -36,6 +40,8 @@ export interface ConvertPayload {
   detection: DetectionResult;
   dataset: any;
   outputs: OutputBlobFile[];
+  /** Every path inside the delivery, before packaging — the structure preview. */
+  tree: string[];
   warnings: any[];
   qa: any;
   provenance: any;
@@ -87,7 +93,15 @@ function toTransferable(file: QueuedFile): { file: TransferableFile; transfer: A
     ? [...file.companions.entries()].map(([extension, bytes]) => ({ extension, buffer: bytes.slice().buffer }))
     : undefined;
   return {
-    file: { fileName: file.fileName, buffer, mimeType: file.mimeType, companions, siblingExtensions: file.siblingExtensions },
+    file: {
+      fileName: file.fileName,
+      buffer,
+      mimeType: file.mimeType,
+      companions,
+      siblingExtensions: file.siblingExtensions,
+      path: file.path,
+      containers: file.containers,
+    },
     transfer: [buffer, ...(companions?.map((companion) => companion.buffer) ?? [])],
   };
 }
@@ -108,6 +122,8 @@ function toInput(file: QueuedFile) {
     mimeType: file.mimeType,
     companions: file.companions,
     siblingExtensions: file.siblingExtensions,
+    path: file.path,
+    containers: file.containers,
   };
 }
 
@@ -152,6 +168,7 @@ export async function runConversion(
       detection: result.detection,
       dataset: result.sourceDataset,
       outputs: result.outputs.map((output) => ({ name: output.name, mimeType: output.mimeType, bytes: output.bytes })),
+      tree: result.tree,
       warnings: result.warnings,
       qa: result.qa,
       provenance: result.provenance,
@@ -162,6 +179,7 @@ export async function runConversion(
     detection: DetectionResult;
     dataset: any;
     outputs: { name: string; mimeType: string; buffer: ArrayBuffer }[];
+    tree: string[];
     warnings: any[];
     qa: any;
     provenance: any;
@@ -179,13 +197,27 @@ export async function runConversion(
 export async function expand(file: QueuedFile): Promise<QueuedFile[]> {
   if (file.bytes.length < WORKER_THRESHOLD_BYTES) {
     const expanded = await expandArchive(toInput(file));
-    return expanded.map((entry) => ({ fileName: entry.fileName, bytes: entry.bytes, siblingExtensions: entry.siblingExtensions }));
+    return expanded.map((entry) => ({
+      fileName: entry.fileName,
+      bytes: entry.bytes,
+      siblingExtensions: entry.siblingExtensions,
+      path: entry.path,
+      containers: entry.containers,
+    }));
   }
-  const files = await request<{ fileName: string; buffer: ArrayBuffer; siblingExtensions?: string[] }[]>((id) => {
+  const files = await request<
+    { fileName: string; buffer: ArrayBuffer; siblingExtensions?: string[]; path?: string; containers?: string[] }[]
+  >((id) => {
     const { file: transferable, transfer } = toTransferable(file);
     return { message: { id, op: 'expand', file: transferable }, transfer };
   });
-  return files.map((entry) => ({ fileName: entry.fileName, bytes: new Uint8Array(entry.buffer), siblingExtensions: entry.siblingExtensions }));
+  return files.map((entry) => ({
+    fileName: entry.fileName,
+    bytes: new Uint8Array(entry.buffer),
+    siblingExtensions: entry.siblingExtensions,
+    path: entry.path,
+    containers: entry.containers,
+  }));
 }
 
 /**

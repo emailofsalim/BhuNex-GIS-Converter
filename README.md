@@ -28,6 +28,7 @@ data — and refuses to guess when guessing would be wrong.
 | **DWG is honestly native** | It runs through a helper driving *your* ODA File Converter. A renamed DXF is never presented as a DWG. |
 | **QA means re-import** | A green PASS means the output was read back and compared. A target with no reader reports `NOT VALIDATED`, never PASS. |
 | **Repair is off by default** | Survey data is legal evidence. Geometry repair edits it, so it stays off until you switch it on, and reports every change. |
+| **Input structure = output structure** | Layers become folders, folders stay folders, and a file found two ZIPs deep is delivered under the same tree. You see the exact delivery layout before you download it. |
 
 Nothing is uploaded. `host_permissions` is empty, there is no network call in any
 conversion path, and CI fails the build if a remote resource reaches the bundle.
@@ -38,7 +39,7 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 
 ```bash
 npm ci
-npm run verify        # typecheck + 116 tests + build
+npm run verify        # typecheck + 141 tests + build
 ```
 
 Then load it in Chrome:
@@ -76,11 +77,45 @@ Full detail, with every limitation stated, is in
 
 ---
 
+## Structure in, structure out
+
+A conversion is not just a format change — the way your data is *organised* is
+part of the data. Layers, folder nesting and archive nesting all survive the trip.
+
+Choose the delivery shape in the settings panel, next to precision:
+
+| Layout | What you get |
+|---|---|
+| **Single file** | One output file. The obvious case stays obvious. |
+| **One file per layer** | Each layer becomes its own file, inside folders that reproduce the layer hierarchy. Several files are packaged as one ZIP whose folders *are* that hierarchy. |
+| **Mirror the source tree** | As above, but rooted at the folder — and the archive — the file came from. |
+
+```
+survey.zip                          Delivery.zip
+└─ Delivery/                        └─ survey/
+   └─ plots.dxf         ──────▶        └─ Delivery/
+      ├─ Boundary                         ├─ Boundary.geojson
+      ├─ Mine/Haul road                   └─ Mine/
+      └─ Mine/Bench toe                      ├─ Haul road.geojson
+                                             └─ Bench toe.geojson
+```
+
+The hierarchy is carried as path segments rather than a flattened name, so it can
+be rebuilt as **real containers** where the target supports them — nested KML
+folders, DXF layers — and as real folders where it does not. Multi-file targets
+stay loose inside the tree (`Borehole/Borehole.shp`), never a ZIP inside a ZIP.
+
+The complete delivery tree is shown in the **Delivery structure** tab before you
+download anything.
+
+---
+
 ## Layout
 
 ```
 extension/src/
-  core/       CIR, format registry, detector, units, geometry, precision, pipeline
+  core/       CIR, format registry, detector, units, geometry, precision,
+              layout (delivery structure), pipeline
   crs/        projections, bundled EPSG subset, WKT/PRJ, transform safety
   engines/    vector/ cad/ raster/ pointcloud/ survey/ archives/
   qa/         topology checks and the fidelity re-import comparison

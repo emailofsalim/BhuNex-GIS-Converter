@@ -20,7 +20,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 116 across 4 suites, all green |
+| Tests | 141 across 5 suites, all green |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -48,6 +48,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 5 | Point cloud: LAS ✅, LAZ codec ⛔, PLY ✅, PTS ✅, XYZ ✅, decimation ✅ | 🟡 partial |
 | 6 | Native/advanced: DWG via native host ✅; DGN/E57/GPKG/FGB/Parquet adapters ⛔ | 🟡 partial |
 | 7 | UI: workspace, side panel, popup, preview, QA report, batch | ✅ done |
+| 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
 
@@ -60,7 +61,8 @@ Legend: ✅ done · 🟡 partial · ⛔ not started
 
 **Core** (`extension/src/core/`) — `cir.ts`, `registry.ts`, `detect.ts` (9-layer,
 noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`,
-`naming.ts`, `errors.ts`, `hash.ts`, `pipeline.ts` (the single dispatch point).
+`naming.ts`, `errors.ts`, `hash.ts`, `layout.ts` (delivery structure),
+`pipeline.ts` (the single dispatch point).
 
 **CRS** (`extension/src/crs/`) — `projection.ts` (Snyder TM, all UTM zones, Web
 Mercator, LCC), `epsg.ts` (bundled subset, Indian zones first), `wkt.ts`
@@ -115,6 +117,30 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | Table→table conversions (CSV→XLSX) wrote a header and no rows | CSV and XLSX writers pass a `dataset.table` through verbatim |
 | `buildPrj` emitted datum `D_GCS_WGS_1984`, which no reader recognises | Geographic CS name and datum name are separate; datum regex widened |
 | FlatGeobuf was an adapter declaring neither `requiresNative` nor `requiresWasm` | Marked `requiresWasm` |
+| KML writer emitted every placemark twice — the recursive folder render appended a child's placemarks, and the parent appended them again | Each node emits its own placemarks, then its child folders |
+| GeoJSON→KML lost the layer hierarchy: a multi-layer source came back as one flat layer | GeoJSON carries `_layer` as a " / "-joined path; the reader regroups on it |
+| Shapefile/MIF-MID writers returned a nested ZIP, producing a ZIP inside the batch ZIP | Writers return loose grouped members; `core/layout.ts` decides folder placement |
+
+---
+
+## Structure preservation (rule R16) — how it works
+
+`core/layout.ts` **plans and packages only**; format bytes are still written by the
+pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
+
+- `CirLayer.path` is an array of segments, never a joined string. KML folders nest,
+  DXF layer names are flat, GML groups by feature type — the segments are what let a
+  writer rebuild real folders.
+- `CirDataset.origin` (`SourceOrigin`) records the source path, its directory and the
+  archive chain it was extracted from, so `mirror-source` works even for a file found
+  two ZIPs deep.
+- Three layouts: `single`, `per-layer`, `mirror-source` (`OutputLayout`). Exposed in the
+  workspace settings panel next to precision, and persisted in `AppSettings.outputLayout`.
+- Invariants held by the layout engine and covered by tests: one layer gets no folder;
+  one file is never wrapped in a ZIP; segments are sanitised so `../etc` cannot escape;
+  colliding paths get numeric suffixes.
+- The whole delivery tree is computed before packaging (`ConversionResult.tree`) and
+  rendered in the workspace's **Delivery structure** tab.
 
 ---
 
@@ -139,3 +165,4 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | Date | Session | What landed |
 |---|---|---|
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
+| 2026-09-06 | structure preservation | Phase 8: rule R16. `CirLayer.path` + `CirDataset.origin`, `core/layout.ts`, three output layouts wired through the pipeline / worker / batch ZIP, OSM writer added, hierarchy carried across format hops, Delivery structure tab. 141 tests (new `structure.test.ts`, 25). |
