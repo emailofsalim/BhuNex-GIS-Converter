@@ -15,6 +15,8 @@ import { detectFormat, type DetectionResult } from '../core/detect';
 import { profileDataset, type DatasetProfile, type FidelityPrediction } from '../core/predict';
 import type { DiffReport } from '../qa/diff';
 import type { GeometryOverlay } from '../qa/geometry-overlay';
+import type { ProjectHealth } from '../qa/health';
+import type { ConversionReport } from '../core/report';
 import { ConversionError } from '../core/errors';
 import type { TransferableFile, WorkerRequest, WorkerResponse } from './convert.worker';
 
@@ -53,6 +55,10 @@ export interface ConvertPayload {
   outputDataset?: any;
   /** Where the source and the output differ, for the overlay. */
   overlay?: GeometryOverlay;
+  /** Project health, assessed on the source (§29.2). */
+  health?: ProjectHealth;
+  /** The per-file conversion report (§22.4). */
+  report?: ConversionReport;
   warnings: any[];
   qa: any;
   provenance: any;
@@ -180,6 +186,10 @@ export async function runConversion(
   // exposed to workers. The heavy lifting is in the native process anyway.
   if (isDwg || file.bytes.length < WORKER_THRESHOLD_BYTES) {
     const result = await convert({ input: toInput(file), targetFormatId, settings, forcedSourceFormatId: forcedFormatId });
+    // Every field the worker path returns must be returned here too. A file
+    // under the threshold is not a lesser conversion, and a compare canvas that
+    // works on a 3 MB DXF but is empty on a 300 KB one reads as a bug in the
+    // canvas rather than as the missing hand-off it actually is.
     return {
       detection: result.detection,
       dataset: result.sourceDataset,
@@ -187,6 +197,10 @@ export async function runConversion(
       tree: result.tree,
       prediction: result.prediction,
       diff: result.diff,
+      outputDataset: result.outputDataset,
+      overlay: result.overlay,
+      health: result.health,
+      report: result.report,
       warnings: result.warnings,
       qa: result.qa,
       provenance: result.provenance,

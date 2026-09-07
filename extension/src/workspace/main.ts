@@ -64,6 +64,8 @@ import {
   revertTo,
   type HistoryState,
 } from '../core/history';
+import { buildReport, reportFiles } from '../core/report';
+import { assessHealth } from '../qa/health';
 import {
   buildProject,
   matchSources,
@@ -301,6 +303,8 @@ function buildSettings(): Partial<ConversionSettings> {
     runQa: settings.runQa,
     arcTolerance: settings.arcTolerance,
     embedMetadata: settings.embedMetadata,
+    embedReport: settings.embedReport,
+    assessHealth: settings.assessHealth,
     repair: {
       closeRings: settings.repairCloseRings,
       removeDuplicateVertices: settings.repairRemoveDuplicateVertices,
@@ -394,6 +398,8 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
       diff: result.diff,
       outputDataset: result.outputDataset,
       overlay: result.overlay,
+      health: result.health,
+      report: result.report,
       qa: result.qa,
       warnings: result.warnings,
       provenance: result.provenance,
@@ -1502,6 +1508,22 @@ function renderSettingsPanel(): void {
   common.append(
     checkbox('Run QA after conversion', state.settings.runQa, (value) => void store.patchSettings({ runQa: value }), 'Re-imports the output and compares it with the source.')
   );
+  common.append(
+    checkbox(
+      'Assess project health',
+      state.settings.assessHealth,
+      (value) => void store.patchSettings({ assessHealth: value }),
+      'Scores CRS, geometry, topology, duplicates, attributes, conversion risk and warnings, each expandable into the items behind it.'
+    )
+  );
+  common.append(
+    checkbox(
+      'Attach a conversion report',
+      state.settings.embedReport,
+      (value) => void store.patchSettings({ embedReport: value }),
+      'Adds a self-contained HTML and text report to the delivery, for whoever receives it without this tool.'
+    )
+  );
 
   // Output structure sits beside precision because it is a first-class choice,
   // not an advanced one: it decides whether the delivery is one file or a tree.
@@ -1804,6 +1826,144 @@ function numberField(label: string, value: number, step: number, onChange: (valu
 }
 
 // -------------------------------------------------------------------- bottom
+
+// --------------------------------------------------- health and the report
+
+/**
+ * The project health panel (spec §29.2).
+ *
+ * Every component is expandable into the findings that produced its number,
+ * because the spec's requirement is exactly that: "A score with no drill-down
+ * is decoration." A component that could not be evaluated says so in the place
+ * where its score would be, rather than being quietly omitted or shown as a
+ * hundred — the latter would make an unassessable dataset look like a clean one.
+ */
+function healthPanel(item: QueueItem | undefined): HTMLElement[] {
+  const wrap = element('div', { style: 'padding:12px' });
+
+  if (!item) {
+    wrap.append(element('p', { class: 'muted', text: 'Select a file to assess its health.' }));
+    return [wrap];
+  }
+
+  if (!item.health) {
+    wrap.append(
+      element('p', {
+        class: 'muted',
+        text: store.get().settings.assessHealth
+          ? 'Convert this file to assess its health — the score is computed from the same scans the conversion runs.'
+          : 'Health assessment is switched off in the settings.',
+      })
+    );
+    return [wrap];
+  }
+
+  const health = item.health;
+  const head = element('div', { class: 'qa__verdict' });
+  const tone = health.grade === 'good' ? 'ok' : health.grade === 'fair' ? 'warn' : health.grade === 'poor' ? 'error' : 'muted';
+  head.append(badge(health.score === null ? 'Not assessed' : `Health ${health.score}/100`, tone));
+  head.append(element('span', { class: 'muted', text: health.summary }));
+  wrap.append(head);
+
+  for (const component of health.components) {
+    const card = element('details', { class: 'health__component' });
+    const summary = element('summary', { class: 'health__summary' });
+    summary.append(element('span', { class: 'health__label', text: component.label }));
+
+    const scoreTone =
+      component.score === null ? 'muted' : component.score >= 85 ? 'ok' : component.score >= 60 ? 'warn' : 'fail';
+    summary.append(
+      element('span', {
+        class: `health__score health__score--${scoreTone}`,
+        text: component.score === null ? 'not evaluated' : `${component.score}/100`,
+      })
+    );
+    summary.append(element('span', { class: 'health__weight', text: `weight ${component.weight}` }));
+    if (component.findings.length > 0) {
+      summary.append(element('span', { class: 'badge badge--muted', text: `${component.findings.length}` }));
+    }
+    card.append(summary);
+
+    card.append(
+      element('p', { class: 'small faint', text: component.score === null ? (component.notEvaluatedReason ?? '') : component.method })
+    );
+
+    if (component.findings.length === 0 && component.score !== null) {
+      card.append(element('p', { class: 'small', text: 'Nothing found against this component.' }));
+    }
+
+    for (const finding of component.findings) {
+      const row = element('div', { class: `msg msg--${finding.severity === 'error' ? 'error' : finding.severity === 'warning' ? 'warn' : 'info'}` });
+      row.append(element('span', { class: 'msg__icon', text: finding.severity === 'error' ? '✕' : finding.severity === 'warning' ? '!' : 'i' }));
+      const bodyNode = element('div', { class: 'msg__body' });
+      bodyNode.append(element('div', { class: 'msg__what', text: finding.message }));
+      const where = [finding.layer ? `layer ${finding.layer}` : '', finding.featureId !== undefined ? `feature ${finding.featureId}` : '']
+        .filter(Boolean)
+        .join(', ');
+      if (where) bodyNode.append(element('div', { class: 'msg__why', text: where }));
+      if (finding.location) {
+        bodyNode.append(
+          element('div', { class: 'msg__action', text: `at ${finding.location[0].toFixed(3)}, ${finding.location[1].toFixed(3)}` })
+        );
+      }
+      row.append(bodyNode);
+      card.append(row);
+    }
+
+    wrap.append(card);
+  }
+
+  if (health.notEvaluated.length > 0) {
+    wrap.append(
+      messageBlock(
+        'info',
+        `${health.notEvaluated.join(' and ')} could not be evaluated.`,
+        `The score is a weighted mean of the components that ran, covering ${Math.round(health.coverage * 100)}% of the usual weight. An unevaluated component is excluded rather than scored full marks, so a dataset that cannot be checked never outranks one that can.`
+      )
+    );
+  }
+
+  return [wrap];
+}
+
+/**
+ * Downloads the conversion report (spec §22.4).
+ *
+ * Built here from what the item already holds rather than re-run through the
+ * pipeline, so the report describes the conversion that actually happened and
+ * not a fresh one with today's settings.
+ */
+function downloadReport(item: QueueItem): void {
+  const report = buildReport({
+    dataset: item.dataset,
+    sourceFileName: item.fileName,
+    sourceFormatName: item.detection?.formatName ?? 'unknown',
+    sourceSizeBytes: item.size,
+    sha256: item.provenance?.sha256,
+    detectionConfidence: item.detection?.confidence,
+    targetFormatName: item.targetFormatId ? (getFormat(item.targetFormatId)?.name ?? item.targetFormatId) : undefined,
+    outputPaths: item.tree,
+    outputSizeBytes: item.outputs?.reduce((sum, output) => sum + output.bytes.length, 0),
+    outputDataset: item.outputDataset,
+    prediction: item.prediction,
+    diff: item.diff,
+    qaVerdict: item.qa?.verdict,
+    qaSummary: item.qa?.summary,
+    health: item.health,
+    processing: (item.history?.entries ?? []).map((entry) => ({ label: entry.label, detail: describeEntry(entry) })),
+    warnings: item.warnings,
+    settings: store.get().settings as unknown as Record<string, unknown>,
+    durationMs: item.durationMs,
+  });
+
+  const base = item.fileName.replace(/\.[^.]+$/, '');
+  for (const file of reportFiles(report, base)) downloadBytes(file.bytes, file.name, file.mimeType);
+  store.log('ok', `Report written for ${item.fileName}.`);
+  if (report.droppedSecretFields.length > 0) {
+    store.log('warn', `${report.droppedSecretFields.length} credential-shaped field(s) were kept out of the report: ${report.droppedSecretFields.join(', ')}.`);
+  }
+  render();
+}
 
 // ------------------------------------------------- history, workflows, project
 
@@ -2281,6 +2441,11 @@ function renderBottom(): void {
 
   const item = store.selected();
 
+  if (state.bottomTab === 'health') {
+    body.append(...healthPanel(item));
+    return;
+  }
+
   if (state.bottomTab === 'history') {
     body.append(...historyPanel(item));
     return;
@@ -2715,6 +2880,48 @@ function buildCommands(): Command[] {
     enabled: Boolean(item) && canRedo(history),
     disabledReason: item ? 'There is nothing to redo.' : 'Select a queued file first.',
     run: () => item && stepHistory(item.id, history.position + 1),
+  });
+
+  commands.push({
+    id: 'show-health',
+    title: 'Show project health',
+    group: 'QA',
+    keywords: ['health', 'score', 'quality', 'audit', 'problems', 'issues', 'checklist'],
+    detail: 'One score from CRS, geometry, topology, duplicates, attributes, risk and warnings — each expandable.',
+    enabled: Boolean(item),
+    disabledReason: 'Select a queued file first.',
+    run: () => showBottomTab('health'),
+  });
+
+  commands.push({
+    id: 'assess-health-now',
+    title: 'Assess this file’s health now',
+    group: 'QA',
+    keywords: ['health', 'scan', 'assess', 'check', 'score', 'now'],
+    detail: 'Runs the scans without converting.',
+    enabled: Boolean(item?.dataset),
+    disabledReason: item ? 'This file has not been read yet.' : 'Select a queued file first.',
+    run: () => {
+      if (!item?.dataset) return;
+      // Assessed from the preview dataset the UI holds. That is a truncated
+      // view for very large files, so the panel says what it was measured on
+      // rather than implying it saw everything.
+      const health = assessHealth(item.dataset, { prediction: item.prediction });
+      store.updateItem(item.id, { health });
+      store.log(health.grade === 'poor' ? 'warn' : 'ok', `${item.fileName}: ${health.summary}`);
+      showBottomTab('health');
+    },
+  });
+
+  commands.push({
+    id: 'download-report',
+    title: 'Download the conversion report',
+    group: 'File',
+    keywords: ['report', 'document', 'html', 'deliverable', 'certificate', 'sign off', 'handover'],
+    detail: 'Source, processing, output, fidelity and QA as one self-contained document.',
+    enabled: Boolean(item?.dataset),
+    disabledReason: item ? 'This file has not been read yet.' : 'Select a queued file first.',
+    run: () => item && downloadReport(item),
   });
 
   commands.push({

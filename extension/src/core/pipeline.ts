@@ -56,6 +56,8 @@ import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
 import { predictConversion, type FidelityPrediction } from './predict';
 import { diffDatasets, type DiffReport } from '../qa/diff';
 import { buildGeometryOverlay, type GeometryOverlay } from '../qa/geometry-overlay';
+import { assessHealth, type ProjectHealth } from '../qa/health';
+import { buildReport, reportFiles, type ConversionReport } from './report';
 import { burnIn, describeBurnIn, DEFAULT_BURN_IN_OPTIONS, type BurnInOptions } from '../qa/burn-in';
 import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type PolygonizeOptions } from '../qa/polygonize';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
@@ -141,6 +143,21 @@ export interface ConversionSettings {
   /** Attach a provenance record to the output package. */
   embedMetadata?: boolean;
   /**
+   * Attach a per-file conversion report to the delivery (spec §22.4).
+   *
+   * Off by default: a report is a deliverable someone asked for, and adding two
+   * files to every conversion nobody asked about is how a tidy delivery becomes
+   * a cluttered one.
+   */
+  embedReport?: boolean;
+  /**
+   * Assess project health while converting (spec §29.2).
+   *
+   * Costs a topology scan and a defect scan over the whole dataset, so it is
+   * opt-in rather than charged to every conversion.
+   */
+  assessHealth?: boolean;
+  /**
    * How the delivery is shaped. Defaults to 'single' so a one-layer conversion
    * behaves the way anyone would expect: one file in, one file out.
    */
@@ -201,6 +218,16 @@ export interface ConversionResult {
   outputDataset?: CirDataset;
   /** Where the source and the output differ, for the overlay (§30.1). */
   overlay?: GeometryOverlay;
+  /**
+   * Project health, assessed on the SOURCE (spec §29.2).
+   *
+   * On the source rather than the output, because it is a work list for the
+   * user and the user can fix the source. Present only when asked for: it costs
+   * a topology and a defect scan.
+   */
+  health?: ProjectHealth;
+  /** The per-file conversion report (spec §22.4), when one was asked for. */
+  report?: ConversionReport;
   provenance: {
     sourceFile: string;
     sha256: string;
@@ -953,6 +980,11 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
 
   const finishedAt = new Date();
 
+  // ---- Health: assessed on the SOURCE, since that is what the user can fix.
+  // Assessing the output would report the conversion's own compromises back as
+  // defects in the data, which is the opposite of useful.
+  const health = settings.assessHealth ? assessHealth(prepared.dataset, { prediction }) : undefined;
+
   // ---- Package: one file stays loose, a tree becomes a ZIP that *is* the tree.
   const packaged = await packageOutput(deduplicated.nodes, `${baseName}.zip`);
   const outputs: OutputFile[] = packaged.files.map((node) => ({ name: node.path, bytes: node.bytes, mimeType: node.mimeType }));
@@ -983,6 +1015,31 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     });
   }
 
+  // ---- Report: the same facts as a document, for the person who receives the
+  // delivery and does not have this tool.
+  const report = settings.embedReport
+    ? buildReport({
+        dataset: sourceDataset,
+        sourceFileName: input.fileName,
+        sourceFormatName: detection.formatName,
+        sourceSizeBytes: input.bytes.length,
+        detectionConfidence: detection.confidence,
+        targetFormatName: target.name,
+        outputPaths: tree,
+        outputSizeBytes: outputs.reduce((sum, file) => sum + file.bytes.length, 0),
+        outputDataset,
+        prediction,
+        diff,
+        qaVerdict: qa.verdict,
+        qaSummary: qa.summary,
+        health,
+        warnings: collapseWarnings(warnings),
+        now: finishedAt,
+      })
+    : undefined;
+
+  if (report) outputs.push(...reportFiles(report, baseName));
+
   return {
     input,
     detection,
@@ -995,6 +1052,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     diff,
     outputDataset,
     overlay,
+    health,
+    report,
     provenance: {
       sourceFile: input.fileName,
       sha256: await sha256Hex(input.bytes),

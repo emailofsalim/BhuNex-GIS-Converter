@@ -231,6 +231,8 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
               // verdict describes rather than a separate reading of the file.
               outputDataset: result.outputDataset ? summarise(result.outputDataset, 2000) : undefined,
               overlay: result.overlay,
+              health: result.health,
+              report: result.report,
               warnings: result.warnings,
               qa: result.qa,
               provenance: result.provenance,

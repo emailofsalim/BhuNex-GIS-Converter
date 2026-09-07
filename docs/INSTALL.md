@@ -10,16 +10,64 @@ same). Everything runs on your machine — no file is uploaded anywhere.
 > **Failed to load extension**
 > **Error: Manifest file is missing or unreadable**
 
-This means the folder you selected has no `manifest.json` directly inside it.
-Almost always it is one of these three:
+Read that message carefully: it has **two** halves. The folder either has no
+`manifest.json` in it, or it has one the browser **could not read**. The second
+half is the one that catches people, and it has nothing to do with picking the
+wrong folder.
+
+### Missing — you picked the wrong folder
 
 | What you selected | Why it fails |
 |---|---|
-| The source code from the green **Code → Download ZIP** button | That is TypeScript. A browser cannot run it. It has to be built first, or you download the built package instead (Option A below). |
+| The source code from the green **Code → Download ZIP** button | That is TypeScript. A browser cannot run it. Download the built package instead (Option A below). |
 | The folder *containing* the extension folder | Load unpacked wants the folder that has `manifest.json` **in** it, not its parent. |
-| The `.zip` file itself | Browsers load a **folder**. Unzip it first. |
+| The `.zip` file itself, or the folder view Windows shows when you double-click a `.zip` | Browsers load a real **folder** on disk. Extract it first — double-clicking a ZIP only previews it. |
 
-The fix is Option A.
+### Unreadable — the file is there but the browser cannot open it
+
+**This is the usual cause on a work laptop, and OneDrive is why.**
+
+If the path in the error starts with `C:\Users\…\OneDrive` or
+`D:\OneDrive - <Your Company>`, stop and re-extract somewhere else.
+
+OneDrive's **Files On-Demand** replaces files it has synced with placeholders —
+the name is on disk, the contents are in the cloud. File Explorer hides this
+completely: the folder looks normal and `manifest.json` is listed. But Edge and
+Chrome read extension files directly, without triggering OneDrive's download,
+so they see an empty or unreadable file and report exactly the message above.
+
+The same applies to any folder that is redirected, synced or roamed by your
+organisation — Desktop, Documents and Downloads are often all inside OneDrive on
+a managed machine, which is how a perfectly good package fails to load from
+three different places in a row.
+
+**The fix — extract outside OneDrive entirely:**
+
+1. Make a plain local folder. `C:\Extensions\` is a good choice. Avoid anything
+   under `OneDrive`, `Desktop`, `Documents` or `Downloads` on a managed laptop.
+2. Extract `universal-bhunex-converter-<version>.zip` into it, so you have
+   `C:\Extensions\universal-bhunex-converter-1.0.0\manifest.json`.
+3. Load **that** folder.
+
+Keep it there permanently. The browser re-reads the folder at every start, so if
+you delete it or let it sync away, the extension stops loading.
+
+> If you must keep it in OneDrive, right-click the extracted folder →
+> **Always keep on this device**, wait for the green tick on every file, then
+> retry. Extracting outside OneDrive is more reliable and is what we recommend.
+
+### Still stuck? Confirm what the browser sees
+
+Open the folder you are selecting and check all three:
+
+- `manifest.json` is **directly inside** it — not in a subfolder.
+- Its **Size** column shows something around 1–2 KB, **not** 0 bytes.
+- Its **Status** column (if present) shows a solid green tick or no cloud icon —
+  a blue cloud outline means the contents are not on this machine.
+
+Then open `manifest.json` in Notepad. If it opens and starts with `{`, the file
+is readable and the folder is right. If Notepad shows nothing, or an error, the
+file is a placeholder — go back to the OneDrive fix above.
 
 ---
 
@@ -31,8 +79,11 @@ The fix is Option A.
    <https://github.com/emailofsalim/Universal-Converter/releases>
 2. Under the latest release, download
    `universal-bhunex-converter-<version>.zip`.
-3. **Unzip it.** Right-click → *Extract All* on Windows. Remember where it
-   extracts to.
+3. **Extract it to a plain local folder — not OneDrive.** Right-click →
+   *Extract All* on Windows, and set the destination to something like
+   `C:\Extensions\`. On a work laptop, Desktop, Documents and Downloads are
+   often inside OneDrive, and files synced there load as placeholders the
+   browser cannot read. See the OneDrive section above.
 4. Open the extensions page:
    - Chrome: `chrome://extensions`
    - Edge: `edge://extensions`
@@ -113,7 +164,9 @@ LandXML, Surpac and the rest — works without it. See
 ## Troubleshooting
 
 **"Manifest file is missing or unreadable"**
-See the table at the top. You selected a folder without `manifest.json`.
+See the top of this page. Either the folder has no `manifest.json` in it, or —
+on a work laptop, usually — the folder is inside OneDrive and the file is a
+cloud placeholder the browser cannot read. Extract to `C:\Extensions\` instead.
 
 **"Manifest version 2 is unsupported"**
 You have loaded something else. This extension is Manifest V3.
