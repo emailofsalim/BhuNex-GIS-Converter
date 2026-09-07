@@ -22,7 +22,8 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
 | Tests | 397 across 13 suites, all green |
-| Install | **Load `dist/`, never the repo root** — the root has no manifest. `docs/INSTALL.md` |
+| Install | **Load `dist/`, never the repo root.** On a managed laptop, extract outside OneDrive — `docs/INSTALL.md` |
+| Store | Package + listing ready: `npm run store:package`, `docs/STORE_LISTING.md`, `docs/PRIVACY.md` |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -110,9 +111,15 @@ no tiles), `ui/dual-canvas.ts` (source and output side by side, linked views),
 
 **Native host** — `native-host/universal_bhunex_host.py` + `install.py`.
 
-**Docs** — instruction TXT, this file, `INSTALL.md` (the manifest error and the
-three folders people select by mistake), `NATIVE_HOST.md`, `FORMAT_MATRIX.md`
+**Docs** — instruction TXT, this file, `INSTALL.md` (the manifest error, the
+three folders people select by mistake, and the OneDrive placeholder trap),
+`STORE_LISTING.md` (listing copy, permission justifications, submission steps),
+`PRIVACY.md` (required by both stores), `NATIVE_HOST.md`, `FORMAT_MATRIX.md`
 (generated from the registry; CI fails if stale).
+
+**Store tooling** — `scripts/assert-store-ready.mjs` (every rule a store rejects
+for, checked against `dist/`), `scripts/make-store-assets.mjs` (screenshots and
+promo tiles rendered by headless Chromium at exact sizes, no dependency added).
 
 ---
 
@@ -154,6 +161,8 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | TIFF LZW widened the code one entry too late — a decoder's table always lags the encoder's by one, so ~250 entries in, every later code shifted by a bit and produced plausible-looking false terrain | Widen when the decoder's next free code reaches 510, not 511; a differential test encodes the same data with the GIF rule and asserts it does **not** decode |
 | **`isClockwise` was inverted** — it returned true for counter-clockwise rings, so `orientRing(ring, true)` produced counter-clockwise output. Shapefile and MIF/MID writers asked for clockwise outer rings and got the opposite, and the shapefile reader treated counter-clockwise rings as outers. Round trips passed because reader and writer cancelled the error out; only a different application would have seen a parcel render as a void | `isClockwise` anchored to `signedArea < 0`, the shapefile reader's own inverted copy fixed, and a test that checks the written `.shp` bytes against the textbook shoelace sum rather than against our own helper |
 | Label placement took **11.8 seconds per polygon** on a thin diagonal strip — the best-first search picked its next cell by scanning the array, which is quadratic in the cell count, and that shape fills a near-square bounding box with cells that are all outside the polygon and all still plausible. Surfaced as the test suite going from 1 s to 13 s; the number that mattered was per-parcel, against a cadastral sheet of four thousand | Binary heap keyed on the cell bound (11,812 ms → 160 ms), plus precision relative to the polygon extent rather than absolute (→ ~1 ms): refining a 144-unit parcel to a millimetre bought four extra levels of subdivision to move the anchor by a distance invisible under a label metres tall. A regression test asserts the per-label cost stays under 50 ms |
+| The manifest description was 134 characters against the Chrome Web Store's silently-enforced hard limit of 132 — an automatic rejection that looks identical to a valid manifest when read | `scripts/assert-store-ready.mjs` checks it, and every other rule a store rejects for, against `dist/` in CI |
+| The store-asset renderer used full Chromium, which subtracts window chrome from `--window-size` when laying out but captures the full requested size: a 440×280 tile laid out at 440×194 and lost its lower third, while the PNG was still exactly 440×280 — so a dimension check passed and the damage was invisible | Prefer `headless_shell`, which has no chrome; `assertFullBleed()` renders a single-colour page and decodes it before any asset is made, so the failure cannot ship silently |
 | The worker path returned the re-imported output, the overlay, health and the report; the INLINE path for files under the 2 MB threshold silently returned none of them. A compare canvas that worked on a 3 MB DXF and was empty on a 300 KB one would read as a broken canvas rather than as the missing hand-off it was | The inline branch returns every field the worker branch does, with a comment saying so — a file under the threshold is not a lesser conversion |
 | The credential value pattern was case-SENSITIVE, so it matched a lower-case `bearer ` and missed `Bearer ` — the capitalisation every HTTP header uses and therefore the only one anyone ever pastes. R23 looked enforced while letting the real case through into KMZ balloons | The pattern carries the `i` flag, the detection moved to one shared `core/secrets.ts` used by the KML writer, the project file and the report, and a test asserts all three capitalisations are caught |
 | The geometry overlay matched layers by NAME, but single-layer readers name the layer after the file: `plots.geojson` is written, read back as `plots_converted_to_geojson.geojson`, and the commonest conversion there is reported every feature as simultaneously added and removed — a screen of red and green on a round trip that changed nothing | Layers pair by name first, then positionally for the leftovers when the counts on both sides are equal; the basis of each pairing is recorded in `paired` so a positional match is visible as one rather than passing for a name match |
@@ -205,6 +214,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 | Date | Session | What landed |
 |---|---|---|
+| 2026-09-07 | store readiness | Prepared publication to the Chrome Web Store and Edge Add-ons, which removes sideloading entirely: `scripts/assert-store-ready.mjs` (manifest limits, icon sizes, remote code, heavy permissions, stray `key`/`update_url`), `scripts/make-store-assets.mjs` (4 screenshots, 2 promo tiles, Edge logo, rendered by headless Chromium at exact sizes with a full-bleed guard), `docs/PRIVACY.md` and `docs/STORE_LISTING.md`. `nativeMessaging` moved to `optional_permissions` and requested from the DWG click, so a store install never demands it. Store build drops source maps: 1.1 MB → 303 KB. Two defects found: a 134-character description (a silent auto-rejection) and a renderer that clipped every asset's lower third while producing correctly-sized files. |
 | 2026-09-07 | reporting + health | Phase 9 completed: `qa/health.ts` (seven weighted components — CRS certainty, geometry, topology, duplicates, attributes, conversion risk, warnings — each expandable into locatable findings; an unevaluated component is excluded from the mean and named rather than scored full marks, so an unassessable dataset can never outrank an assessable one; deductions are proportional to the share of features affected, not the raw count) and `core/report.ts` (self-contained HTML and text, no script, no remote fetch, every value escaped, credential-scrubbed with the omission stated, attachable to the delivery). Both wired through the pipeline as opt-in stages, with a Health tab and palette commands. Fixed a hand-off gap where files under the worker threshold lost the overlay, health and report. 397 tests (`health.test.ts` new, 27). |
 | 2026-09-07 | project layer + install fix | Phase 13 completed: `core/history.ts` (reversible operation history — compact patches with a reference-equality fast path, checkpoints, branch discard, bounded with the drop reported), `core/workflow.ts` (record and replay; a step that would prompt by hand still prompts on replay, and a run with no confirmation handler refuses rather than assumes), `core/project.ts` (sources by identity not bytes, hash-based match on reopen, R23 scrub with the omission listed), `core/secrets.ts` (one definition of credential-shaped, shared), `qa/geometry-overlay.ts` + `ui/dual-canvas.ts` (source and output side by side, linked views that unlink themselves on a reprojection, the difference drawn over both). Three real defects fixed: a case-sensitive bearer-token pattern, name-only layer pairing, and a repository nobody could install. 370 tests (`project.test.ts` new, 52). |
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |

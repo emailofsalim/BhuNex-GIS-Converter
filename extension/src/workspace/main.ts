@@ -85,7 +85,12 @@ import {
 } from '../core/workflow';
 import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../crs/epsg';
 import { crsLabel } from '../crs/transform';
-import { checkNativeHealth, NATIVE_STATUS_LABEL } from '../adapters/native-messaging/client';
+import {
+  checkNativeHealth,
+  hasNativePermission,
+  requestNativePermission,
+  NATIVE_STATUS_LABEL,
+} from '../adapters/native-messaging/client';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../ui/preview';
 import {
   DEFAULT_SETTINGS,
@@ -366,6 +371,34 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
     store.log('error', `${item.fileName}: ${check.message}`);
     render();
     return;
+  }
+
+  // DWG is the one format that needs a permission, and it is optional so a
+  // store install never demands it. Asked for here — inside the click that
+  // started the conversion — because Chrome only shows the prompt on a user
+  // gesture. Refusing it fails this one file with a reason and leaves the rest
+  // of the queue untouched.
+  if ((item.forcedFormatId ?? item.detection?.formatId) === 'dwg' && !(await hasNativePermission())) {
+    const granted = await requestNativePermission();
+    if (!granted) {
+      store.updateItem(id, {
+        status: 'failed',
+        error: {
+          code: 'NATIVE_PERMISSION_DENIED',
+          what: 'DWG conversion needs permission to talk to the local helper.',
+          why: 'The permission was not granted. It is optional, so the extension does not hold it until a DWG is actually converted.',
+          action: 'Convert this file again and accept the prompt, or export the drawing to DXF in your CAD software — DXF needs no helper.',
+        },
+      });
+      store.log('warn', `${item.fileName}: DWG helper permission declined; nothing was converted.`);
+      render();
+      return;
+    }
+    // Re-probe now the permission exists, so the top bar stops saying DWG is off.
+    void checkNativeHealth().then((native) => {
+      store.set({ native });
+      render();
+    });
   }
 
   store.updateItem(id, { status: 'converting', error: undefined });

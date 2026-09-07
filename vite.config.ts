@@ -55,9 +55,13 @@ export default defineConfig({
     outDir,
     emptyOutDir: true,
     target: 'chrome116',
-    // Extension pages load from disk; a source map per chunk costs nothing at
-    // runtime and makes field bug reports readable.
-    sourcemap: true,
+    // Extension pages load from disk, so a source map per chunk costs nothing
+    // at runtime and makes a field bug report readable. They are dropped only
+    // for a store build: they are 78% of the package, and a store listing has
+    // no bug reports to symbolicate — the sideloaded and CI builds keep them.
+    //
+    // Set STORE_BUILD=1 (npm run build:store) to omit them.
+    sourcemap: process.env.STORE_BUILD !== '1',
     modulePreload: false,
     rollupOptions: {
       input: {

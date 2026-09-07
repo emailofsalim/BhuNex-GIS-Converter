@@ -46,6 +46,43 @@ function hasNativeMessaging(): boolean {
 }
 
 /**
+ * `nativeMessaging` is an OPTIONAL permission, and that is a deliberate choice.
+ *
+ * The extension is published on the Chrome Web Store and Edge Add-ons. Asking
+ * every user to grant "communicate with cooperating native applications" at
+ * install time — when only the ones converting DWG will ever use it — is both a
+ * worse install prompt and a slower review. So it is requested at the moment
+ * DWG is first used, by the one user in twenty who needs it.
+ *
+ * Everything else in the tool works without it, and must keep working: the
+ * refusal path below returns a normal, actionable error rather than breaking
+ * the conversion queue.
+ */
+export async function hasNativePermission(): Promise<boolean> {
+  if (typeof chrome === 'undefined' || !chrome.permissions?.contains) return hasNativeMessaging();
+  try {
+    return await chrome.permissions.contains({ permissions: ['nativeMessaging'] });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Asks for the native-messaging permission.
+ *
+ * MUST be called from a user gesture — Chrome refuses the prompt otherwise —
+ * which is why it is invoked from the DWG button rather than from the pipeline.
+ */
+export async function requestNativePermission(): Promise<boolean> {
+  if (typeof chrome === 'undefined' || !chrome.permissions?.request) return hasNativeMessaging();
+  try {
+    return await chrome.permissions.request({ permissions: ['nativeMessaging'] });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One request/response exchange with the helper.
  *
  * `sendNativeMessage` starts the host, delivers one message and closes the pipe,
@@ -131,6 +168,16 @@ function send(op: string, payload: Record<string, unknown> = {}, timeoutMs = 300
 export async function checkNativeHealth(): Promise<NativeHealth> {
   if (!hasNativeMessaging()) {
     return { status: 'UNKNOWN', message: 'Native messaging is not available in this context.' };
+  }
+  // Not granted is a normal state, not a failure: the permission is optional and
+  // most users never convert a DWG. Probing without it would make Chrome log a
+  // permission error on every start-up of an extension working exactly as
+  // intended.
+  if (!(await hasNativePermission())) {
+    return {
+      status: 'NOT_INSTALLED',
+      message: 'DWG support is off. Convert a DWG to grant the helper permission; every other format works without it.',
+    };
   }
   try {
     const response = await send('health', {}, 10000);
