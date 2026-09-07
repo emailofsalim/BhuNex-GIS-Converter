@@ -14,6 +14,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Repository | `emailofsalim/Universal-Converter` |
 | Working branch | `claude/gis-cad-chrome-converter-hk8uwg` |
 | Product | **Universal BhuNex Converter** — Chrome MV3 extension for GIS / geomatics / survey / CAD / LiDAR / mining |
+| Scope | **Chrome MV3 extension only.** A web app is deferred and the reasoning is recorded in `docs/SCOPE.md` — do not start one without reading it. |
 | Base project | `vendor/reference/Universal-Conveter.zip` (Flask + ODA DWG→DXF prototype) |
 | Engine donor | `vendor/reference/Geo-Studio-Pro-main.zip` (React/TS, `src/lib/*`) |
 | Spec of record | `docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt` (v2.0) |
@@ -21,7 +22,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 397 across 13 suites, all green |
+| Tests | 450 across 15 suites, all green |
 | Install | **Load `dist/`, never the repo root.** On a managed laptop, extract outside OneDrive — `docs/INSTALL.md` |
 | Store | Package + listing ready: `npm run store:package`, `docs/STORE_LISTING.md`, `docs/PRIVACY.md` |
 
@@ -54,7 +55,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
-| 11 | Vertex editor, snapping, measurement, geometry ops, attribute table (§25, §26) | ⛔ not started |
+| 11 | Measurement ✅, snapping ✅ (incl. shared edge); vertex editor, geometry ops, attribute table ⛔ (§25, §26) | 🟡 partial |
 | 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
 | 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
@@ -77,6 +78,8 @@ noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`
 `naming.ts`, `errors.ts`, `hash.ts`, `layout.ts` (delivery structure),
 `predict.ts` (fidelity prediction), `presets.ts`, `spatial-index.ts` (uniform grid),
 `history.ts` (reversible operation history), `workflow.ts` (record and replay),
+`measure.ts` (CRS-aware measurement; Vincenty on a geographic CRS, planar on a
+projected one, and it says which),
 `report.ts` (the per-file conversion report),
 `project.ts` (the project file), `secrets.ts` (one definition of credential-shaped,
 shared by every writer), `pipeline.ts` (the single dispatch point).
@@ -99,7 +102,8 @@ bow-ties, Z anomalies, crossings, dangles), `rules.ts` (ten asserted topology
 rules with dataset/layer/feature scope), `repair.ts` (plan → apply → undo, with
 protected layers), `burn-in.ts` (text inside polygons → attributes/labels),
 `label-placement.ts` (pole of inaccessibility), `polygonize.ts` (CAD line work →
-polygons), `diff.ts` (measured source-vs-output comparison),
+polygons), `snap.ts` (vertex, segment, intersection, grid and shared-edge
+snapping — nothing moves unless it is named), `diff.ts` (measured source-vs-output comparison),
 `geometry-overlay.ts` (where the differences are, for the second canvas),
 `health.ts` (the project health score, drill-down mandatory),
 `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
@@ -161,6 +165,7 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | TIFF LZW widened the code one entry too late — a decoder's table always lags the encoder's by one, so ~250 entries in, every later code shifted by a bit and produced plausible-looking false terrain | Widen when the decoder's next free code reaches 510, not 511; a differential test encodes the same data with the GIF rule and asserts it does **not** decode |
 | **`isClockwise` was inverted** — it returned true for counter-clockwise rings, so `orientRing(ring, true)` produced counter-clockwise output. Shapefile and MIF/MID writers asked for clockwise outer rings and got the opposite, and the shapefile reader treated counter-clockwise rings as outers. Round trips passed because reader and writer cancelled the error out; only a different application would have seen a parcel render as a void | `isClockwise` anchored to `signedArea < 0`, the shapefile reader's own inverted copy fixed, and a test that checks the written `.shp` bytes against the textbook shoelace sum rather than against our own helper |
 | Label placement took **11.8 seconds per polygon** on a thin diagonal strip — the best-first search picked its next cell by scanning the array, which is quadratic in the cell count, and that shape fills a near-square bounding box with cells that are all outside the polygon and all still plausible. Surfaced as the test suite going from 1 s to 13 s; the number that mattered was per-parcel, against a cadastral sheet of four thousand | Binary heap keyed on the cell bound (11,812 ms → 160 ms), plus precision relative to the polygon extent rather than absolute (→ ~1 ms): refining a 144-unit parcel to a millimetre bought four extra levels of subdivision to move the anchor by a distance invisible under a label metres tall. A regression test asserts the per-label cost stays under 50 ms |
+| The measurement tests were written against remembered reference values rather than computed ones: a degree of longitude at 23N as 102 470 m (the spherical figure, not the ellipsoidal 102 522.5), a one-degree square as 12 308 km² (ellipsoidal, against a module that computes on the authalic sphere), and a transposed digit in the published Vincenty test vector's longitude that moved the endpoint 2.7 m. All four "failures" were the test being wrong and the engine being right | Every reference value now carries the formula it comes from in a comment beside it, so the next person can check the expectation rather than trusting it |
 | The manifest description was 134 characters against the Chrome Web Store's silently-enforced hard limit of 132 — an automatic rejection that looks identical to a valid manifest when read | `scripts/assert-store-ready.mjs` checks it, and every other rule a store rejects for, against `dist/` in CI |
 | The store-asset renderer used full Chromium, which subtracts window chrome from `--window-size` when laying out but captures the full requested size: a 440×280 tile laid out at 440×194 and lost its lower third, while the PNG was still exactly 440×280 — so a dimension check passed and the damage was invisible | Prefer `headless_shell`, which has no chrome; `assertFullBleed()` renders a single-colour page and decodes it before any asset is made, so the failure cannot ship silently |
 | The worker path returned the re-imported output, the overlay, health and the report; the INLINE path for files under the 2 MB threshold silently returned none of them. A compare canvas that worked on a 3 MB DXF and was empty on a 300 KB one would read as a broken canvas rather than as the missing hand-off it was | The inline branch returns every field the worker branch does, with a comment saying so — a file under the threshold is not a lesser conversion |
@@ -194,9 +199,10 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 11 (§25, §26).** The vertex editor, cross-feature snapping and the
-   remaining repair operations — all of which inherit the plan/apply/undo contract
-   `qa/repair.ts` already defines, rather than reinventing it.
+1. **Phase 11 remainder (§25, §26).** Measurement and snapping are done. Next:
+   the vertex editor (§25.1) on top of the snap engine, the attribute table
+   (§25.5), and the geometry operations of §26.2 — all inheriting the
+   plan/apply/undo contract `qa/repair.ts` and `qa/snap.ts` already share.
 2. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter`. Until then the honest refusal stays.
 3. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
@@ -214,6 +220,9 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 | Date | Session | What landed |
 |---|---|---|
+| 2026-09-07 | scope: Chrome extension only | Scope decided and recorded in `docs/SCOPE.md`: the Chrome MV3 extension is the product, a web app is deferred with the reasoning written down (the engines are portable, but the extension apparatus is not, and a hosted page turns "nothing is uploaded" from a property of the artefact into a claim about a server's configuration). The packaged ZIP now carries `INSTALL-FIRST.txt` at its root — extracting it puts the instructions where the person is looking, including the OneDrive placeholder trap. `assert-store-ready.mjs` gained a loadability check: every file the manifest points at and every asset the pages reference must exist, which is what catches "loads but the workspace is blank"; proved by deleting a chunk and watching it fail. Version 1.0.1. |
+| 2026-09-07 | snapping | `qa/snap.ts`: vertex, segment, intersection, grid and — the one the spec singles out — shared-edge snapping. Nothing moves unless it is named: a snap takes the features it may touch, so closing the gap between two parcels cannot also drag a road centreline or a monument that happened to be within tolerance. The shared run is found by testing each vertex against the other feature's *outline* rather than by pairing vertices, so it works when the two boundaries have different vertex counts, which after a re-survey they always do. Same plan/apply/undo contract as `qa/repair.ts`, closed rings stay closed, Z is preserved, and the maximum displacement is reported before anything moves. 450 tests (`snap.test.ts` new, 21). |
+| 2026-09-07 | measurement | Phase 11 begins: `core/measure.ts` — distance, area, perimeter, bearing, azimuth, angle, slope and bearing/distance entry, each choosing its arithmetic from the CRS. Vincenty's inverse and direct solutions on a geographic CRS, planar on a projected one, and `planar-undeclared` when none is declared — carried in `Measurement.method` so a number is never read without knowing what produced it. This is the error the spec names: a degree of longitude is 111.3 km at the equator and 102.5 km at 23N, and a tool that treats degrees as a plane reports areas out by a factor that grows with latitude. 429 tests (`measure.test.ts` new, 32), anchored to published geodetic vectors rather than to the module itself. |
 | 2026-09-07 | store readiness | Prepared publication to the Chrome Web Store and Edge Add-ons, which removes sideloading entirely: `scripts/assert-store-ready.mjs` (manifest limits, icon sizes, remote code, heavy permissions, stray `key`/`update_url`), `scripts/make-store-assets.mjs` (4 screenshots, 2 promo tiles, Edge logo, rendered by headless Chromium at exact sizes with a full-bleed guard), `docs/PRIVACY.md` and `docs/STORE_LISTING.md`. `nativeMessaging` moved to `optional_permissions` and requested from the DWG click, so a store install never demands it. Store build drops source maps: 1.1 MB → 303 KB. Two defects found: a 134-character description (a silent auto-rejection) and a renderer that clipped every asset's lower third while producing correctly-sized files. |
 | 2026-09-07 | reporting + health | Phase 9 completed: `qa/health.ts` (seven weighted components — CRS certainty, geometry, topology, duplicates, attributes, conversion risk, warnings — each expandable into locatable findings; an unevaluated component is excluded from the mean and named rather than scored full marks, so an unassessable dataset can never outrank an assessable one; deductions are proportional to the share of features affected, not the raw count) and `core/report.ts` (self-contained HTML and text, no script, no remote fetch, every value escaped, credential-scrubbed with the omission stated, attachable to the delivery). Both wired through the pipeline as opt-in stages, with a Health tab and palette commands. Fixed a hand-off gap where files under the worker threshold lost the overlay, health and report. 397 tests (`health.test.ts` new, 27). |
 | 2026-09-07 | project layer + install fix | Phase 13 completed: `core/history.ts` (reversible operation history — compact patches with a reference-equality fast path, checkpoints, branch discard, bounded with the drop reported), `core/workflow.ts` (record and replay; a step that would prompt by hand still prompts on replay, and a run with no confirmation handler refuses rather than assumes), `core/project.ts` (sources by identity not bytes, hash-based match on reopen, R23 scrub with the omission listed), `core/secrets.ts` (one definition of credential-shaped, shared), `qa/geometry-overlay.ts` + `ui/dual-canvas.ts` (source and output side by side, linked views that unlink themselves on a reprojection, the difference drawn over both). Three real defects fixed: a case-sensitive bearer-token pattern, name-only layer pairing, and a repository nobody could install. 370 tests (`project.test.ts` new, 52). |

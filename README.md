@@ -38,6 +38,9 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 
 ## Install
 
+A **Chrome Manifest V3 extension**. The same package runs in **Google Chrome and
+Microsoft Edge** — both are Chromium, and nothing changes between them.
+
 > **Do not load this repository folder into your browser.** It contains
 > TypeScript, not a built extension, and there is no `manifest.json` at the
 > root — that is what produces *"Manifest file is missing or unreadable"*.
@@ -49,10 +52,13 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 2. **Extract it to a plain local folder such as `C:\Extensions\`** — browsers
    load a folder, not an archive, and a folder inside OneDrive loads as
    unreadable placeholders on a managed laptop.
-3. `chrome://extensions` (or `edge://extensions`) → turn on **Developer mode**.
-4. **Load unpacked** → select the unzipped folder, the one that directly
+3. Read `INSTALL-FIRST.txt`, which is inside the folder you just extracted.
+4. `edge://extensions` (or `chrome://extensions`) → turn on **Developer mode**.
+5. **Load unpacked** → select the unzipped folder, the one that directly
    contains `manifest.json`.
-5. Toolbar icon → **Open converter workspace**.
+6. Toolbar icon → **Open converter workspace**.
+
+Keep the folder where you put it: the browser re-reads it at every start.
 
 ### Building it yourself
 
@@ -60,14 +66,15 @@ Node 20+:
 
 ```bash
 npm ci
-npm run verify        # typecheck + 370 tests + build
+npm run verify        # typecheck + 450 tests + build
 ```
 
 Then **Load unpacked** → select **`dist/`**. Not the repository root, and not
 `extension/` — the root has no manifest and `extension/` is the source that
 `npm run build` compiles into `dist/`.
 
-`npm run package` also produces `dist-zip/universal-bhunex-converter-1.0.0.zip`.
+`npm run store:package` produces `dist-zip/universal-bhunex-converter-<version>.zip`
+— a store build with no source maps, checked against every rule the stores enforce.
 
 Seeing *"Manifest file is missing or unreadable"*? On a work laptop it is
 usually OneDrive, not the wrong folder — **[docs/INSTALL.md](docs/INSTALL.md)**
