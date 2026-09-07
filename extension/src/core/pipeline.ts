@@ -54,6 +54,7 @@ import {
 } from '../engines/pointcloud/text';
 import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
 import { predictConversion, type FidelityPrediction } from './predict';
+import { diffDatasets, type DiffReport } from '../qa/diff';
 import { burnIn, describeBurnIn, DEFAULT_BURN_IN_OPTIONS, type BurnInOptions } from '../qa/burn-in';
 import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type PolygonizeOptions } from '../qa/polygonize';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
@@ -181,6 +182,13 @@ export interface ConversionResult {
   qa: FidelityReport;
   /** What the pre-flight said this conversion would cost (spec §22). */
   prediction: FidelityPrediction;
+  /**
+   * Measured differences between the source and the re-imported output (§30.2).
+   *
+   * Absent when QA did not run or the target has no reader, because a
+   * comparison against nothing is not a comparison.
+   */
+  diff?: DiffReport;
   provenance: {
     sourceFile: string;
     sha256: string;
@@ -907,18 +915,22 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
 
   // ---- QA: re-import the bytes just written and compare.
   let qa: FidelityReport;
+  let diff: DiffReport | undefined;
   if (!settings.runQa) {
     qa = notValidated('QA was switched off in the conversion settings.');
   } else if (plan.units.length > 1) {
     // Comparing one slice against the whole source would report every other
     // layer as missing, so the check runs against the layer that was written.
-    qa = await runQa(plan.units[0].dataset, firstWritten, target, settings);
+    const checked = await runQa(plan.units[0].dataset, firstWritten, target, settings);
+    diff = checked.diff;
     qa = {
-      ...qa,
-      summary: `${qa.summary} Checked the first of ${plan.units.length} layer files; each layer is written by the same engine on the same path.`,
+      ...checked.report,
+      summary: `${checked.report.summary} Checked the first of ${plan.units.length} layer files; each layer is written by the same engine on the same path.`,
     };
   } else {
-    qa = await runQa(prepared.dataset, firstWritten, target, settings);
+    const checked = await runQa(prepared.dataset, firstWritten, target, settings);
+    qa = checked.report;
+    diff = checked.diff;
   }
 
   const finishedAt = new Date();
@@ -962,6 +974,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     warnings: collapseWarnings(warnings),
     qa,
     prediction,
+    diff,
     provenance: {
       sourceFile: input.fileName,
       sha256: await sha256Hex(input.bytes),
@@ -990,9 +1003,9 @@ async function runQa(
   files: OutputFile[],
   target: FormatDef,
   settings: ConversionSettings
-): Promise<FidelityReport> {
+): Promise<{ report: FidelityReport; diff?: DiffReport }> {
   if (target.support.import === 'none' || target.support.import === 'adapter') {
-    return notValidated(`${target.name} has no reader in this build, so the output could not be re-imported and checked.`);
+    return { report: notValidated(`${target.name} has no reader in this build, so the output could not be re-imported and checked.`) };
   }
 
   try {
@@ -1002,7 +1015,7 @@ async function runQa(
     if (target.packaging === 'zip' && target.id !== 'kmz') {
       const entries = await readZip(primary.bytes);
       const main = entries.find((entry) => entry.name.toLowerCase().endsWith(`.${target.extensions[0]}`));
-      if (!main) return notValidated('The output package did not contain a readable primary file.');
+      if (!main) return { report: notValidated('The output package did not contain a readable primary file.') };
       const companions = new Map<string, Uint8Array>();
       for (const entry of entries) {
         if (entry === main) continue;
@@ -1018,17 +1031,26 @@ async function runQa(
     // very writer, so its identity is known even if the sniffer is unsure.
     const reimported = await readSource(reimportInput, { ...detection, formatId: target.id, formatName: target.name, confidence: 1, requiresConfirmation: false }, settings);
 
-    if (source.pointcloud) return comparePointCloud(source, reimported);
-    if (source.raster) return compareRaster(source, reimported);
+    if (source.pointcloud) return { report: comparePointCloud(source, reimported) };
+    if (source.raster) return { report: compareRaster(source, reimported) };
     const prepared = source.kind === 'table' ? tableToPoints(source).dataset : source;
-    return compareVector(prepared, reimported, {
-      coordinateTolerance: settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.linearDecimals, 6),
+    const coordinateTolerance = settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.linearDecimals, 6);
+    const report = compareVector(prepared, reimported, {
+      coordinateTolerance,
       // Shapefile splits mixed geometry across files, so the count legitimately
       // differs on re-import of the primary one.
       allowFeatureCountChange: target.id === 'shapefile' || target.id === 'csv' || target.id === 'xlsx',
     });
+    // The measured comparison, computed from the same re-import rather than by
+    // reading the output a second time — so the verdict and the numbers beside
+    // it can never describe different bytes.
+    const diff = diffDatasets(prepared, reimported, {
+      coordinateTolerance,
+      featureCountTolerance: target.id === 'shapefile' || target.id === 'csv' || target.id === 'xlsx' ? Number.MAX_SAFE_INTEGER : 0,
+    });
+    return { report, diff };
   } catch (error) {
-    return notValidated(`Re-import failed: ${error instanceof Error ? error.message : String(error)}`);
+    return { report: notValidated(`Re-import failed: ${error instanceof Error ? error.message : String(error)}`) };
   }
 }
 

@@ -21,7 +21,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 290 across 10 suites, all green |
+| Tests | 317 across 11 suites, all green |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -54,7 +54,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
 | 11 | Vertex editor, snapping, measurement, geometry ops, attribute table (§25, §26) | ⛔ not started |
 | 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
-| 13 | Dual canvas + visual diff, command palette, workflows, project file (§30, §31) | ⛔ not started |
+| 13 | Measured visual diff ✅, command palette ✅, presets ✅; second canvas, workflows, project file ⛔ (§30, §31) | 🟡 partial |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
 
@@ -73,7 +73,7 @@ nobody can preview or undo multiplies damage instead of saving labour.
 **Core** (`extension/src/core/`) — `cir.ts`, `registry.ts`, `detect.ts` (9-layer,
 noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`,
 `naming.ts`, `errors.ts`, `hash.ts`, `layout.ts` (delivery structure),
-`predict.ts` (fidelity prediction), `spatial-index.ts` (uniform grid),
+`predict.ts` (fidelity prediction), `presets.ts`, `spatial-index.ts` (uniform grid),
 `pipeline.ts` (the single dispatch point).
 
 **CRS** (`extension/src/crs/`) — `projection.ts` (Snyder TM, all UTM zones, Web
@@ -94,7 +94,7 @@ bow-ties, Z anomalies, crossings, dangles), `rules.ts` (ten asserted topology
 rules with dataset/layer/feature scope), `repair.ts` (plan → apply → undo, with
 protected layers), `burn-in.ts` (text inside polygons → attributes/labels),
 `label-placement.ts` (pole of inaccessibility), `polygonize.ts` (CAD line work →
-polygons), `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
+polygons), `diff.ts` (measured source-vs-output comparison), `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
 an unreadable target can never show PASS).
 
 **UI** — `workspace/` (full page), `sidepanel/`, `popup/`, `ui/preview.ts` (canvas,
@@ -171,8 +171,9 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 13 (§30, §31).** Dual canvas with visual diff, command palette, saved
-   workflows, presets and the project file — the last unbuilt phase.
+1. **Phase 13 remainder (§30.1, §31.1, §31.2, §31.4).** The second canvas and its
+   geometry overlay, saved workflows, the project file, and a global undo history
+   spanning more than one repair. The diff engine the overlay renders is done.
 2. **Phase 9 remainder (§22.4, §29.2).** The per-file conversion report document,
    and the project health score. The prediction engine they both build on is done.
 3. **Phase 11 (§25, §26).** The vertex editor, cross-feature snapping and the
@@ -196,6 +197,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 | Date | Session | What landed |
 |---|---|---|
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
+| 2026-09-07 | workflow layer | Phase 13: `qa/diff.ts` (ten-axis measured source-vs-output comparison, computed from the QA re-import so verdict and numbers describe the same bytes), `core/presets.ts` (twelve presets, guarded so none can enable a destructive option or write KML without EPSG:4326), `ui/command-palette.ts` (Ctrl/Cmd+K, keyword-aware ranking, disabled commands shown with their reason). Compare tab added. 317 tests (`workflow.test.ts` new, 27). |
 | 2026-09-07 | mining deliverables | §28: `engines/survey/borehole.ts` joins collars to interval logs by hole id across layers and packages (Datamine/Surpac/Micromine/spreadsheet aliases), computes thickness from the depths, reports orphaned intervals and finds log gaps and overlaps. `engines/vector/kml-templates.ts` renders the core-log balloon and six field-ordering templates, escapes every value, strips credential-shaped fields and reports the omission. 290 tests (`borehole.test.ts` new, 25). |
 | 2026-09-07 | cadastral semantics | Phase 12: `qa/label-placement.ts` (pole of inaccessibility — the centroid of a C-shaped parcel falls outside it), `qa/burn-in.ts` (text inside polygons → attribute/label/geometry/CAD/KML, five tie-break rules, rejected candidates reported), `qa/polygonize.ts` (separate LINE entities → closed boundaries, gap recorded per polygon, crossing lines deliberately not noded). Both wired into the pipeline as opt-in stages and exposed as a Cadastral tools panel. 265 tests (`burnin.test.ts` new, 28). |
 | 2026-09-07 | QA catalogue + rename | Phase 10: `core/spatial-index.ts` (uniform grid), `qa/defects.ts` (11 relational detectors), `qa/rules.ts` (10 asserted rules with scope), `qa/repair.ts` (plan → apply → diff-based undo, protected layers, fix-safe-issues). Found and fixed an inverted ring-winding convention that made every shapefile and MIF/MID this tool wrote non-conforming. Product renamed to **Universal BhuNex Converter**. 237 tests (`qa.test.ts` new, 37). |
