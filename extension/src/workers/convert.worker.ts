@@ -225,6 +225,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
               outputs,
               tree: result.tree,
               prediction: result.prediction,
+              diff: result.diff,
               warnings: result.warnings,
               qa: result.qa,
               provenance: result.provenance,

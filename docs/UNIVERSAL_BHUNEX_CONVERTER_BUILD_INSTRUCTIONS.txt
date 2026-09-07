@@ -1053,8 +1053,9 @@ here:
                        borehole model and the core-log balloon - DONE; still
                        open: KML overlays, icons and template branding
                                                                (sections 27, 28)
-  PHASE 13 WORKFLOW    dual canvas with visual diff, command palette, presets,
-                       saved workflows, project file, undo history
+  PHASE 13 WORKFLOW    measured visual diff, command palette and presets -
+                       DONE; still open: the second canvas, saved workflows,
+                       the project file and a global undo history
                                                                (sections 30, 31)
 
 Each phase ends green: lint + tests + build + a loadable extension.
@@ -1112,19 +1113,29 @@ when a test covers it.
   [~] LiDAR workflow works where supported             LAS yes; LAZ refused
   [~] CAD layer tools work                             layers read/written; no
                                                        isolate/freeze/merge UI
-  [~] Geometry QA works                                qa/topology.ts subset
-  [~] Geometry repair works                            four repairs, no preview
-  [~] Export validation works                          writers refuse; no
-                                                       pre-flight report
+  [x] Geometry QA works                                defects.ts + rules.ts,
+                                                       37 tests
+  [~] Geometry repair works                            six operations with
+                                                       preview/apply/undo; the
+                                                       rest of §24.2 is open
+  [x] Export validation works                          predict.ts pre-flight
+                                                       blocks the impossible,
+                                                       counts the lossy
   [ ] Source canvas works                              single canvas today
   [ ] Target canvas works                              section 30
-  [ ] Side-by-side comparison works                    section 30
+  [~] Side-by-side comparison works                    measured on ten axes in
+                                                       the Compare tab; the
+                                                       overlay needs canvas two
   [ ] Collapse/expand behavior works                   section 30
   [ ] Vertex editor works                              section 25
   [ ] Snap works                                       section 25
   [ ] Individual shared-edge snap works                section 25
-  [ ] Overlap detection works                          section 24
-  [ ] Gap detection works                              section 24
+  [x] Overlap detection works                          defects.ts + rules.ts,
+                                                       tested
+  [~] Gap detection works                              finds gaps along
+                                                       adjacent boundaries; a
+                                                       missing parcel inside a
+                                                       coverage needs a union
   [x] Point-in-polygon detection works                 qa/burn-in.ts, tested
   [x] Text-in-polygon detection works                  qa/burn-in.ts, tested
   [x] Label burn-in works                              five modes, tested
@@ -1133,13 +1144,24 @@ when a test covers it.
   [ ] PDF/image map workflow works where supported     section 28.3
   [x] Borehole KMZ generation works                    core-log balloon, tested
   [x] Styled KML balloons work                         six templates, tested
-  [ ] Undo/redo works                                  section 31 (R19)
+  [x] Fidelity prediction works                        eleven axes before the
+                                                       conversion runs, tested
+  [x] Command palette works                            Ctrl/Cmd+K, ranked, tested
+  [x] Presets work                                     twelve, guarded by tests
+  [~] Undo/redo works                                  repair undoes exactly,
+                                                       as a diff; no global
+                                                       history yet (§31.1)
   [ ] Project save/reopen works                        section 31
 
   [x] built and tested   [~] partial, gap stated   [ ] specified, not built
 
+Standing at 28 built, 7 partial, 9 not built.
+
 This checklist is rewritten at the end of every session in the same commit as
-the work it describes. A tick that no test supports is a rule R1 violation.
+the work it describes. A tick that no test supports is a rule R1 violation - and
+so, less obviously, is a box left unticked after the work landed: a checklist
+that understates what exists stops being read, and then it stops being true in
+the other direction too.
 
 
 ================================================================================
@@ -1729,16 +1751,32 @@ other takes the space. Pan, zoom and extent synchronise, and can be unlinked.
 
 Nobody should have to export a file to discover that the conversion damaged it.
 
-30.2 VISUAL DIFF
-Compare source with output by geometry overlay, vertex difference, boundary
-difference, attribute difference, CRS, extent, point count, and area/perimeter,
-against a configured tolerance. Report in the data's units:
-  Source polygon area  1250.21 m2
-  Output polygon area  1250.20 m2
-  Difference           0.01 m2   PASS (tolerance 0.05 m2)
-This is the QA engine's existing comparison, rendered.
+30.2 VISUAL DIFF (BUILT as a measured comparison - qa/diff.ts; the geometry
+overlay itself waits on the second canvas)
+Ten axes: feature count, geometry types, vertex count, coordinates, area,
+perimeter, extent, attributes, CRS and Z range. Each reports the source value,
+the output value, the measured difference and the tolerance it was judged
+against, in the data's own units:
+  Area   100.00 sq units -> 100.01 sq units; difference 0.01 sq units. PASS
 
-30.3 NAVIGATION (PARTIAL)
+The NUMBER is the deliverable. A surveyor signing off cannot tell from "PASS"
+whether a difference is rounding or a defect, and a dump of every coordinate
+tells them nothing at all.
+
+Computed from the SAME re-import the QA verdict uses, not by reading the output
+a second time, so the verdict and the numbers beside it can never describe
+different bytes.
+
+Three behaviours worth keeping:
+  - Coordinate drift is reported only when the vertex counts match. Without a
+    correspondence there is no drift to measure, and reporting one anyway would
+    be a number that means nothing. It says so instead.
+  - Holes SUBTRACT from the area. A parcel with a 200 sq m exclusion is not
+    200 sq m larger than it is.
+  - An extent difference in the thousands is called out as almost certainly a
+    CRS mismatch, because that is what it almost always is.
+
+30.3 NAVIGATION (PARTIAL - the palette is built; the two-canvas shell is not)
 Primary navigation: PROJECT | IMPORT | CONVERT | QA | EDIT | EXPORT | SETTINGS.
 Home: drop files, recent projects, quick conversions, saved workflows.
 Status bar: CRS, units, features, vertices, file size, processing status,
@@ -1765,22 +1803,61 @@ A workflow step that would trigger a confirmation prompt when run by hand MUST
 still prompt when replayed, unless the user has explicitly marked that step
 unattended. Automation must not become a way to bypass R18.
 
-31.3 PRESETS
-CAD -> GIS; GIS -> CAD; GIS -> KML/KMZ; Survey CSV -> GIS; Borehole CSV ->
-styled KMZ; LiDAR -> DTM; LiDAR -> contours; DEM -> contours; image ->
-georeferenced GeoTIFF; cadastral DXF -> polygon GIS; polygon + point labels ->
-labelled KMZ; mine survey -> KML; drone survey -> GIS package.
+31.3 PRESETS (BUILT - core/presets.ts)
+Twelve presets for jobs people actually do: CAD -> GIS; cadastral DXF ->
+labelled polygons; GIS -> CAD; GIS -> Google Earth; cadastral -> labelled KMZ;
+borehole CSV -> styled KMZ; survey CSV -> GIS; survey -> Shapefile package;
+DEM -> GeoTIFF; point cloud -> LAS; mine survey -> KMZ; archive -> mirrored
+delivery. (LiDAR -> DTM and DEM -> contours wait on the Phase 4/5 raster and
+surface work.)
+
+A preset exists because the settings that make a job work are not obvious - the
+cadastral one needs polygonisation, burn-in, a CRS and a layout in combination -
+and expecting every user to rediscover that is how a capable tool ends up used
+as a dumb one.
+
+TWO RULES, both asserted by tests rather than left to review:
+  - NO PRESET ENABLES ANYTHING DESTRUCTIVE. None sets replaceSource, none turns
+    on a repair that moves geometry. A preset is applied WITHOUT being read, so
+    what it must never do matters more than what it does (R18).
+  - EVERY PRESET SAYS WHAT IT CHANGES, compared against the settings in force
+    rather than against the defaults: the user wants to know what is about to
+    change for them. A preset that silently rewrites eight settings is a trap
+    the next conversion springs.
+
+A further guard: any preset targeting KML or KMZ must set EPSG:4326. Projected
+coordinates written into a KML place the geometry in the wrong part of the
+world, and the file still opens - so the failure is silent.
 
 31.4 PROJECT FILE
 Saves source references, imported data, transformations, CRS, styles, edits, QA
 results, workflows and export configuration, and reopens without losing editing
 state. It MUST NOT contain credentials or tokens (R23).
 
-31.5 COMMAND PALETTE
-Ctrl/Cmd + K, searchable, configurable shortcuts: import, export, reproject,
-repair, validate, snap, burn labels, polygonize, convert CAD, generate KMZ,
-generate borehole report, generate contours, compare, measure, georeference.
-It is how advanced capability stays reachable without crowding the UI (R24).
+31.5 COMMAND PALETTE (BUILT - ui/command-palette.ts)
+Ctrl/Cmd+K. Commands are built FRESH on every open, not once at start-up,
+because most depend on what is selected: "Convert to Shapefile" is meaningless
+with nothing queued, and a palette that offers it and then fails is worse than
+one that says why it cannot.
+
+The palette is what makes R24 workable. The main screen must stay minimal and
+this tool now holds a great deal - polygonisation, burn-in, defect scanning,
+presets, CRS selection, a dozen output formats. On the surface that is the
+crowded toolbar the master document forbids; in menus it is undiscoverable. A
+searchable palette satisfies both constraints at once.
+
+RANKING IS THE FEATURE. A palette that returns the right command fifth is one
+people stop using. Scoring, highest first:
+  title prefix > title word start > title substring > keyword > group > fuzzy
+Every command carries KEYWORDS, because nobody types "Attach text to polygons" -
+they type "burn". Fuzzy matching exists as a last resort and is scored so it can
+never outrank a real match.
+
+A DISABLED COMMAND STAYS VISIBLE, ranked last, showing why it cannot run instead
+of its description. A palette that silently omits what was searched for looks
+broken, and the user retypes the same query expecting a different result.
+
+Configurable shortcuts remain open.
 
 
 ================================================================================

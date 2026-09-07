@@ -14,6 +14,7 @@ import type { NamingPattern } from '../core/naming';
 import type { OutputLayout } from '../core/layout';
 import type { DatasetProfile, FidelityPrediction } from '../core/predict';
 import type { BurnInMode, BurnInPriority } from '../qa/burn-in';
+import type { DiffReport } from '../qa/diff';
 import type { KmlTemplate } from '../engines/vector/kml-templates';
 import type { NativeHealth } from '../adapters/native-messaging/client';
 import type { OutputBlobFile } from '../workers/client';
@@ -53,6 +54,8 @@ export interface QueueItem {
   tree?: string[];
   /** What the pre-flight said this conversion would cost. */
   prediction?: FidelityPrediction;
+  /** Measured source-versus-output differences (spec §30.2). */
+  diff?: DiffReport;
   qa?: FidelityReport;
   provenance?: any;
   durationMs?: number;

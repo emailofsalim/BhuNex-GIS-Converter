@@ -46,6 +46,9 @@ import {
   type BurnInPriority,
 } from '../qa/burn-in';
 import { KML_TEMPLATE_DESCRIPTION, KML_TEMPLATE_LABEL, type KmlTemplate } from '../engines/vector/kml-templates';
+import { describePreset, presetsFor, type Preset } from '../core/presets';
+import { CommandPalette, type Command } from '../ui/command-palette';
+import { DIFF_AXIS_LABEL } from '../qa/diff';
 import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../crs/epsg';
 import { crsLabel } from '../crs/transform';
 import { checkNativeHealth, NATIVE_STATUS_LABEL } from '../adapters/native-messaging/client';
@@ -356,6 +359,7 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
       outputs: result.outputs,
       tree: result.tree,
       prediction: result.prediction,
+      diff: result.diff,
       qa: result.qa,
       warnings: result.warnings,
       provenance: result.provenance,
@@ -455,6 +459,7 @@ async function downloadBatchZip(): Promise<void> {
 // --------------------------------------------------------------------- render
 
 let preview: PreviewCanvas | null = null;
+let palette: CommandPalette | null = null;
 
 function render(): void {
   const state = store.get();
@@ -798,6 +803,9 @@ function renderInspector(): void {
       break;
     case 'fidelity':
       body.append(...fidelityTab(item));
+      break;
+    case 'compare':
+      body.append(...compareTab(item));
       break;
     case 'warnings':
       body.append(...warningsTab(item));
@@ -1149,6 +1157,66 @@ function fidelityTab(item: QueueItem): HTMLElement[] {
     'Predicted from what this data holds and what the format can store — no conversion has been run. ' +
     'Nothing here blocks the export: the trade-off is yours to make.';
   wrap.append(foot);
+  return [wrap];
+}
+
+/**
+ * Source versus output, measured (spec §30.2).
+ *
+ * The number is the deliverable here. "PASS" tells a surveyor signing off a
+ * job nothing about whether the difference is rounding or a defect, so every
+ * axis shows both values, the difference, and the tolerance it was judged
+ * against — the format the master document asks for.
+ */
+function compareTab(item: QueueItem): HTMLElement[] {
+  const wrap = element('div', { style: 'padding:12px' });
+
+  if (!item.diff) {
+    wrap.append(
+      element('p', {
+        class: 'muted',
+        text: item.qa
+          ? 'No measured comparison for this conversion — the target has no reader, so there is nothing to read back and compare against.'
+          : 'Convert the file to compare its output with the source.',
+      })
+    );
+    return [wrap];
+  }
+
+  const head = element('div', { class: 'fidelity__head' });
+  head.append(badge(item.diff.passed ? 'Matches the source' : 'Differs from the source', item.diff.passed ? 'ok' : 'warn'));
+  head.append(element('span', { class: 'fidelity__target', text: item.diff.summary }));
+  wrap.append(head);
+
+  const header = element('div', { class: 'diff__row diff__row--head' });
+  for (const label of ['Axis', 'Source', 'Output', 'Difference', '']) header.append(element('span', { text: label }));
+  wrap.append(header);
+
+  for (const entry of item.diff.entries) {
+    const row = element('div', { class: 'diff__row' });
+    row.append(element('span', { class: 'diff__axis', text: DIFF_AXIS_LABEL[entry.axis] }));
+    row.append(element('span', { class: 'diff__value', text: entry.source }));
+    row.append(element('span', { class: 'diff__value', text: entry.output }));
+    row.append(element('span', { class: 'diff__value', text: entry.difference }));
+
+    const verdict =
+      entry.verdict === 'differs' ? 'FAIL' : entry.verdict === 'not-comparable' ? 'N/A' : entry.verdict === 'identical' ? 'EXACT' : 'PASS';
+    const tone = entry.verdict === 'differs' ? 'fail' : entry.verdict === 'not-comparable' ? 'na' : 'pass';
+    const verdictNode = element('span', { class: `diff__verdict diff__verdict--${tone}`, text: verdict });
+    if (entry.tolerance) verdictNode.title = `Tolerance ${entry.tolerance}`;
+    row.append(verdictNode);
+
+    if (entry.note) row.append(element('span', { class: 'diff__note', text: entry.note }));
+    wrap.append(row);
+  }
+
+  wrap.append(
+    element('p', {
+      class: 'small faint',
+      style: 'margin-top:10px',
+      text: 'Measured against the output re-imported during QA, so these numbers describe the bytes that were actually written.',
+    })
+  );
   return [wrap];
 }
 
@@ -1845,12 +1913,173 @@ function wire(): void {
       event.preventDefault();
       void convertAll(store.get().settings.runQa);
     }
+    // Ctrl/Cmd+K, the shortcut every palette uses. Muscle memory is the whole
+    // point of matching the convention rather than inventing one.
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      palette ??= new CommandPalette($('commandPalette') as HTMLDialogElement, {
+        onRun: (command) => void command.run(),
+      });
+      palette.open(buildCommands());
+    }
   });
 
   // The format registry drives even the drop-zone hint, so it can never drift
   // from what the engines actually support.
   const importable = FORMATS.filter((format) => format.support.import === 'full').length;
   $('dropFormats').textContent = `${importable} formats read directly · Shapefile, DXF, KML/KMZ, GeoJSON, LAS, CSV/PNEZD, LandXML, Surpac STR, ASCII grid and more`;
+}
+
+/**
+ * Everything the palette can do (spec §31.5).
+ *
+ * Built fresh on every open rather than once at start-up, because most commands
+ * depend on what is selected: "Convert to Shapefile" is meaningless with nothing
+ * queued, and a palette that offers it anyway and then fails is worse than one
+ * that says why it cannot.
+ */
+function buildCommands(): Command[] {
+  const state = store.get();
+  const item = store.selected();
+  const commands: Command[] = [];
+
+  commands.push({
+    id: 'add-files',
+    title: 'Add files',
+    group: 'File',
+    keywords: ['open', 'import', 'browse', 'drop', 'load'],
+    shortcut: 'Ctrl+O',
+    // Clicks the same picker the toolbar button does, so the two can never
+    // diverge in what "Add files" means.
+    run: () => ($('filePicker') as HTMLInputElement).click(),
+  });
+
+  commands.push({
+    id: 'convert-all',
+    title: 'Convert everything in the queue',
+    group: 'Convert',
+    keywords: ['run', 'export', 'go', 'batch'],
+    shortcut: 'Ctrl+Enter',
+    enabled: state.items.length > 0,
+    disabledReason: 'Nothing is queued yet.',
+    run: () => void convertAll(state.settings.runQa),
+  });
+
+  // One command per available target, so "kmz" or "shapefile" goes straight
+  // there instead of through the format picker.
+  const kind = item?.dataset?.kind ?? 'vector';
+  for (const format of exportTargetsFor(kind)) {
+    if (!isAvailable(format, 'export', state.native.status === 'READY')) continue;
+    commands.push({
+      id: `target-${format.id}`,
+      title: `Convert to ${format.name}`,
+      group: 'Convert',
+      keywords: [...format.extensions, format.category, format.id],
+      detail: item?.profile ? summarisePrediction(predictionFor(format.id)!) : undefined,
+      enabled: Boolean(item),
+      disabledReason: 'Select a queued file first.',
+      run: () => {
+        if (item) store.updateItem(item.id, { targetFormatId: format.id });
+        else void store.patchSettings({ globalTargetFormatId: format.id });
+        render();
+      },
+    });
+  }
+
+  for (const preset of presetsFor(item?.detection?.formatId)) {
+    commands.push({
+      id: `preset-${preset.id}`,
+      title: preset.name,
+      group: 'Preset',
+      keywords: ['preset', 'workflow', 'template', ...preset.name.toLowerCase().split(/[^a-z]+/)],
+      detail: preset.purpose,
+      run: () => void applyPreset(preset),
+    });
+  }
+
+  for (const [tab, label] of [
+    ['overview', 'Overview'],
+    ['geometry', 'Geometry'],
+    ['crs', 'CRS'],
+    ['attributes', 'Attributes'],
+    ['preview', 'Preview'],
+    ['fidelity', 'What will be lost'],
+    ['compare', 'Compare source and output'],
+    ['warnings', 'Warnings'],
+  ] as [string, string][]) {
+    commands.push({
+      id: `tab-${tab}`,
+      title: `Show ${label}`,
+      group: 'View',
+      keywords: ['tab', 'panel', 'inspect', tab],
+      enabled: Boolean(item),
+      disabledReason: 'Select a queued file first.',
+      run: () => {
+        store.set({ inspectorTab: tab });
+        render();
+      },
+    });
+  }
+
+  commands.push({
+    id: 'settings',
+    title: 'Open settings',
+    group: 'View',
+    keywords: ['preferences', 'options', 'configure'],
+    run: () => openSettingsDialog(),
+  });
+  commands.push({
+    id: 'help',
+    title: 'Open help',
+    group: 'View',
+    keywords: ['about', 'docs', 'shortcuts'],
+    run: () => openHelpDialog(),
+  });
+  commands.push({
+    id: 'theme',
+    title: 'Switch theme',
+    group: 'View',
+    keywords: ['dark', 'light', 'appearance'],
+    run: () => {
+      const order: AppSettings['theme'][] = ['system', 'dark', 'light'];
+      const next = order[(order.indexOf(store.get().settings.theme) + 1) % order.length];
+      void store.patchSettings({ theme: next });
+      applyTheme(next);
+    },
+  });
+  commands.push({
+    id: 'clear-queue',
+    title: 'Clear the queue',
+    group: 'File',
+    keywords: ['remove', 'reset', 'empty'],
+    enabled: state.items.length > 0,
+    disabledReason: 'The queue is already empty.',
+    run: () => {
+      store.set({ items: [], selectedId: null });
+      render();
+    },
+  });
+
+  return commands;
+}
+
+/**
+ * Applies a preset, saying what it changed.
+ *
+ * The log line is the point: a preset that silently rewrites eight settings is
+ * a trap the next conversion springs. Listing them makes it an informed act.
+ */
+async function applyPreset(preset: Preset): Promise<void> {
+  const before = store.get().settings as unknown as Record<string, unknown>;
+  const changes = describePreset(preset, before);
+  await store.patchSettings(preset.settings as never);
+  store.log(
+    'ok',
+    changes.length > 0
+      ? `Preset "${preset.name}" applied — ${changes.join('; ')}.`
+      : `Preset "${preset.name}": every setting was already as it wants them.`
+  );
+  render();
 }
 
 async function boot(): Promise<void> {

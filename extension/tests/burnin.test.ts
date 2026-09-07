@@ -132,6 +132,26 @@ describe('label placement', () => {
     expect(anchor!.rotation).toBeCloseTo(45, 0);
   });
 
+  it('places a label on an awkward shape fast enough to do it four thousand times', () => {
+    // A thin diagonal strip fills a nearly square bounding box with cells that
+    // are all outside the polygon and all still plausible, which is the worst
+    // case for the search. Selecting the best cell by scanning made this
+    // quadratic and took eleven seconds for ONE road reserve — unusable when a
+    // cadastral sheet holds four thousand parcels. The heap made it immediate,
+    // and this guards the regression.
+    const strip: Position[] = [
+      [0, 0],
+      [141.4, 141.4],
+      [138.6, 144.2],
+      [-2.8, 2.8],
+      [0, 0],
+    ];
+    const started = Date.now();
+    for (let index = 0; index < 20; index++) labelAnchor([strip]);
+    const perLabel = (Date.now() - started) / 20;
+    expect(perLabel).toBeLessThan(50);
+  });
+
   it('reports a label that will not fit rather than hiding it', () => {
     const placed = placeLabel('SURVEY-PLOT-784/2-EXTENSION', [square(0, 0, 4)], 2.5);
     expect(placed!.overflows).toBe(true);

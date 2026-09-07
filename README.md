@@ -40,7 +40,7 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 
 ```bash
 npm ci
-npm run verify        # typecheck + 237 tests + build
+npm run verify        # typecheck + 317 tests + build
 ```
 
 Then load it in Chrome:
@@ -112,17 +112,66 @@ download anything.
 
 ---
 
+## Beyond converting
+
+Four things the tool does that a format converter normally does not.
+
+**It tells you the cost before you pay it.** Every output format is graded
+against *your* data across eleven axes — geometry, attributes, CRS, Z, style,
+labels, layers, precision, source entities, topology, metadata — before anything
+is written. The *What will be lost* tab names and counts each loss:
+
+> 3 field names exceed DBF's 10-character limit: `sample_description` →
+> `sample_des`, `collar_elevation` → `collar_ele`
+
+That is the silent join break you would otherwise find weeks later. An
+impossible target fails immediately with the reason; a merely *lossy* one
+proceeds, because what to trade away is your decision, not the tool's.
+
+**It makes a cadastral DXF usable as GIS.** A cadastral drawing holds boundaries
+as line work on one layer and plot numbers as text on another, with nothing
+linking them — which is why that conversion is normally redone by hand, plot by
+plot. Two opt-in steps fix it: separate LINE entities are assembled into closed
+boundaries (with the gap closed recorded per polygon, and anything beyond your
+tolerance left open and reported), then the text inside each parcel is attached
+to it. Labels go at the *pole of inaccessibility*, not the centroid — the
+centroid of a C-shaped parcel falls outside it, putting the plot number in the
+neighbouring plot.
+
+**It finds the defects that ruin survey data.** Overlapping parcels,
+shared-edge mismatches that become slivers on dissolve, slivers, spikes,
+bow-ties, holes outside their shell, crossing contours, dangling endpoints, and
+elevations with a transposed decimal point. Every defect names its tolerance and
+where to look. Ten topology rules can be asserted over the whole dataset, one
+layer, or a single disputed parcel. Repair is previewed before it is applied,
+undone as a diff rather than a snapshot, and refuses layers you mark legally
+operative.
+
+**It produces a borehole KMZ that opens anywhere.** Collars are joined to their
+interval logs by hole id — across files, with column aliases for Datamine,
+Surpac, Micromine and spreadsheet naming — and each balloon carries the full core
+log with any unlogged gap or overlapping record flagged beside it. Every value is
+escaped, and anything credential-shaped is withheld and reported: a KMZ gets
+emailed around.
+
+Ctrl/Cmd+K opens a command palette over all of it, so the first screen stays
+minimal.
+
+---
+
 ## Layout
 
 ```
 extension/src/
   core/       CIR, format registry, detector, units, geometry, precision,
-              layout (delivery structure), predict (fidelity), spatial index,
-              pipeline
+              layout (delivery structure), predict (fidelity), presets,
+              spatial index, pipeline
   crs/        projections, bundled EPSG subset, WKT/PRJ, transform safety
   engines/    vector/ cad/ raster/ pointcloud/ survey/ archives/
   qa/         defect catalogue, topology rules, preview-and-apply repair,
-              and the fidelity re-import comparison
+              burn-in, label placement, CAD polygonisation, the fidelity
+              re-import comparison and the measured source-vs-output diff
+  ui/         canvas preview and the command palette
   workers/    off-thread conversion
   workspace/  the full-page professional workspace
   sidepanel/  quick drop + queue
@@ -173,15 +222,23 @@ specification is
 
 ## Known gaps — documented, not hidden
 
-1. **GeoTIFF pixels are not decoded.** Georeference and structure are read; a
-   real codec is Phase 4.
+1. **GeoTIFF decodes uncompressed, LZW, Deflate and PackBits.** JPEG, JPEG 2000,
+   LERC, WebP and Zstandard are refused *by name*; the georeference, extent and
+   footprint of such a file are still read. Only the first image of a file is
+   read — overviews and multi-IFD pyramids are not.
 2. **LAZ has no bundled decoder.** The header is reported and the points are
-   refused.
+   refused, never read as uncompressed LAS.
 3. **DGN, E57, GeoPackage, FlatGeobuf, GeoParquet, File Geodatabase and vendor
    mining formats** are adapter contracts only.
 4. **Datum shifts outside the WGS 84 family** and **geoid conversions** are
    refused rather than approximated — there is no engine for them, so there is no
    UI offering them.
+5. **Gap detection finds gaps along adjacent boundaries**, not a whole missing
+   parcel inside a coverage; that needs a boolean union this build does not have,
+   and the violation text says so.
+6. **The second canvas is not built.** The source-versus-output comparison is
+   measured and reported in the Compare tab; the side-by-side geometry overlay
+   that would render it is still to come.
 
 ## Licence
 

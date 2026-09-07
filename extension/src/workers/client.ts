@@ -13,6 +13,7 @@ import type { ConversionSettings } from '../core/pipeline';
 import { convert, expandArchive, readSource } from '../core/pipeline';
 import { detectFormat, type DetectionResult } from '../core/detect';
 import { profileDataset, type DatasetProfile, type FidelityPrediction } from '../core/predict';
+import type { DiffReport } from '../qa/diff';
 import { ConversionError } from '../core/errors';
 import type { TransferableFile, WorkerRequest, WorkerResponse } from './convert.worker';
 
@@ -45,6 +46,8 @@ export interface ConvertPayload {
   tree: string[];
   /** What the pre-flight said this conversion would cost. */
   prediction: FidelityPrediction;
+  /** Measured source-versus-output differences. */
+  diff?: DiffReport;
   warnings: any[];
   qa: any;
   provenance: any;
@@ -178,6 +181,7 @@ export async function runConversion(
       outputs: result.outputs.map((output) => ({ name: output.name, mimeType: output.mimeType, bytes: output.bytes })),
       tree: result.tree,
       prediction: result.prediction,
+      diff: result.diff,
       warnings: result.warnings,
       qa: result.qa,
       provenance: result.provenance,
@@ -190,6 +194,7 @@ export async function runConversion(
     outputs: { name: string; mimeType: string; buffer: ArrayBuffer }[];
     tree: string[];
     prediction: FidelityPrediction;
+    diff?: DiffReport;
     warnings: any[];
     qa: any;
     provenance: any;
