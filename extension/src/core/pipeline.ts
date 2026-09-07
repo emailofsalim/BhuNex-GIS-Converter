@@ -53,6 +53,7 @@ import {
   type WriteTextCloudOptions,
 } from '../engines/pointcloud/text';
 import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
+import { predictConversion, type FidelityPrediction } from './predict';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
@@ -161,6 +162,8 @@ export interface ConversionResult {
   tree: string[];
   warnings: Warning[];
   qa: FidelityReport;
+  /** What the pre-flight said this conversion would cost (spec §22). */
+  prediction: FidelityPrediction;
   provenance: {
     sourceFile: string;
     sha256: string;
@@ -731,6 +734,49 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   }
   warnings.push(...sourceDataset.warnings);
 
+  // ---- Predict the cost, and refuse the conversions that cannot happen.
+  //
+  // This runs before any writing so an impossible target fails immediately with
+  // a reason, rather than partway through a batch with a writer-level error
+  // (rule R22, spec §22.3). A *lossy* target is not refused here: the loss is
+  // recorded and the conversion proceeds, because what to trade away is the
+  // engineer's decision, not this tool's.
+  const prediction = predictConversion(sourceDataset, target.id, {
+    sourceCrsEpsg: settings.sourceCrs?.epsg ?? null,
+    targetCrsEpsg: settings.targetCrs?.epsg ?? null,
+    preserveZ: settings.preserveZ,
+    precisionDecimals:
+      settings.precision.mode === 'fixed'
+        ? sourceDataset.crs?.kind === 'geographic'
+          ? settings.precision.geographicDecimals
+          : settings.precision.linearDecimals
+        : undefined,
+  });
+  if (prediction.blocked) {
+    const blocker = prediction.blockers[0];
+    throw new ConversionError({
+      code: blocker?.code ?? 'EXPORT_BLOCKED',
+      what: blocker?.statement ?? `${target.name} cannot be written from this source.`,
+      why: 'The pre-flight check compares what the source holds against what the target format can store.',
+      action: blocker?.remedy ?? 'Choose a different target format.',
+      detail: blocker?.detail,
+    });
+  }
+  for (const finding of prediction.findings) {
+    if (finding.grade !== 'red') continue;
+    // Predicted losses are raised as warnings up front, so the user sees them
+    // in the same list as the ones the writers report afterwards.
+    warnings.push(
+      warn(`PREDICTED_${finding.code}`, finding.statement, {
+        severity: 'warning',
+        count: finding.count,
+        reason: `Predicted before conversion from what ${target.name} can store.`,
+        action: finding.remedy,
+        detail: finding.detail,
+      })
+    );
+  }
+
   const prepared = prepare(sourceDataset, target, settings);
   warnings.push(...prepared.warnings);
 
@@ -831,6 +877,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     tree,
     warnings: collapseWarnings(warnings),
     qa,
+    prediction,
     provenance: {
       sourceFile: input.fileName,
       sha256: await sha256Hex(input.bytes),
@@ -988,3 +1035,5 @@ export async function expandArchive(input: ConversionInput): Promise<ConversionI
 }
 
 export { rasterFootprint };
+export { predictConversion, rankTargets, validateExport, summarisePrediction } from './predict';
+export type { FidelityPrediction, FidelityFinding, FidelityGrade, FidelityAxis } from './predict';

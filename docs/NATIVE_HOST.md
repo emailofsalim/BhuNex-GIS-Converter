@@ -1,6 +1,6 @@
 # Native engine — DWG support
 
-Everything else in Universal Geo Converter runs inside the browser. DWG cannot:
+Everything else in Universal BhuNex Converter runs inside the browser. DWG cannot:
 it is a proprietary binary format with no open reader that can be bundled, and a
 Chrome extension may not execute a native program directly.
 
@@ -57,7 +57,7 @@ To remove it: `python3 install.py --uninstall`.
 ## How a DWG conversion actually runs
 
 ```
-Extension  ──sendNativeMessage──▶  universal_geo_host.py
+Extension  ──sendNativeMessage──▶  universal_bhunex_host.py
                                         │
                                         ├─ validates the DWG magic bytes (AC10xx)
                                         ├─ writes the file into a fresh temp job dir
@@ -137,7 +137,7 @@ licence prompts. Open it once manually, dismiss the dialog, then retry.
 **Nothing happens at all** — run the helper directly to see its start-up error:
 
 ```bash
-python3 native-host/universal_geo_host.py
+python3 native-host/universal_bhunex_host.py
 ```
 
 It will wait for a length-prefixed message on stdin; a Python traceback instead

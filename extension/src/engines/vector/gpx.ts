@@ -157,7 +157,7 @@ export interface WriteGpxOptions {
 
 export const DEFAULT_GPX_OPTIONS: Omit<WriteGpxOptions, 'precision'> = {
   lineKind: 'trk',
-  creator: 'Universal Geo Converter',
+  creator: 'Universal BhuNex Converter',
 };
 
 export function writeGpx(dataset: CirDataset, options: WriteGpxOptions): { text: string; warnings: Warning[] } {
@@ -258,7 +258,7 @@ export function writeGpx(dataset: CirDataset, options: WriteGpxOptions): { text:
 
   const text =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<gpx version="1.1" creator="${xmlEscape(options.creator ?? 'Universal Geo Converter')}" xmlns="http://www.topografix.com/GPX/1/1">\n` +
+    `<gpx version="1.1" creator="${xmlEscape(options.creator ?? 'Universal BhuNex Converter')}" xmlns="http://www.topografix.com/GPX/1/1">\n` +
     `<metadata><name>${xmlEscape(dataset.name)}</name></metadata>\n` +
     waypoints.join('\n') +
     (waypoints.length && lines.length ? '\n' : '') +

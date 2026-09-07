@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Universal Geo Converter — Chrome native messaging host.
+"""Universal BhuNex Converter — Chrome native messaging host.
 
 A Chrome extension cannot execute a native converter, so DWG support runs
 through this small local helper, which drives the user's own installed ODA File
@@ -298,7 +298,7 @@ def handle(message: dict[str, Any]) -> dict[str, Any]:
     engine = engine_info(config)
 
     if operation == "ping":
-        return {"id": message_id, "ok": True, "result": {"host": "universal-geo-converter", "version": HOST_VERSION}, "engine": engine.to_dict()}
+        return {"id": message_id, "ok": True, "result": {"host": "universal-bhunex-converter", "version": HOST_VERSION}, "engine": engine.to_dict()}
 
     if operation == "health":
         return {

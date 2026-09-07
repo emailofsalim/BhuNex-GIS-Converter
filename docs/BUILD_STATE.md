@@ -1,7 +1,7 @@
-# BUILD STATE — Universal Geo Converter
+# BUILD STATE — Universal BhuNex Converter
 
 **Resumable progress ledger.** Any session (human or AI) picking this work up reads
-`docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt` first, then this file, then
+`docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt` first, then this file, then
 runs `npm ci && npm run verify`, does the next open task, updates this file, commits
 and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 
@@ -13,15 +13,15 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 |---|---|
 | Repository | `emailofsalim/Universal-Converter` |
 | Working branch | `claude/gis-cad-chrome-converter-hk8uwg` |
-| Product | Chrome MV3 extension — GIS / geomatics / survey / CAD / LiDAR / mining converter |
+| Product | **Universal BhuNex Converter** — Chrome MV3 extension for GIS / geomatics / survey / CAD / LiDAR / mining |
 | Base project | `vendor/reference/Universal-Conveter.zip` (Flask + ODA DWG→DXF prototype) |
 | Engine donor | `vendor/reference/Geo-Studio-Pro-main.zip` (React/TS, `src/lib/*`) |
-| Spec of record | `docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt` (v2.0) |
+| Spec of record | `docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt` (v2.0) |
 | Owner's master doc | merged into the spec; verbatim copy at `docs/reference/MASTER_INSTRUCTIONS_AS_SUPPLIED.txt` |
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 175 across 6 suites, all green |
+| Tests | 237 across 8 suites, all green |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -30,7 +30,7 @@ Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writer
 `parseClient.ts` (worker threshold = 2 MB), `workers/parseWorker.ts`.
 From `Universal-Conveter/Pakhar_CAD_GIS_Local_Server/`:
 `backend/services/dwg_converter.py` (ODA invocation, isolated job dirs, output
-validation) → became `native-host/universal_geo_host.py`.
+validation) → became `native-host/universal_bhunex_host.py`.
 
 The engines were **re-implemented against the CIR**, not copy-pasted: the originals
 were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model.
@@ -50,8 +50,8 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 6 | Native/advanced: DWG via native host ✅; DGN/E57/GPKG/FGB/Parquet adapters ⛔ | 🟡 partial |
 | 7 | UI: workspace, side panel, popup, preview, QA report, batch | ✅ done |
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
-| 9 | Fidelity prediction, conversion report, project health (spec §22, §29) | ⛔ not started |
-| 10 | Full QA catalogue, topology rules, preview-and-apply repair (§23, §24) | ⛔ not started |
+| 9 | Fidelity prediction ✅ + "what will be lost" ✅; conversion report doc ⛔, project health ⛔ (§22, §29) | 🟡 partial |
+| 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
 | 11 | Vertex editor, snapping, measurement, geometry ops, attribute table (§25, §26) | ⛔ not started |
 | 12 | Label/attribute burn-in, CAD polygonisation, styled KMZ (§27, §28) | ⛔ not started |
 | 13 | Dual canvas + visual diff, command palette, workflows, project file (§30, §31) | ⛔ not started |
@@ -73,6 +73,7 @@ nobody can preview or undo multiplies damage instead of saving labour.
 **Core** (`extension/src/core/`) — `cir.ts`, `registry.ts`, `detect.ts` (9-layer,
 noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`,
 `naming.ts`, `errors.ts`, `hash.ts`, `layout.ts` (delivery structure),
+`predict.ts` (fidelity prediction), `spatial-index.ts` (uniform grid),
 `pipeline.ts` (the single dispatch point).
 
 **CRS** (`extension/src/crs/`) — `projection.ts` (Snyder TM, all UTM zones, Web
@@ -82,16 +83,21 @@ Mercator, LCC), `epsg.ts` (bundled subset, Indian zones first), `wkt.ts`
 
 **Engines** — `vector/` (geojson, topojson, kml, gpx, wkt, wkb, csv, shapefile, dbf,
 gml, osm, mifmid, landxml, surpac, xlsx), `cad/` (dxf-read, dxf-write), `raster/`
-(asciigrid, worldfile, geotiff), `pointcloud/` (las, text, decimate),
+(asciigrid, worldfile, geotiff, geotiff-write, tiff-codec), `pointcloud/` (las,
+text, decimate),
 `survey/schema.ts`, `archives/zip.ts`, `xml.ts` (worker-safe XML reader).
 
-**QA** — `topology.ts`, `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists
-so an unreadable target can never show PASS).
+**QA** — `topology.ts` (per-feature checks + in-pipeline repair), `defects.ts`
+(the relational catalogue: overlaps, shared-edge mismatch, slivers, spikes,
+bow-ties, Z anomalies, crossings, dangles), `rules.ts` (ten asserted topology
+rules with dataset/layer/feature scope), `repair.ts` (plan → apply → undo, with
+protected layers), `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
+an unreadable target can never show PASS).
 
 **UI** — `workspace/` (full page), `sidepanel/`, `popup/`, `ui/preview.ts` (canvas,
 no tiles), `state/store.ts`, `workers/`.
 
-**Native host** — `native-host/universal_geo_host.py` + `install.py`.
+**Native host** — `native-host/universal_bhunex_host.py` + `install.py`.
 
 **Docs** — instruction TXT, this file, `NATIVE_HOST.md`, `FORMAT_MATRIX.md`
 (generated from the registry; CI fails if stale).
@@ -134,6 +140,7 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | GeoJSON→KML lost the layer hierarchy: a multi-layer source came back as one flat layer | GeoJSON carries `_layer` as a " / "-joined path; the reader regroups on it |
 | Shapefile/MIF-MID writers returned a nested ZIP, producing a ZIP inside the batch ZIP | Writers return loose grouped members; `core/layout.ts` decides folder placement |
 | TIFF LZW widened the code one entry too late — a decoder's table always lags the encoder's by one, so ~250 entries in, every later code shifted by a bit and produced plausible-looking false terrain | Widen when the decoder's next free code reaches 510, not 511; a differential test encodes the same data with the GIF rule and asserts it does **not** decode |
+| **`isClockwise` was inverted** — it returned true for counter-clockwise rings, so `orientRing(ring, true)` produced counter-clockwise output. Shapefile and MIF/MID writers asked for clockwise outer rings and got the opposite, and the shapefile reader treated counter-clockwise rings as outers. Round trips passed because reader and writer cancelled the error out; only a different application would have seen a parcel render as a void | `isClockwise` anchored to `signedArea < 0`, the shapefile reader's own inverted copy fixed, and a test that checks the written `.shp` bytes against the textbook shoelace sum rather than against our own helper |
 | A corrupt LZW code beyond the next free entry was accepted, storing a forward reference in the prefix chain; walking that chain never terminated and hung the conversion worker with no error | A code greater than `next` ends the decode and returns what was read |
 
 ---
@@ -161,17 +168,14 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 9 — fidelity prediction (spec §22).** Predict loss *before* conversion
-   from the registry flags plus the actual dataset, resolved GREEN/YELLOW/RED per
-   axis, with a "show exactly what will be lost" list of counted statements. The
-   highest-value next item: it makes every existing engine more useful without
-   adding a format.
-2. **Phase 10 — QA catalogue and repair (§23, §24).** Extend `qa/topology.ts` to the
-   full defect list; every defect needs severity, location, feature id, suggested
-   repair, preview and undo before any of it is offered.
-3. **Phase 12 — burn-in (§27).** The distinctive requirement: cadastral text inside
+1. **Phase 12 — burn-in (§27).** The distinctive requirement: cadastral text inside
    polygons becomes polygon attributes. Nothing else in the tool does this, and it
    is why CAD→GIS cadastral conversion is normally redone by hand.
+2. **Phase 9 remainder (§22.4, §29.2).** The per-file conversion report document,
+   and the project health score. The prediction engine they both build on is done.
+3. **Phase 11 (§25, §26).** The vertex editor, cross-feature snapping and the
+   remaining repair operations — all of which inherit the plan/apply/undo contract
+   `qa/repair.ts` already defines, rather than reinventing it.
 4. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter`. Until then the honest refusal stays.
 5. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
@@ -190,5 +194,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 | Date | Session | What landed |
 |---|---|---|
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
+| 2026-09-07 | QA catalogue + rename | Phase 10: `core/spatial-index.ts` (uniform grid), `qa/defects.ts` (11 relational detectors), `qa/rules.ts` (10 asserted rules with scope), `qa/repair.ts` (plan → apply → diff-based undo, protected layers, fix-safe-issues). Found and fixed an inverted ring-winding convention that made every shapefile and MIF/MID this tool wrote non-conforming. Product renamed to **Universal BhuNex Converter**. 237 tests (`qa.test.ts` new, 37). |
+| 2026-09-06 | fidelity prediction | Phase 9: `core/predict.ts` — eleven-axis GREEN/YELLOW/RED prediction computed before conversion, from a one-pass `DatasetProfile` so ranking 30 targets costs one walk over the features. `FormatLimits` moved the writer constraints (DBF 10-char names, 254-byte values, shapefile one-shape-type, mandated CRS, layer model) into the registry. Wired into the pipeline as a pre-flight (R22): impossible targets fail with a reason, lossy ones proceed with counted warnings. UI: fidelity badge on every format card, cards ordered by predicted fidelity, and a "What will be lost" tab with the axis grid. 199 tests (`predict.test.ts` new, 24). |
 | 2026-09-06 | GeoTIFF codec + spec merge | Phase 4 raster: `tiff-codec.ts` (LZW with early change, Deflate, PackBits, predictors 2/3, strips/tiles, both planar configs), `geotiff-write.ts`, registry flipped to `full` with 33 new tests. Two real defects fixed: LZW widened a code too late, and a corrupt code could hang the worker for ever. Owner's Master Build Instructions merged into the spec (v2.0): rules R17–R24, sections 21–31, phases 9–13, traceability map. 175 tests. |
 | 2026-09-06 | structure preservation | Phase 8: rule R16. `CirLayer.path` + `CirDataset.origin`, `core/layout.ts`, three output layouts wired through the pipeline / worker / batch ZIP, OSM writer added, hierarchy carried across format hops, Delivery structure tab. 141 tests (new `structure.test.ts`, 25). |

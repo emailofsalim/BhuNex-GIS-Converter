@@ -1,5 +1,5 @@
 ================================================================================
-UNIVERSAL GEO CONVERTER
+UNIVERSAL BHUNEX CONVERTER
 GIS / GEOMATICS / LAND SURVEY / CAD / LiDAR / MINE SURVEY CONVERSION SUITE
 CHROME MANIFEST V3 EXTENSION
 --------------------------------------------------------------------------------
@@ -57,7 +57,7 @@ to resume the build using only this file plus docs/BUILD_STATE.md.
 ================================================================================
 
 0.1 WHAT IS BEING BUILT
-Universal Geo Converter is a single Chrome MV3 extension that converts spatial
+Universal BhuNex Converter is a single Chrome MV3 extension that converts spatial
 and survey data between formats entirely on the user's own machine.
 
 Product identity, in priority order:
@@ -169,10 +169,10 @@ R24  The first screen stays minimal. Advanced capability is reached through
     tsconfig.json                strict TypeScript, path aliases
     vite.config.ts               MV3 multi-entry build -> /dist
     vitest.config.ts             node-environment test runner
-    scripts/package-extension.mjs  produces dist-zip/universal-geo-converter.zip
+    scripts/package-extension.mjs  produces dist-zip/universal-bhunex-converter.zip
     .github/workflows/ci.yml     typecheck + test + build + package artifact
     docs/
-      UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt   (this file)
+      UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt   (this file)
       BUILD_STATE.md             resumable progress ledger - update every session
       FORMAT_MATRIX.md           generated-by-hand mirror of the registry
       NATIVE_HOST.md             DWG/ODA helper install + protocol
@@ -878,7 +878,7 @@ installed ODA File Converter. This reuses the prototype's proven flow.
   Response { id, ok, result?, error?, engine: {name, version, path} }
   Progress { id, progress: 0..1, stage: string }
 
-13.3 HOST BEHAVIOUR (native-host/universal_geo_host.py)
+13.3 HOST BEHAVIOUR (native-host/universal_bhunex_host.py)
   - creates an isolated temp job directory per request, always cleaned up
   - validates that the payload is a DWG by magic bytes ('AC10'..'AC10xx')
   - invokes ODA File Converter exactly as the prototype did:
@@ -927,17 +927,27 @@ budget, refuse with:
 14.4 REPORTED METRICS
 read speed, conversion speed, output size, elapsed time, peak memory estimate.
 
-14.5 ALGORITHM SELECTION BY DATASET SIZE (STATUS: SPECIFIED, Phase 11)
+14.5 ALGORITHM SELECTION BY DATASET SIZE (STATUS: PARTIAL - the index is built)
 The engine picks the strategy; the user never has to know which:
   small       direct geometry operations
   medium      indexed spatial queries (R-tree or equivalent)
   large       tiling, chunking, streaming
   very large  progressive visualisation and selective processing
-Spatial indexing is not needed by format conversion, which is why none is built
-yet: a reader walks its input once. It becomes necessary the moment topology,
-overlap detection, snapping and burn-in arrive, because each of those is a
-pairwise query that is quadratic without an index. The index therefore lands in
-the same phase as the first feature that needs it, not before.
+Spatial indexing is not needed by format conversion: a reader walks its input
+once. It became necessary the moment topology and overlap detection arrived,
+because each is a pairwise query that is quadratic without one - 40,000 parcels
+is 800 million comparisons unindexed and a few hundred thousand indexed. It
+therefore landed in the same phase as the first feature that needed it, not
+before.
+
+core/spatial-index.ts is a uniform grid, not an R-tree, deliberately: it
+bulk-loads in one pass with no balancing, so it is cheap enough to build per
+check rather than maintain across edits; and its behaviour stays predictable
+when boxes overlap heavily, which is exactly what cadastral parcels and contour
+lines look like. A feature far larger than the rest goes in an oversized list
+scanned on every query - correct, and slower only for the few that deserve it.
+
+Tiling and streaming for very large datasets remain open.
 
 
 ================================================================================
@@ -997,7 +1007,7 @@ without a corresponding round-trip or read test. This is what keeps R1 true.
   4. npm run lint      (tsc --noEmit, strict)
   5. npm test          (vitest)
   6. npm run build     (vite -> dist/)
-  7. npm run package   (dist-zip/universal-geo-converter.zip)
+  7. npm run package   (dist-zip/universal-bhunex-converter.zip)
   8. upload the packaged extension as a build artifact
 A red CI is a broken build. The artifact from a green run is directly loadable
 with chrome://extensions -> Load unpacked (dist/) or as the packaged zip.
@@ -1030,10 +1040,12 @@ the phases above do not cover. It is specified in sections 22-30 and scheduled
 here:
 
   PHASE 9  INSPECT     interoperability matrix with GREEN/YELLOW/RED fidelity
-                       prediction, "show exactly what will be lost", conversion
-                       report, project health score            (sections 22, 29)
-  PHASE 10 QA/REPAIR   full defect catalogue, configurable topology rules,
-                       preview-and-apply repair with undo, fix-safe-issues
+                       prediction and "show exactly what will be lost" - DONE;
+                       still open: per-file conversion report document and the
+                       project health score                    (sections 22, 29)
+  PHASE 10 QA/REPAIR   defect catalogue, topology rules, preview-and-apply
+                       repair with undo, fix-safe-issues, spatial index - DONE;
+                       still open: the remaining repair operations in 24.2
                                                                (sections 23, 24)
   PHASE 11 EDIT        vertex editor, snapping, measurement, advanced geometry
                        operations, attribute table              (sections 25, 26)
@@ -1152,7 +1164,7 @@ Every section of the supplied Master Build Instructions, and where it lives now.
   2 universal internal data model    3 (CIR), 22.1 (provenance)    PARTIAL
   3 maximum import support           4.3 target matrix             PARTIAL
   4 maximum export support           4.3 target matrix             PARTIAL
-  5 interoperability matrix          22                            SPECIFIED
+  5 interoperability matrix          22                            BUILT
   6 CRS and geodesy intelligence     6                             PARTIAL
   7 smart geometry QA engine         23                            PARTIAL
   8 smart topology engine            23.2                          SPECIFIED
@@ -1210,11 +1222,11 @@ Every section of the supplied Master Build Instructions, and where it lives now.
 ================================================================================
 22. FIDELITY PREDICTION AND THE CONVERSION CENTRE
 ================================================================================
-STATUS: SPECIFIED (prediction); PARTIAL (reporting after the fact). Phase 9.
+STATUS: BUILT (core/predict.ts, tests/predict.test.ts). PARTIAL for the report
+document itself, which is still the batch manifest rather than a per-file page.
 
-Today the tool reports loss *after* a conversion, in warnings and the QA report.
-The master document requires it *before*, so the engineer chooses a target with
-the cost in view. That is the gap this section closes.
+Loss is now stated BEFORE a conversion runs, so the engineer chooses a target
+with the cost in view rather than discovering it in the QA report afterwards.
 
 22.1 PROVENANCE (R20)
 Every CIR object carries: source file, source layer, source entity/feature id,
@@ -1223,7 +1235,7 @@ Partly built - sourceLayer, sourceEntity and sourceHandle already survive a
 DXF -> GeoJSON -> DXF round trip. Still missing: original coordinates retained
 alongside transformed ones, and the per-object transformation log.
 
-22.2 THE PREDICTION
+22.2 THE PREDICTION (BUILT)
 Given (source CIR, target format) compute, without converting:
   geometry compatibility     curves, 3D, M, multipart, geometry collections
   attribute compatibility    field count, name length, type width, encoding
@@ -1237,19 +1249,57 @@ Given (source CIR, target format) compute, without converting:
   metadata loss risk
 
 Every axis resolves to GREEN (faithful), YELLOW (partial), or RED (loss), and
-every non-GREEN axis MUST name the count and the entity or field involved. The
-registry already holds the capability flags this needs; what is missing is the
-comparison against the actual dataset.
+every non-GREEN axis MUST name the count and the entity or field involved.
 
-22.3 "SHOW EXACTLY WHAT WILL BE LOST"
-A dialog listing every predicted loss as a countable statement -
+Two design decisions carry this section:
+
+  ONE PASS, MANY TARGETS. profileDataset() walks the features once and produces
+  a DatasetProfile; predictFromProfile() compares that profile against a format.
+  Ranking thirty candidates therefore costs one pass, not thirty. It is also
+  what lets the worker profile a dataset where the full CIR lives and hand the
+  UI something it can predict from - the UI only ever receives a truncated
+  feature preview, so predicting there would report counts that are quietly
+  wrong, which is worse than reporting nothing.
+
+  THE REGISTRY HOLDS THE LIMITS. FormatLimits carries what the capability
+  booleans cannot express: DBF's 10-character field names and 254-byte values,
+  shapefile's one-shape-type-per-file, GeoJSON's mandated EPSG:4326, GPX's
+  point-and-line-only geometry, each format's layer model, whether style and
+  labels survive. Putting them in the registry rather than the predictor keeps
+  one source of truth about what a format can hold (R1).
+
+A finding that cannot name its subject is not raised. "Some attributes may be
+truncated" teaches users to ignore the panel; "3 field names exceed DBF's
+10-character limit: sample_description -> sample_des, collar_elevation ->
+collar_ele" is something a surveyor acts on, because it is exactly the silent
+break that ruins a downstream join weeks later.
+
+Precision is graded by GROUND DISTANCE, not by decimal count. Three decimals of
+a metre is a millimetre and passes silently; three decimals of a degree is about
+111 m and is reported. The same number means entirely different things, and a
+predictor that reported "3 decimal places" for both would be useless.
+
+22.3 "SHOW EXACTLY WHAT WILL BE LOST" (BUILT)
+A workspace tab - not a modal - listing every predicted loss as a countable
+statement -
 "17 ARC entities will be densified at 0.01 m sagitta", "field
 `sample_description` will be truncated to 10 characters in DBF" - with the
-option to change target, change setting, or proceed knowingly.
+the axis grid above it, so "geometry is fine, only attributes suffer" is
+readable without going through every row. It is a tab rather than a modal
+because choosing a format IS the comparison: the user sits in it and switches
+targets. The format cards each carry the verdict for the selected data, and the
+list is ordered by it (spec §25.3).
 
-Export validation (R22) runs the same engine: geometry, CRS, attribute,
-coordinate-range, naming and encoding checks resolve to READY TO EXPORT or
-EXPORT BLOCKED with exact reasons.
+Export validation (R22) runs the same engine, in the pipeline, before any writer
+is called: an impossible target fails immediately with a reason instead of
+failing halfway through a batch with a writer-level error.
+
+WHAT BLOCKS AND WHAT DOES NOT. Only genuine impossibility blocks: a target this
+build cannot write, an adapter whose engine is absent, a data-kind pairing no
+engine bridges. A RED finding is a LOSS, and loss does not block - it is a cost
+the engineer is entitled to accept, and refusing it would be this tool deciding
+what someone may do with their own data. Predicted losses are raised as warnings
+up front so they sit in the same list as the ones writers report afterwards.
 
 22.4 CONVERSION REPORT
 Source (name, format, size, CRS, units, layers, feature count), processing
@@ -1262,28 +1312,76 @@ same data rendered for one file.
 ================================================================================
 23. GEOMETRY QA, TOPOLOGY AND SPATIAL RELATIONSHIPS
 ================================================================================
-STATUS: PARTIAL. qa/topology.ts implements a subset. Phase 10.
+STATUS: BUILT (qa/defects.ts, qa/rules.ts, tests/qa.test.ts). The canvas
+interaction that lets a user click a defect and see it is Phase 11.
 
 23.1 DEFECT CATALOGUE
-Built: unclosed rings, duplicate and consecutive-duplicate vertices,
-zero-length segments, ring orientation, self-intersection, duplicate features.
-Specified: bow-ties, invalid rings, sliver polygons, spikes, overshoots,
-undershoots, gaps, overlaps, multipart inconsistency, nested polygons, invalid
-holes, hole outside shell, nearly coincident vertices, near-duplicate
-geometries, dangling lines, unconnected endpoints, crossing lines,
-polygon/line and polygon/point conflicts, Z anomalies, coordinate outliers.
+qa/topology.ts checks a feature against ITSELF - unclosed rings, duplicate and
+consecutive-duplicate vertices, zero-length segments, ring orientation,
+self-intersection, duplicate features.
 
-Every defect MUST carry: severity, location, feature id, explanation, suggested
-repair, preview, apply, undo. A defect the user cannot locate on the canvas is
-not reported usefully.
+qa/defects.ts checks features against EACH OTHER, which is where cadastral and
+mine-survey data actually goes wrong. Built: sliver polygons, spikes, bow-ties,
+hole outside shell, Z anomalies, polygon overlaps, shared-edge mismatch, nested
+polygons, near-duplicate geometry, crossing lines, dangling endpoints.
 
-23.2 CONFIGURABLE TOPOLOGY RULES
+Three rules govern every detector:
+
+  LOCATABLE. Severity, layer, feature id and a position. A defect the user
+  cannot go and look at is a statistic, not a finding.
+
+  NAMES ITS TOLERANCE. "These parcels overlap" is meaningless without "by more
+  than 0.01 m". A millimetre is survey noise; a metre is a boundary dispute. The
+  threshold is stated in the finding and is always the user's to set (R21).
+
+  DETECTS ONLY. Detection and repair are separate modules so that a scan can be
+  run for information alone, and so a legally operative boundary can be
+  inspected without being touched (R18).
+
+Three implementation decisions worth keeping:
+
+  Slivers are found by THINNESS, not by area. The Polsby-Popper ratio
+  4*pi*area/perimeter^2 is 1 for a circle and near 0 for a strip. A 0.2 sq m
+  survey monument pad is small and valid; a 0.2 sq m strip 40 m long is an
+  artefact. Testing area alone flags every small legitimate parcel.
+
+  Z anomalies use the MEDIAN and MEDIAN ABSOLUTE DEVIATION, not the mean and
+  standard deviation. A single transposed decimal - 4123.45 for 412.345 -
+  inflates the standard deviation so far that it drags the threshold past
+  itself and goes unreported. That masking effect defeats the exact blunder the
+  check exists to catch.
+
+  Shared-edge mismatch is measured VERTEX TO SEGMENT, not vertex to vertex. The
+  usual case is one parcel carrying an extra vertex that bulges a few
+  millimetres into the other's straight edge; there is no opposing vertex near
+  it, so a vertex-to-vertex test finds nothing and the sliver survives to the
+  dissolve.
+
+Pairwise checks run through core/spatial-index.ts. Above maxPairwiseFeatures
+they are REFUSED with the count and the reason - never silently reduced to a
+subset that reports a clean result which is not.
+
+23.2 CONFIGURABLE TOPOLOGY RULES (BUILT - qa/rules.ts)
 Must not overlap; must not have gaps; must contain; must be within; must touch;
 must be covered by; must not self-intersect; shared boundaries must match;
 lines must connect; polygons must close.
 
-Scope is selectable: whole dataset, one layer, selected features, one parcel.
-Global repair MUST NOT be forced when the user asked to fix one feature.
+A rule differs from a defect: a defect is a suspicion a heuristic raises, a rule
+is a standard the USER asserts, so a violation is a failure against their stated
+intent. Both are reported; only rules can be said to pass or fail.
+
+Scope is part of every rule: whole dataset, one layer, or named features. A
+surveyor fixing one disputed boundary runs "must not overlap" on that parcel and
+gets two violations, not four thousand. Forcing whole-dataset evaluation is how
+tools push people into global repairs they never wanted (R18).
+
+A rule that CANNOT be evaluated - a relational rule with no second layer, an
+empty scope - reports notEvaluated with the reason. It MUST NOT report "passed":
+a rule that did not run has not been satisfied.
+
+"Must not have gaps" finds gaps along adjacent boundaries. It does NOT find an
+entire missing parcel inside a coverage, which needs a boolean union this build
+does not have, and the violation text says so rather than implying wider cover.
 
 23.3 OVERLAP AND GAP INTELLIGENCE
 Classify each pair: overlaps, contains, touches, crosses, separated, gap.
@@ -1296,27 +1394,57 @@ Legal boundaries are never modified without explicit per-operation confirmation
 ================================================================================
 24. GEOMETRY REPAIR
 ================================================================================
-STATUS: PARTIAL. Four repairs exist, all off by default. Phase 10.
+STATUS: BUILT for the preview/apply/undo contract and six operations
+(qa/repair.ts). The remaining operations in 24.2 are Phase 11, and they inherit
+the contract rather than reinventing it.
 
-24.1 BUILT
-Close rings, remove duplicate vertices, normalise orientation, deduplicate
-features - each off by default, each counted when applied.
+24.1 THE CONTRACT
+qa/topology.ts repairs as part of a CONVERSION: switch an option on and the
+pipeline applies it. That is the wrong shape for editing. qa/repair.ts splits
+every operation in two:
 
-24.2 SPECIFIED
-Remove zero-length segments; snap vertices; snap shared edges; regularise;
-smooth; simplify; densify; fix ring direction; repair self-intersection; remove
-slivers; merge adjacent polygons; split polygon; split line; extend, trim and
-join lines; make and explode multipart; fill and remove holes; rebuild topology.
+  planRepair(dataset, operation, scope)  -> RepairPlan   nothing is modified
+  applyRepair(dataset, operation, scope) -> RepairResult new dataset + undo
+
+Both call the SAME rewrite function - the preview is literally the apply, run
+without keeping the result. There is no second code path that could describe one
+thing and do another, which is how preview features usually become lies.
+
+A plan lists every change with its feature, its position and the distance moved,
+so "close rings" can be inspected before it touches a boundary.
+
+UNDO IS A DIFF, NOT A SNAPSHOT (R19). Only the features that actually changed
+are held, each as its geometry before the edit. A layer of 400,000 contours
+where one ring was closed costs one stored geometry, not 400,000 - the
+difference between undo working and undo running the tab out of memory.
+
+PROTECTED LAYERS. A layer named in protectedLayers is refused, with the refusal
+reported and counted, never silently skipped. Cadastral and lease boundaries are
+legally operative: moving one is a change to a title, not a data fix (R18).
+
+Built: close rings, remove duplicate vertices, remove zero-length segments, fix
+ring direction, remove spikes, snap vertices within a feature.
+
+24.2 SPECIFIED (Phase 11)
+Snap shared edges across features; regularise; smooth; simplify; densify;
+repair self-intersection; remove slivers; merge adjacent polygons; split
+polygon; split line; extend, trim and join lines; make and explode multipart;
+fill and remove holes; rebuild topology.
 
 Every operation: previewable before commit, tolerance-aware with the tolerance
 displayed in the data's own units (R21), undoable (R19).
 
-24.3 FIX ALL SAFE ISSUES
-One action, restricted to repairs that are safe and reversible: consecutive
-duplicate vertices, zero-length segments, ring closure strictly within
-tolerance, encoding normalisation, and exact duplicate records where the user
-has approved that policy. It MUST refuse to touch uncertain cadastral, lease or
-mining geometry, and MUST list what it changed.
+24.3 FIX ALL SAFE ISSUES (BUILT)
+Safe means two things at once: reversible, AND incapable of moving a boundary
+beyond a stated tolerance.
+
+Ring closure qualifies only when the gap is small enough to be a digitising slip.
+A ring left half a metre open is a question for the surveyor, and the refusal
+says so rather than quietly shutting it.
+
+SNAPPING IS NEVER INCLUDED. Snapping moves survey positions; on cadastral data
+that is a legal act, not a tidy-up. Protected layers are never touched. Every
+operation applied and every one skipped is listed with its reason.
 
 
 ================================================================================

@@ -1,4 +1,4 @@
-# Universal Geo Converter
+# Universal BhuNex Converter
 
 A Chrome Manifest V3 extension that converts GIS, geomatics, land-survey, CAD,
 LiDAR and mine-survey data **entirely on your own machine**.
@@ -24,10 +24,11 @@ data — and refuses to guess when guessing would be wrong.
 | **Nothing is dropped silently** | Unsupported CAD entities, lost attributes, dropped Z values and segmentized curves are counted by name and reported with what to do about it. |
 | **Curves keep a stated tolerance** | An arc has no GIS equivalent, so it is densified against a sagitta tolerance you control — never replaced by its chord. |
 | **LAZ is refused, not faked** | No LAZ decoder is bundled, so compressed point data is reported honestly rather than read as raw LAS coordinates. |
-| **GeoTIFF is metadata-only** | Georeference, dimensions and CRS are read; pixels are not decoded, so raster output from a GeoTIFF source is disabled rather than fabricated. |
+| **Unreadable compression is named, not guessed** | GeoTIFF pixels are decoded for uncompressed, LZW, Deflate and PackBits. JPEG, LERC and WebP are refused *by name* — a compressed tile read as raw samples would look like plausible terrain and be entirely fictional. |
 | **DWG is honestly native** | It runs through a helper driving *your* ODA File Converter. A renamed DXF is never presented as a DWG. |
 | **QA means re-import** | A green PASS means the output was read back and compared. A target with no reader reports `NOT VALIDATED`, never PASS. |
 | **Repair is off by default** | Survey data is legal evidence. Geometry repair edits it, so it stays off until you switch it on, and reports every change. |
+| **You are told the cost before you pay it** | Every output format is graded against *your* data across eleven axes before conversion, and "What will be lost" names and counts each loss — the field DBF will shorten, the arcs that will be densified, the Z that has nowhere to go. |
 | **Input structure = output structure** | Layers become folders, folders stay folders, and a file found two ZIPs deep is delivered under the same tree. You see the exact delivery layout before you download it. |
 
 Nothing is uploaded. `host_permissions` is empty, there is no network call in any
@@ -39,7 +40,7 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 
 ```bash
 npm ci
-npm run verify        # typecheck + 141 tests + build
+npm run verify        # typecheck + 237 tests + build
 ```
 
 Then load it in Chrome:
@@ -48,7 +49,7 @@ Then load it in Chrome:
 2. **Load unpacked** → select the `dist/` folder
 3. Click the toolbar icon → **Open converter workspace**
 
-`npm run package` also produces `dist-zip/universal-geo-converter-1.0.0.zip`.
+`npm run package` also produces `dist-zip/universal-bhunex-converter-1.0.0.zip`.
 
 Optional: DWG support needs a small local helper — see
 [docs/NATIVE_HOST.md](docs/NATIVE_HOST.md). Everything else works without it.
@@ -73,7 +74,8 @@ Full detail, with every limitation stated, is in
 - **LiDAR** — LAS 1.0–1.4 read and write, XYZ, PTS, PLY, with nth/grid/voxel
   decimation and classification, crop, elevation and intensity filters
 - **Raster** — ESRI ASCII Grid (full DEM read/write), world files, QGIS GCP
-  points, `.prj`/`.qpj`; GeoTIFF as metadata only
+  points, `.prj`/`.qpj`; GeoTIFF read and write (uncompressed, LZW, Deflate,
+  PackBits; strips and tiles; predictors 2 and 3)
 
 ---
 
@@ -115,10 +117,12 @@ download anything.
 ```
 extension/src/
   core/       CIR, format registry, detector, units, geometry, precision,
-              layout (delivery structure), pipeline
+              layout (delivery structure), predict (fidelity), spatial index,
+              pipeline
   crs/        projections, bundled EPSG subset, WKT/PRJ, transform safety
   engines/    vector/ cad/ raster/ pointcloud/ survey/ archives/
-  qa/         topology checks and the fidelity re-import comparison
+  qa/         defect catalogue, topology rules, preview-and-apply repair,
+              and the fidelity re-import comparison
   workers/    off-thread conversion
   workspace/  the full-page professional workspace
   sidepanel/  quick drop + queue
@@ -163,7 +167,7 @@ it fires, the fix is to add the test, not to lower the claim.
 Provenance for the reused engines, the current phase board and the next tasks
 live in [docs/BUILD_STATE.md](docs/BUILD_STATE.md). The authoritative
 specification is
-[docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt](docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt).
+[docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt](docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt).
 
 ---
 

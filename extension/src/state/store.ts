@@ -12,6 +12,7 @@ import type { CrsRef, Warning } from '../core/cir';
 import type { FidelityReport } from '../qa/fidelity';
 import type { NamingPattern } from '../core/naming';
 import type { OutputLayout } from '../core/layout';
+import type { DatasetProfile, FidelityPrediction } from '../core/predict';
 import type { NativeHealth } from '../adapters/native-messaging/client';
 import type { OutputBlobFile } from '../workers/client';
 
@@ -33,6 +34,14 @@ export interface QueueItem {
   /** Set when the user overrides detection. */
   forcedFormatId?: string;
   dataset?: any;
+  /**
+   * One-pass summary of the dataset, computed where the full CIR lives.
+   *
+   * The UI only ever receives a truncated preview of the features, so a
+   * prediction made from `dataset` would report counts that are quietly wrong.
+   * This carries the exact ones.
+   */
+  profile?: DatasetProfile;
   targetFormatId?: string;
   status: QueueStatus;
   warnings: Warning[];
@@ -40,6 +49,8 @@ export interface QueueItem {
   outputs?: OutputBlobFile[];
   /** Every path inside the delivery, for the structure preview. */
   tree?: string[];
+  /** What the pre-flight said this conversion would cost. */
+  prediction?: FidelityPrediction;
   qa?: FidelityReport;
   provenance?: any;
   durationMs?: number;

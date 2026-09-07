@@ -185,7 +185,7 @@ export interface WriteOsmOptions {
 }
 
 export const DEFAULT_OSM_OPTIONS: Omit<WriteOsmOptions, 'precision'> = {
-  generator: 'Universal Geo Converter',
+  generator: 'Universal BhuNex Converter',
 };
 
 /**
@@ -334,7 +334,7 @@ export function writeOsm(dataset: CirDataset, options: WriteOsmOptions): { text:
 
   const text =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<osm version="0.6" generator="${xmlEscape(options.generator ?? 'Universal Geo Converter')}">\n` +
+    `<osm version="0.6" generator="${xmlEscape(options.generator ?? 'Universal BhuNex Converter')}">\n` +
     nodes.join('\n') +
     (nodes.length && ways.length ? '\n' : '') +
     ways.join('\n') +

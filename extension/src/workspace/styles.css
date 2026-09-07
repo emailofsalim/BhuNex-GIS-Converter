@@ -1,5 +1,5 @@
 /*
- * Universal Geo Converter — workspace styling.
+ * Universal BhuNex Converter — workspace styling.
  *
  * The target is a professional technical workstation, not an office file
  * converter: compact type, tabular numerals for anything measured, monospace for
@@ -576,6 +576,70 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+/* The one-line fidelity summary under a format card. Quiet by default so the
+   card stays scannable; the badge above it carries the verdict. */
+.fcard__detail {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.35;
+}
+
+/* --------------------------------------------------- what will be lost (§22) */
+
+.fidelity__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.fidelity__target {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* Eleven verdicts at a glance, so "geometry is fine, only attributes suffer"
+   is readable without going through every row. */
+.fidelity__axes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+  margin: 10px 0 14px;
+}
+
+.fidelity__axis {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  background: var(--surface);
+}
+
+.fidelity__axis--green {
+  border-left-color: var(--ok);
+}
+
+.fidelity__axis--yellow {
+  border-left-color: var(--warn);
+}
+
+.fidelity__axis--red {
+  border-left-color: var(--error);
+}
+
+.fidelity__axis-name {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.fidelity__axis-grade {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* ------------------------------------------------------------------ inspector */

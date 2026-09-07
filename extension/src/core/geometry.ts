@@ -256,6 +256,13 @@ export function segmentizeBSpline(controlPoints: Position[], knots: number[], de
 }
 
 /** Shoelace area. Positive means counter-clockwise in a right-handed x/y frame. */
+/**
+ * Shoelace area, POSITIVE for a counter-clockwise ring.
+ *
+ * The sign convention is stated because everything below depends on it and
+ * because getting it backwards is invisible in a round trip: read and write
+ * cancel each other out, and only a different application notices.
+ */
 export function signedArea(ring: Position[]): number {
   let sum = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -264,8 +271,16 @@ export function signedArea(ring: Position[]): number {
   return sum / 2;
 }
 
+/**
+ * True when the ring runs clockwise, i.e. its shoelace area is negative.
+ *
+ * Ring winding is not cosmetic. A shapefile decides outer ring from hole by it,
+ * so an inverted answer makes a parcel render as a void in ArcGIS; RFC 7946
+ * fixes the opposite convention for GeoJSON. The definition is anchored to the
+ * shoelace sign rather than to any one format so the two cannot be conflated.
+ */
 export function isClockwise(ring: Position[]): boolean {
-  return signedArea(ring) > 0;
+  return signedArea(ring) < 0;
 }
 
 export function closeRing(ring: Position[]): Position[] {

@@ -11,6 +11,7 @@
  */
 
 import { convert, expandArchive, readSource, type ConversionInput, type ConversionSettings } from '../core/pipeline';
+import { profileDataset } from '../core/predict';
 import { detectFormat } from '../core/detect';
 import { ConversionError } from '../core/errors';
 import type { CirDataset } from '../core/cir';
@@ -194,11 +195,15 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
         // would be thrown away and paid for again by the conversion itself.
         const dataset = await readSource(input, detection, { preserveZ: true, metadataOnly: true } as ConversionSettings);
         const summary = summarise(dataset);
+        // The profile is computed here, where the whole dataset is, so the UI can
+        // predict fidelity against exact counts rather than the truncated
+        // preview it receives.
+        const profile = profileDataset(dataset);
         const transfer: ArrayBuffer[] = [];
         if (summary.pointcloud) {
           transfer.push(summary.pointcloud.previewX.buffer, summary.pointcloud.previewY.buffer, summary.pointcloud.previewZ.buffer);
         }
-        post({ id: request.id, ok: true, op: request.op, payload: { detection, dataset: summary } }, transfer);
+        post({ id: request.id, ok: true, op: request.op, payload: { detection, dataset: summary, profile } }, transfer);
         break;
       }
       case 'convert': {
@@ -219,6 +224,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
               dataset: summarise(result.sourceDataset, 2000),
               outputs,
               tree: result.tree,
+              prediction: result.prediction,
               warnings: result.warnings,
               qa: result.qa,
               provenance: result.provenance,
