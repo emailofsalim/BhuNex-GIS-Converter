@@ -21,7 +21,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 429 across 14 suites, all green |
+| Tests | 450 across 15 suites, all green |
 | Install | **Load `dist/`, never the repo root.** On a managed laptop, extract outside OneDrive — `docs/INSTALL.md` |
 | Store | Package + listing ready: `npm run store:package`, `docs/STORE_LISTING.md`, `docs/PRIVACY.md` |
 
@@ -54,7 +54,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
-| 11 | Measurement ✅ (CRS-aware, geodesic); vertex editor, snapping, geometry ops, attribute table ⛔ (§25, §26) | 🟡 partial |
+| 11 | Measurement ✅, snapping ✅ (incl. shared edge); vertex editor, geometry ops, attribute table ⛔ (§25, §26) | 🟡 partial |
 | 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
 | 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
@@ -101,7 +101,8 @@ bow-ties, Z anomalies, crossings, dangles), `rules.ts` (ten asserted topology
 rules with dataset/layer/feature scope), `repair.ts` (plan → apply → undo, with
 protected layers), `burn-in.ts` (text inside polygons → attributes/labels),
 `label-placement.ts` (pole of inaccessibility), `polygonize.ts` (CAD line work →
-polygons), `diff.ts` (measured source-vs-output comparison),
+polygons), `snap.ts` (vertex, segment, intersection, grid and shared-edge
+snapping — nothing moves unless it is named), `diff.ts` (measured source-vs-output comparison),
 `geometry-overlay.ts` (where the differences are, for the second canvas),
 `health.ts` (the project health score, drill-down mandatory),
 `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
@@ -197,10 +198,10 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 11 remainder (§25, §26).** Measurement is done. Next: snapping —
-   especially the shared-edge snap the spec calls "the case cadastral work
-   actually needs" — then the vertex editor and the geometry operations, all
-   inheriting the plan/apply/undo contract `qa/repair.ts` already defines.
+1. **Phase 11 remainder (§25, §26).** Measurement and snapping are done. Next:
+   the vertex editor (§25.1) on top of the snap engine, the attribute table
+   (§25.5), and the geometry operations of §26.2 — all inheriting the
+   plan/apply/undo contract `qa/repair.ts` and `qa/snap.ts` already share.
 2. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter`. Until then the honest refusal stays.
 3. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
@@ -218,6 +219,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 | Date | Session | What landed |
 |---|---|---|
+| 2026-09-07 | snapping | `qa/snap.ts`: vertex, segment, intersection, grid and — the one the spec singles out — shared-edge snapping. Nothing moves unless it is named: a snap takes the features it may touch, so closing the gap between two parcels cannot also drag a road centreline or a monument that happened to be within tolerance. The shared run is found by testing each vertex against the other feature's *outline* rather than by pairing vertices, so it works when the two boundaries have different vertex counts, which after a re-survey they always do. Same plan/apply/undo contract as `qa/repair.ts`, closed rings stay closed, Z is preserved, and the maximum displacement is reported before anything moves. 450 tests (`snap.test.ts` new, 21). |
 | 2026-09-07 | measurement | Phase 11 begins: `core/measure.ts` — distance, area, perimeter, bearing, azimuth, angle, slope and bearing/distance entry, each choosing its arithmetic from the CRS. Vincenty's inverse and direct solutions on a geographic CRS, planar on a projected one, and `planar-undeclared` when none is declared — carried in `Measurement.method` so a number is never read without knowing what produced it. This is the error the spec names: a degree of longitude is 111.3 km at the equator and 102.5 km at 23N, and a tool that treats degrees as a plane reports areas out by a factor that grows with latitude. 429 tests (`measure.test.ts` new, 32), anchored to published geodetic vectors rather than to the module itself. |
 | 2026-09-07 | store readiness | Prepared publication to the Chrome Web Store and Edge Add-ons, which removes sideloading entirely: `scripts/assert-store-ready.mjs` (manifest limits, icon sizes, remote code, heavy permissions, stray `key`/`update_url`), `scripts/make-store-assets.mjs` (4 screenshots, 2 promo tiles, Edge logo, rendered by headless Chromium at exact sizes with a full-bleed guard), `docs/PRIVACY.md` and `docs/STORE_LISTING.md`. `nativeMessaging` moved to `optional_permissions` and requested from the DWG click, so a store install never demands it. Store build drops source maps: 1.1 MB → 303 KB. Two defects found: a 134-character description (a silent auto-rejection) and a renderer that clipped every asset's lower third while producing correctly-sized files. |
 | 2026-09-07 | reporting + health | Phase 9 completed: `qa/health.ts` (seven weighted components — CRS certainty, geometry, topology, duplicates, attributes, conversion risk, warnings — each expandable into locatable findings; an unevaluated component is excluded from the mean and named rather than scored full marks, so an unassessable dataset can never outrank an assessable one; deductions are proportional to the share of features affected, not the raw count) and `core/report.ts` (self-contained HTML and text, no script, no remote fetch, every value escaped, credential-scrubbed with the omission stated, attachable to the delivery). Both wired through the pipeline as opt-in stages, with a Health tab and palette commands. Fixed a hand-off gap where files under the worker threshold lost the overlay, health and report. 397 tests (`health.test.ts` new, 27). |
