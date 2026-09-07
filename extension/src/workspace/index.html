@@ -75,6 +75,20 @@
               <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
             </div>
           </div>
+
+          <!-- Source and output side by side, so nobody has to export a file to
+               find out the conversion damaged it (spec §30.1). -->
+          <div class="compare hidden" id="compareWrap">
+            <div class="compare__tools">
+              <button class="btn btn--ghost" id="compareFitBtn" title="Fit both panes to their data">Fit</button>
+              <button class="btn btn--ghost" id="compareGridBtn" title="Toggle the grid on both panes">Grid</button>
+              <button class="btn btn--ghost" id="compareLinkBtn" title="Pan and zoom the two panes together">Linked</button>
+              <span class="compare__readout" id="compareReadout">—</span>
+              <span class="compare__legend" id="compareLegend"></span>
+            </div>
+            <div class="compare__panes" id="compareCanvas"></div>
+            <p class="compare__note hidden" id="compareNote"></p>
+          </div>
         </section>
 
         <!-- Right: target format and settings -->
@@ -112,6 +126,8 @@
           <button class="tab" data-bottom="log">Conversion log</button>
           <button class="tab" data-bottom="delivery">Delivery structure</button>
           <button class="tab" data-bottom="manifest">Batch manifest</button>
+          <button class="tab" data-bottom="history">History</button>
+          <button class="tab" data-bottom="workflows">Workflows</button>
           <span class="topbar__spacer"></span>
           <span class="badge badge--muted" id="perfBadge" style="align-self: center; margin-right: 12px"></span>
         </nav>

@@ -226,6 +226,11 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
               tree: result.tree,
               prediction: result.prediction,
               diff: result.diff,
+              // The output as it was read back, summarised the same way the
+              // source is, so the second canvas draws the geometry the QA
+              // verdict describes rather than a separate reading of the file.
+              outputDataset: result.outputDataset ? summarise(result.outputDataset, 2000) : undefined,
+              overlay: result.overlay,
               warnings: result.warnings,
               qa: result.qa,
               provenance: result.provenance,

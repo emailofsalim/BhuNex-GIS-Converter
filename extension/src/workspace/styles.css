@@ -1209,3 +1209,238 @@ details.adv > div {
   color: var(--text-faint);
   padding-top: 2px;
 }
+
+/* ----------------------------------------------- dual canvas (spec §30.1) */
+
+.compare {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 280px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.compare__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+.compare__readout {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.compare__legend {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.compare__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compare__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+  background: currentColor;
+}
+
+/* The overlay roles use the same colours the canvas draws with, so the legend
+   is a key to the picture rather than a second colour scheme to learn. */
+.compare__key--added { color: #3fb950; }
+.compare__key--removed { color: #f85149; }
+.compare__key--moved { color: #d29922; }
+.compare__key--retyped { color: #a371f7; }
+
+.compare__panes {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.compare__note {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.dual {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.dual__pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dual__pane--collapsed {
+  display: none;
+}
+
+.dual__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.dual__title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dual__status {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dual__max {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 1px 6px;
+  line-height: 1.4;
+}
+
+.dual__max:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.dual__canvas {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+}
+
+.dual__empty {
+  display: none;
+  margin: 0;
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dual__pane--empty .dual__canvas { display: none; }
+.dual__pane--empty .dual__empty { display: block; }
+
+/* Wide enough to grab without a steady hand, narrow enough not to be furniture. */
+.dual__divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+}
+
+.dual__divider:hover,
+.dual__divider:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.chip--overlay {
+  border-color: currentColor;
+}
+
+.chip--overlay-added { color: #3fb950; }
+.chip--overlay-removed { color: #f85149; }
+.chip--overlay-moved { color: #d29922; }
+.chip--overlay-retyped { color: #a371f7; }
+
+/* ------------------------------------- operation history and workflows */
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.history__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.history__row:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.history__row--now {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* An undone step stays visible and dimmed: it is where redo goes, and hiding
+   it would make the stack look shorter than it is. */
+.history__row--undone {
+  opacity: 0.5;
+}
+
+.history__label {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.history__detail {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow__steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.workflow__step {
+  margin: 2px 0;
+}
+
+.btn--on {
+  border-color: var(--accent);
+  color: var(--accent);
+}

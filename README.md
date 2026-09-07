@@ -36,20 +36,39 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 
 ---
 
-## Install and run
+## Install
+
+> **Do not load this repository folder into your browser.** It contains
+> TypeScript, not a built extension, and there is no `manifest.json` at the
+> root — that is what produces *"Manifest file is missing or unreadable"*.
+
+### The easy way — no Node, no build
+
+1. Download `universal-bhunex-converter-<version>.zip` from
+   **[Releases](https://github.com/emailofsalim/Universal-Converter/releases)**.
+2. **Unzip it** — browsers load a folder, not an archive.
+3. `chrome://extensions` (or `edge://extensions`) → turn on **Developer mode**.
+4. **Load unpacked** → select the unzipped folder, the one that directly
+   contains `manifest.json`.
+5. Toolbar icon → **Open converter workspace**.
+
+### Building it yourself
+
+Node 20+:
 
 ```bash
 npm ci
-npm run verify        # typecheck + 317 tests + build
+npm run verify        # typecheck + 370 tests + build
 ```
 
-Then load it in Chrome:
-
-1. `chrome://extensions` → enable **Developer mode**
-2. **Load unpacked** → select the `dist/` folder
-3. Click the toolbar icon → **Open converter workspace**
+Then **Load unpacked** → select **`dist/`**. Not the repository root, and not
+`extension/` — the root has no manifest and `extension/` is the source that
+`npm run build` compiles into `dist/`.
 
 `npm run package` also produces `dist-zip/universal-bhunex-converter-1.0.0.zip`.
+
+Full instructions, including what to do when the manifest error appears, are in
+**[docs/INSTALL.md](docs/INSTALL.md)**.
 
 Optional: DWG support needs a small local helper — see
 [docs/NATIVE_HOST.md](docs/NATIVE_HOST.md). Everything else works without it.

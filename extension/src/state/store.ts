@@ -15,6 +15,9 @@ import type { OutputLayout } from '../core/layout';
 import type { DatasetProfile, FidelityPrediction } from '../core/predict';
 import type { BurnInMode, BurnInPriority } from '../qa/burn-in';
 import type { DiffReport } from '../qa/diff';
+import type { GeometryOverlay } from '../qa/geometry-overlay';
+import type { HistoryState } from '../core/history';
+import type { Workflow } from '../core/workflow';
 import type { KmlTemplate } from '../engines/vector/kml-templates';
 import type { NativeHealth } from '../adapters/native-messaging/client';
 import type { OutputBlobFile } from '../workers/client';
@@ -56,6 +59,18 @@ export interface QueueItem {
   prediction?: FidelityPrediction;
   /** Measured source-versus-output differences (spec §30.2). */
   diff?: DiffReport;
+  /** The output read back, for the second canvas (spec §30.1). */
+  outputDataset?: any;
+  /** Where the source and the output differ, drawn over both canvases. */
+  overlay?: GeometryOverlay;
+  /**
+   * Every operation that changed this file's data, each reversible (§31.1).
+   *
+   * Per item rather than global: two queued surveys are two independent jobs,
+   * and an undo that reached across them would reverse work on a file the user
+   * is not even looking at.
+   */
+  history?: HistoryState;
   qa?: FidelityReport;
   provenance?: any;
   durationMs?: number;
@@ -176,6 +191,18 @@ export interface AppState {
   settings: AppSettings;
   native: NativeHealth;
   log: LogEntry[];
+  /**
+   * Saved workflows (§31.2).
+   *
+   * Held in state rather than only in settings because they travel with the
+   * project file, and because a workflow is data the user authored rather than
+   * a preference the tool remembers.
+   */
+  workflows: Workflow[];
+  /** Name of the open project, when one has been opened or saved. */
+  projectName: string | null;
+  /** Panes of the compare view are linked until the user unlinks them. */
+  compareLinked: boolean;
   inspectorTab: string;
   bottomTab: string;
   formatSearch: string;
@@ -198,6 +225,9 @@ class Store {
     settings: { ...DEFAULT_SETTINGS },
     native: { status: 'UNKNOWN', message: 'Checking…' },
     log: [],
+    workflows: [],
+    projectName: null,
+    compareLinked: true,
     inspectorTab: 'overview',
     bottomTab: 'qa',
     formatSearch: '',

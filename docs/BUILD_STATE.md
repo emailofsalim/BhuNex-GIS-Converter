@@ -21,7 +21,8 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 318 across 11 suites, all green |
+| Tests | 370 across 12 suites, all green |
+| Install | **Load `dist/`, never the repo root** — the root has no manifest. `docs/INSTALL.md` |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -54,7 +55,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
 | 11 | Vertex editor, snapping, measurement, geometry ops, attribute table (§25, §26) | ⛔ not started |
 | 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
-| 13 | Measured visual diff ✅, command palette ✅, presets ✅; second canvas, workflows, project file ⛔ (§30, §31) | 🟡 partial |
+| 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
 
@@ -74,7 +75,9 @@ nobody can preview or undo multiplies damage instead of saving labour.
 noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`,
 `naming.ts`, `errors.ts`, `hash.ts`, `layout.ts` (delivery structure),
 `predict.ts` (fidelity prediction), `presets.ts`, `spatial-index.ts` (uniform grid),
-`pipeline.ts` (the single dispatch point).
+`history.ts` (reversible operation history), `workflow.ts` (record and replay),
+`project.ts` (the project file), `secrets.ts` (one definition of credential-shaped,
+shared by every writer), `pipeline.ts` (the single dispatch point).
 
 **CRS** (`extension/src/crs/`) — `projection.ts` (Snyder TM, all UTM zones, Web
 Mercator, LCC), `epsg.ts` (bundled subset, Indian zones first), `wkt.ts`
@@ -94,15 +97,19 @@ bow-ties, Z anomalies, crossings, dangles), `rules.ts` (ten asserted topology
 rules with dataset/layer/feature scope), `repair.ts` (plan → apply → undo, with
 protected layers), `burn-in.ts` (text inside polygons → attributes/labels),
 `label-placement.ts` (pole of inaccessibility), `polygonize.ts` (CAD line work →
-polygons), `diff.ts` (measured source-vs-output comparison), `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
+polygons), `diff.ts` (measured source-vs-output comparison),
+`geometry-overlay.ts` (where the differences are, for the second canvas),
+`fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
 an unreadable target can never show PASS).
 
 **UI** — `workspace/` (full page), `sidepanel/`, `popup/`, `ui/preview.ts` (canvas,
-no tiles), `ui/command-palette.ts`, `state/store.ts`, `workers/`.
+no tiles), `ui/dual-canvas.ts` (source and output side by side, linked views),
+`ui/command-palette.ts`, `state/store.ts`, `workers/`.
 
 **Native host** — `native-host/universal_bhunex_host.py` + `install.py`.
 
-**Docs** — instruction TXT, this file, `NATIVE_HOST.md`, `FORMAT_MATRIX.md`
+**Docs** — instruction TXT, this file, `INSTALL.md` (the manifest error and the
+three folders people select by mistake), `NATIVE_HOST.md`, `FORMAT_MATRIX.md`
 (generated from the registry; CI fails if stale).
 
 ---
@@ -145,6 +152,9 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | TIFF LZW widened the code one entry too late — a decoder's table always lags the encoder's by one, so ~250 entries in, every later code shifted by a bit and produced plausible-looking false terrain | Widen when the decoder's next free code reaches 510, not 511; a differential test encodes the same data with the GIF rule and asserts it does **not** decode |
 | **`isClockwise` was inverted** — it returned true for counter-clockwise rings, so `orientRing(ring, true)` produced counter-clockwise output. Shapefile and MIF/MID writers asked for clockwise outer rings and got the opposite, and the shapefile reader treated counter-clockwise rings as outers. Round trips passed because reader and writer cancelled the error out; only a different application would have seen a parcel render as a void | `isClockwise` anchored to `signedArea < 0`, the shapefile reader's own inverted copy fixed, and a test that checks the written `.shp` bytes against the textbook shoelace sum rather than against our own helper |
 | Label placement took **11.8 seconds per polygon** on a thin diagonal strip — the best-first search picked its next cell by scanning the array, which is quadratic in the cell count, and that shape fills a near-square bounding box with cells that are all outside the polygon and all still plausible. Surfaced as the test suite going from 1 s to 13 s; the number that mattered was per-parcel, against a cadastral sheet of four thousand | Binary heap keyed on the cell bound (11,812 ms → 160 ms), plus precision relative to the polygon extent rather than absolute (→ ~1 ms): refining a 144-unit parcel to a millimetre bought four extra levels of subdivision to move the anchor by a distance invisible under a label metres tall. A regression test asserts the per-label cost stays under 50 ms |
+| The credential value pattern was case-SENSITIVE, so it matched a lower-case `bearer ` and missed `Bearer ` — the capitalisation every HTTP header uses and therefore the only one anyone ever pastes. R23 looked enforced while letting the real case through into KMZ balloons | The pattern carries the `i` flag, the detection moved to one shared `core/secrets.ts` used by the KML writer, the project file and the report, and a test asserts all three capitalisations are caught |
+| The geometry overlay matched layers by NAME, but single-layer readers name the layer after the file: `plots.geojson` is written, read back as `plots_converted_to_geojson.geojson`, and the commonest conversion there is reported every feature as simultaneously added and removed — a screen of red and green on a round trip that changed nothing | Layers pair by name first, then positionally for the leftovers when the counts on both sides are equal; the basis of each pairing is recorded in `paired` so a positional match is visible as one rather than passing for a name match |
+| A GitHub source download could not be loaded as an extension — `dist/` is gitignored and `extension/` holds TypeScript, so "Load unpacked" on the repo root gives "Manifest file is missing or unreadable". Reported from a real install attempt | A `release.yml` workflow builds, verifies and attaches the packaged ZIP to a GitHub Release so installing needs no toolchain; `docs/INSTALL.md` names the three folders people select by mistake, and the README leads with a warning not to load the repo folder |
 | A corrupt LZW code beyond the next free entry was accepted, storing a forward reference in the prefix chain; walking that chain never terminated and hung the conversion worker with no error | A code greater than `next` ends the decode and returns what was read |
 
 ---
@@ -172,23 +182,20 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 13 remainder (§30.1, §31.1, §31.2, §31.4).** The second canvas and its
-   geometry overlay, saved workflows, the project file, and a global undo history
-   spanning more than one repair. The diff engine the overlay renders is done.
-2. **Phase 9 remainder (§22.4, §29.2).** The per-file conversion report document,
+1. **Phase 9 remainder (§22.4, §29.2).** The per-file conversion report document,
    and the project health score. The prediction engine they both build on is done.
-3. **Phase 11 (§25, §26).** The vertex editor, cross-feature snapping and the
+2. **Phase 11 (§25, §26).** The vertex editor, cross-feature snapping and the
    remaining repair operations — all of which inherit the plan/apply/undo contract
    `qa/repair.ts` already defines, rather than reinventing it.
-4. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
+3. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter`. Until then the honest refusal stays.
-5. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
-6. **Phase 4 remainder** — resampling, raster reprojection, contour generation,
+4. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
+5. **Phase 4 remainder** — resampling, raster reprojection, contour generation,
    clip-by-polygon, rasterize/vectorize.
-7. **Perf** — the measured performance test from spec §14.2 (targets are to be
+6. **Perf** — the measured performance test from spec §14.2 (targets are to be
    measured, not claimed), and the spatial index of §14.5 in the same phase as the
    first feature that needs it.
-8. **Batch** — pause/resume and retry-failed controls; the pipeline already isolates
+7. **Batch** — pause/resume and retry-failed controls; the pipeline already isolates
    errors per file.
 
 ---
@@ -197,6 +204,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 | Date | Session | What landed |
 |---|---|---|
+| 2026-09-07 | project layer + install fix | Phase 13 completed: `core/history.ts` (reversible operation history — compact patches with a reference-equality fast path, checkpoints, branch discard, bounded with the drop reported), `core/workflow.ts` (record and replay; a step that would prompt by hand still prompts on replay, and a run with no confirmation handler refuses rather than assumes), `core/project.ts` (sources by identity not bytes, hash-based match on reopen, R23 scrub with the omission listed), `core/secrets.ts` (one definition of credential-shaped, shared), `qa/geometry-overlay.ts` + `ui/dual-canvas.ts` (source and output side by side, linked views that unlink themselves on a reprojection, the difference drawn over both). Three real defects fixed: a case-sensitive bearer-token pattern, name-only layer pairing, and a repository nobody could install. 370 tests (`project.test.ts` new, 52). |
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
 | 2026-09-07 | workflow layer | Phase 13: `qa/diff.ts` (ten-axis measured source-vs-output comparison, computed from the QA re-import so verdict and numbers describe the same bytes), `core/presets.ts` (twelve presets, guarded so none can enable a destructive option or write KML without EPSG:4326), `ui/command-palette.ts` (Ctrl/Cmd+K, keyword-aware ranking, disabled commands shown with their reason). Compare tab added. 317 tests (`workflow.test.ts` new, 27). |
 | 2026-09-07 | mining deliverables | §28: `engines/survey/borehole.ts` joins collars to interval logs by hole id across layers and packages (Datamine/Surpac/Micromine/spreadsheet aliases), computes thickness from the depths, reports orphaned intervals and finds log gaps and overlaps. `engines/vector/kml-templates.ts` renders the core-log balloon and six field-ordering templates, escapes every value, strips credential-shaped fields and reports the omission. 290 tests (`borehole.test.ts` new, 25). |
