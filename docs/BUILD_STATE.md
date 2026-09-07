@@ -21,7 +21,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 317 across 11 suites, all green |
+| Tests | 318 across 11 suites, all green |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -98,7 +98,7 @@ polygons), `diff.ts` (measured source-vs-output comparison), `fidelity.ts` (re-i
 an unreadable target can never show PASS).
 
 **UI** — `workspace/` (full page), `sidepanel/`, `popup/`, `ui/preview.ts` (canvas,
-no tiles), `state/store.ts`, `workers/`.
+no tiles), `ui/command-palette.ts`, `state/store.ts`, `workers/`.
 
 **Native host** — `native-host/universal_bhunex_host.py` + `install.py`.
 
@@ -144,6 +144,7 @@ These were real bugs the round-trips caught. Do not "simplify" the tests that gu
 | Shapefile/MIF-MID writers returned a nested ZIP, producing a ZIP inside the batch ZIP | Writers return loose grouped members; `core/layout.ts` decides folder placement |
 | TIFF LZW widened the code one entry too late — a decoder's table always lags the encoder's by one, so ~250 entries in, every later code shifted by a bit and produced plausible-looking false terrain | Widen when the decoder's next free code reaches 510, not 511; a differential test encodes the same data with the GIF rule and asserts it does **not** decode |
 | **`isClockwise` was inverted** — it returned true for counter-clockwise rings, so `orientRing(ring, true)` produced counter-clockwise output. Shapefile and MIF/MID writers asked for clockwise outer rings and got the opposite, and the shapefile reader treated counter-clockwise rings as outers. Round trips passed because reader and writer cancelled the error out; only a different application would have seen a parcel render as a void | `isClockwise` anchored to `signedArea < 0`, the shapefile reader's own inverted copy fixed, and a test that checks the written `.shp` bytes against the textbook shoelace sum rather than against our own helper |
+| Label placement took **11.8 seconds per polygon** on a thin diagonal strip — the best-first search picked its next cell by scanning the array, which is quadratic in the cell count, and that shape fills a near-square bounding box with cells that are all outside the polygon and all still plausible. Surfaced as the test suite going from 1 s to 13 s; the number that mattered was per-parcel, against a cadastral sheet of four thousand | Binary heap keyed on the cell bound (11,812 ms → 160 ms), plus precision relative to the polygon extent rather than absolute (→ ~1 ms): refining a 144-unit parcel to a millimetre bought four extra levels of subdivision to move the anchor by a distance invisible under a label metres tall. A regression test asserts the per-label cost stays under 50 ms |
 | A corrupt LZW code beyond the next free entry was accepted, storing a forward reference in the prefix chain; walking that chain never terminated and hung the conversion worker with no error | A code greater than `next` ends the decode and returns what was read |
 
 ---
