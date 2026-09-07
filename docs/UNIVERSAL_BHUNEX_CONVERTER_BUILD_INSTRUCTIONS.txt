@@ -1049,9 +1049,9 @@ here:
                                                                (sections 23, 24)
   PHASE 11 EDIT        vertex editor, snapping, measurement, advanced geometry
                        operations, attribute table              (sections 25, 26)
-  PHASE 12 SEMANTICS   label and attribute burn-in, label placement and CAD
-                       polygonisation - DONE; still open: styled KML/KMZ
-                       templates and borehole core-log balloons
+  PHASE 12 SEMANTICS   burn-in, label placement, CAD polygonisation, the
+                       borehole model and the core-log balloon - DONE; still
+                       open: KML overlays, icons and template branding
                                                                (sections 27, 28)
   PHASE 13 WORKFLOW    dual canvas with visual diff, command palette, presets,
                        saved workflows, project file, undo history
@@ -1131,8 +1131,8 @@ when a test covers it.
   [x] Attribute burn-in works                          qa/burn-in.ts, tested
   [x] CAD closed-boundary polygonization works         qa/polygonize.ts, tested
   [ ] PDF/image map workflow works where supported     section 28.3
-  [ ] Borehole KMZ generation works                    section 28
-  [ ] Styled KML balloons work                         section 28
+  [x] Borehole KMZ generation works                    core-log balloon, tested
+  [x] Styled KML balloons work                         six templates, tested
   [ ] Undo/redo works                                  section 31 (R19)
   [ ] Project save/reopen works                        section 31
 
@@ -1610,26 +1610,58 @@ polygons to put text inside.
 ================================================================================
 28. STYLED KML/KMZ, MINING OUTPUT AND GEOREFERENCING
 ================================================================================
-STATUS: SPECIFIED except where noted. Phase 12.
+STATUS: BUILT for the borehole model, the core-log balloon and the template
+system (engines/survey/borehole.ts, engines/vector/kml-templates.ts,
+tests/borehole.test.ts). Georeferencing panel and overlays remain open.
 
-28.1 BOREHOLE AND MINING MODEL (PARTIAL)
-Built: borehole, bench, crest/toe, blast-hole and cadastral field recognition
-(Khasra, Khewat, Khatian included); Surpac STR.
-Specified as a first-class CIR object: hole id, collar E/N/RL, total depth,
-azimuth, dip, from/to intervals, lithology, sample id, assay fields, core
-recovery, remarks, linked photographs and reports.
+28.1 BOREHOLE AND MINING MODEL (BUILT)
+A borehole never arrives as one thing: the collar is a point (hole id, easting,
+northing, RL, depth, azimuth, dip) and the geology is a separate table of depth
+intervals keyed by hole id. Two files, joined by a column, and every mining
+package spells the columns differently.
 
-28.2 STYLED KML/KMZ ENGINE
-Built: folders (nested, R16), placemarks, geometry, extended data.
-Specified: styles, icons, labels, line styles, polygon fills, transparency,
-altitude modes, ground and screen overlays, NetworkLink, HTML descriptions.
+engines/survey/borehole.ts recognises both shapes and joins them by hole id
+ACROSS layers and across a table that was never converted to points, because
+that is how the data actually arrives. Column aliases cover Datamine, Surpac,
+Micromine, Vulcan and spreadsheet naming; assay columns are recognised by
+element symbol and grade suffix.
 
-BOREHOLE CORE-LOG BALLOON. A styled, self-contained Google Earth balloon:
-header (hole id, site, coordinates, RL, depth, azimuth, dip) and core log
-(from, to, thickness, lithology, recovery, RQD, sample, assay, remarks), with
-collapsible sections, clean tables, responsive layout and a design that reads in
-both Earth themes. Optional photographs and an optional hosted report link.
-No credential, token or signed URL secret may appear in the output (R23).
+Three rules:
+  - Thickness is COMPUTED from the depths, never read from a thickness column.
+    Sources routinely carry a stale one that disagrees with its own from/to,
+    and the depths are the measurement.
+  - An interval whose hole id matches no collar is reported as ORPHANED, never
+    attached to the nearest hole. A log against the wrong borehole is worse
+    than a log the user is told is unmatched (R2).
+  - checkLogContinuity finds gaps and overlaps: a gap means a missing interval,
+    an overlap means two records claim the same metre and one is wrong. Both
+    are common in hand-compiled logs and invisible from the table.
+
+28.2 STYLED KML/KMZ ENGINE (BUILT for balloons; overlays still open)
+Built: nested folders (R16), placemarks, geometry, line and polygon styles,
+altitude modes, and HTML description balloons from a template.
+Specified: icons, transparency control, ground and screen overlays, NetworkLink.
+
+BOREHOLE CORE-LOG BALLOON (BUILT). Collar header, then the interval table, then
+any continuity problem found. Only the columns that carry data are emitted: an
+empty RQD column on every row of a sixty-interval log pushes the lithology
+off-screen. The continuity warnings sit BESIDE the log rather than in a separate
+report, because the balloon is where a geologist actually looks at the hole.
+
+THREE SAFETY RULES, all tested:
+  - EVERYTHING IS ESCAPED. Values come from files this tool did not write and
+    the output is HTML rendered in someone else's viewer. The balloon is
+    assembled from a fixed skeleton and no source text can become markup.
+  - NO SECRETS LEAVE. Property names and values that look like credentials are
+    dropped before rendering, a signed report URL is refused, and the omission
+    is REPORTED as a warning - a silent drop would be its own dishonesty. A KMZ
+    is emailed around; a token inside one has leaked (R3, R23).
+  - The CDATA terminator is escaped inside balloon content, so a value
+    containing "]]>" cannot close the section early and corrupt the file.
+
+Styling is inline: Google Earth strips a <style> block in some versions and
+ignores external stylesheets entirely. Colours hold contrast on both the light
+and dark balloon backgrounds.
 
 28.3 PDF AND IMAGE MAP GEOREFERENCING
 Render a scanned map at its true aspect ratio; zoom, pan, place, crop, rotate.
@@ -1643,10 +1675,13 @@ Built: QGIS GCP point files read and written; world files read and written.
 Specified: the panel itself - GCP table, canvas, coordinate entry, residuals,
 RMS, transformation type, target CRS, and add/delete/move/import/export GCP.
 
-28.5 KML/KMZ TEMPLATE SYSTEM
-Reusable templates: Simple GIS, Cadastral, Survey, Mining, Borehole, Core Log,
-Drill Pattern, Stockpile, Contour, DEM/DSM, Custom - each carrying logo, title,
-colours, icons, HTML layout, table fields, footer and links.
+28.5 KML/KMZ TEMPLATE SYSTEM (BUILT for field ordering; branding still open)
+Templates: plain, cadastral, survey, borehole, mining, contour. A template
+decides which fields come FIRST - the plot number, the hole id, the elevation -
+so the identity a reader opened the balloon for is at the top instead of
+alphabetically in the middle. 'plain' is the default and is never wrong.
+
+Specified: logo, custom colours, icon sets and a saved layout per template.
 
 
 ================================================================================

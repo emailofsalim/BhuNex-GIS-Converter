@@ -45,6 +45,7 @@ import {
   type BurnInMode,
   type BurnInPriority,
 } from '../qa/burn-in';
+import { KML_TEMPLATE_DESCRIPTION, KML_TEMPLATE_LABEL, type KmlTemplate } from '../engines/vector/kml-templates';
 import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../crs/epsg';
 import { crsLabel } from '../crs/transform';
 import { checkNativeHealth, NATIVE_STATUS_LABEL } from '../adapters/native-messaging/client';
@@ -279,6 +280,11 @@ function buildSettings(): Partial<ConversionSettings> {
     dxf: { arcTolerance: settings.arcTolerance } as never,
     // Both cadastral tools are opt-in: passing undefined leaves the pipeline
     // stage switched off entirely rather than running it with defaults.
+    kml: {
+      template: settings.kmlTemplate,
+      boreholeLog: settings.kmlBoreholeLog,
+      balloonFooter: settings.kmlBalloonFooter || undefined,
+    },
     polygonize: settings.polygonizeEnabled
       ? {
           tolerance: settings.polygonizeTolerance,
@@ -1283,6 +1289,36 @@ function renderSettingsPanel(): void {
   }
   if (target.id === 'kml' || target.id === 'kmz') {
     body.append(element('p', { class: 'small faint', text: 'KML is written in WGS 84 longitude/latitude. Set the target CRS to EPSG:4326 so projected data is transformed rather than mis-placed.' }));
+
+    const templateField = element('div', { class: 'field' });
+    templateField.append(element('label', { class: 'field__label', text: 'Balloon template' }));
+    const templateSelect = element('select', { class: 'select' }) as HTMLSelectElement;
+    for (const template of ['plain', 'cadastral', 'survey', 'borehole', 'mining', 'contour'] as KmlTemplate[]) {
+      templateSelect.append(element('option', { value: template, text: KML_TEMPLATE_LABEL[template] }));
+    }
+    templateSelect.value = state.settings.kmlTemplate;
+    templateSelect.addEventListener('change', () => void store.patchSettings({ kmlTemplate: templateSelect.value as KmlTemplate }));
+    templateField.append(templateSelect);
+    templateField.append(element('p', { class: 'small faint', text: KML_TEMPLATE_DESCRIPTION[state.settings.kmlTemplate] }));
+    body.append(templateField);
+
+    body.append(
+      checkbox(
+        'Render boreholes as core logs',
+        state.settings.kmlBoreholeLog,
+        (value) => void store.patchSettings({ kmlBoreholeLog: value }),
+        'Joins collars to their depth intervals by hole id and renders a full log — from, to, thickness, lithology, recovery, RQD, sample and assay — in each balloon.'
+      )
+    );
+    body.append(
+      textField('Balloon footer (optional)', state.settings.kmlBalloonFooter, (value) => void store.patchSettings({ kmlBalloonFooter: value }))
+    );
+    body.append(
+      element('p', {
+        class: 'small faint',
+        text: 'Fields whose names or values look like credentials are left out of the balloons, and the omission is reported. A KMZ is shared freely, so a token inside one has leaked.',
+      })
+    );
   }
   if (target.id === 'shapefile') {
     body.append(element('p', { class: 'small faint', text: 'Mixed geometry is split into _point, _line and _polygon files, and the package is delivered as one ZIP with .prj and .cpg. DBF field names are capped at 10 bytes; every rename is listed in the manifest.' }));

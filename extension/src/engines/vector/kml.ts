@@ -20,6 +20,8 @@ import {
   type Warning,
 } from '../../core/cir';
 import { ConversionError } from '../../core/errors';
+import { buildBoreholeModel } from '../survey/borehole';
+import { descriptionElement, renderBalloon, renderBoreholeBalloon, type KmlTemplate } from './kml-templates';
 import { coordinateFormatter, formatFixed, type PrecisionPolicy } from '../../core/precision';
 import { crsFromEpsg } from '../../crs/epsg';
 import { readZip, writeZip } from '../archives/zip';
@@ -249,6 +251,18 @@ export interface WriteKmlOptions {
   polygonFill: boolean;
   polygonColor: string;
   documentName?: string;
+  /**
+   * Which balloon the description uses (spec §28.5).
+   *
+   * 'plain' is the default and is never wrong. The others reorder the fields so
+   * the identity a reader is looking for — the plot number, the hole id — is at
+   * the top instead of alphabetically in the middle.
+   */
+  template: KmlTemplate;
+  /** Render boreholes as core-log balloons instead of attribute tables. */
+  boreholeLog: boolean;
+  /** Optional footer on every balloon, e.g. a survey date or licence note. */
+  balloonFooter?: string;
 }
 
 export const DEFAULT_KML_OPTIONS: Omit<WriteKmlOptions, 'precision'> = {
@@ -259,6 +273,8 @@ export const DEFAULT_KML_OPTIONS: Omit<WriteKmlOptions, 'precision'> = {
   lineWidth: 2,
   polygonFill: true,
   polygonColor: '#0e7c86',
+  template: 'plain',
+  boreholeLog: false,
 };
 
 /** KML colours are aabbggrr — the reverse of the usual #rrggbb. */
@@ -342,13 +358,28 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
     }
   };
 
-  const balloon = (properties: Record<string, unknown>): string => {
-    const rows = Object.entries(properties).filter(([key]) => !key.startsWith('_'));
-    if (rows.length === 0) return '';
-    const cells = rows
-      .map(([key, value]) => `<tr><td><b>${xmlEscape(key)}</b></td><td>${xmlEscape(value)}</td></tr>`)
-      .join('');
-    return `<description><![CDATA[<table border="0" cellpadding="3">${cells}</table>]]></description>`;
+  // Boreholes are modelled once, up front: the collar/interval join is by hole
+  // id across the whole dataset, so it cannot be done per placemark.
+  const boreholes = options.boreholeLog ? new Map(buildBoreholeModel(dataset).holes.map((hole) => [hole.holeId, hole])) : null;
+  const droppedSecrets = new Set<string>();
+
+  const holeIdOf = (properties: Record<string, unknown>): string | null => {
+    for (const [key, value] of Object.entries(properties)) {
+      if (!/^(hole|bh|dh)[\s_-]?(id|no|number)?$/i.test(key.replace(/\s/g, ''))) continue;
+      if (typeof value === 'string' && value.trim() !== '') return value.trim();
+      if (typeof value === 'number') return String(value);
+    }
+    return null;
+  };
+
+  const balloon = (properties: Record<string, unknown>, name: string | undefined): string => {
+    const holeId = boreholes ? holeIdOf(properties) : null;
+    const hole = holeId ? boreholes?.get(holeId) : undefined;
+    const rendered = hole
+      ? renderBoreholeBalloon(hole, { footer: options.balloonFooter })
+      : renderBalloon(properties, { template: options.template, title: name, footer: options.balloonFooter });
+    for (const field of rendered.droppedSecrets) droppedSecrets.add(field);
+    return descriptionElement(rendered.html);
   };
 
   const placemark = (feature: CirFeature): string => {
@@ -361,7 +392,7 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
       `<Placemark>` +
       (label !== undefined && label !== null && String(label) !== '' ? `<name>${xmlEscape(label)}</name>` : '') +
       `<styleUrl>${styleId}</styleUrl>` +
-      (options.descriptionTable ? balloon(feature.properties ?? {}) : '') +
+      (options.descriptionTable ? balloon(feature.properties ?? {}, label === undefined || label === null ? undefined : String(label)) : '') +
       geometryXml(feature.geometry) +
       `</Placemark>`
     );
@@ -411,6 +442,20 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
     `<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n` +
     `<name>${xmlEscape(options.documentName ?? dataset.name)}</name>\n${styles}\n${body}\n` +
     `</Document>\n</kml>\n`;
+
+  if (droppedSecrets.size > 0) {
+    // A KMZ gets emailed around. A credential inside one has leaked, so the
+    // fields are withheld — and saying so is part of the same rule: a silent
+    // drop would be its own dishonesty (R3, R23).
+    warnings.push(
+      warn('KML_SECRETS_WITHHELD', `${droppedSecrets.size} field(s) were left out of the balloons because their names or values look like credentials.`, {
+        count: droppedSecrets.size,
+        reason: `Withheld: ${[...droppedSecrets].join(', ')}. A KML or KMZ is shared freely, so anything token-shaped in one is a leak.`,
+        action: 'Rename the field if it is not a secret, or remove it from the source before converting.',
+        detail: { fields: [...droppedSecrets] },
+      })
+    );
+  }
 
   return { text, warnings };
 }

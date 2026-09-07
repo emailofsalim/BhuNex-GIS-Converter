@@ -14,6 +14,7 @@ import type { NamingPattern } from '../core/naming';
 import type { OutputLayout } from '../core/layout';
 import type { DatasetProfile, FidelityPrediction } from '../core/predict';
 import type { BurnInMode, BurnInPriority } from '../qa/burn-in';
+import type { KmlTemplate } from '../engines/vector/kml-templates';
 import type { NativeHealth } from '../adapters/native-messaging/client';
 import type { OutputBlobFile } from '../workers/client';
 
@@ -108,6 +109,13 @@ export interface AppSettings {
   burnInPriority: BurnInPriority;
   /** Delete the source text after burning it in. Never implied (R17). */
   burnInReplaceSource: boolean;
+
+  /** Which balloon a KML/KMZ description uses (spec §28.5). */
+  kmlTemplate: KmlTemplate;
+  /** Render boreholes as core-log balloons rather than attribute tables. */
+  kmlBoreholeLog: boolean;
+  /** Footer line on every balloon, e.g. a survey date. */
+  kmlBalloonFooter: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -148,6 +156,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   burnInMode: 'attribute',
   burnInPriority: 'nearest-to-centre',
   burnInReplaceSource: false,
+  kmlTemplate: 'plain',
+  kmlBoreholeLog: false,
+  kmlBalloonFooter: '',
 };
 
 export interface LogEntry {

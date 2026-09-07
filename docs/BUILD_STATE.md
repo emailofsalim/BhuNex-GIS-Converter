@@ -21,7 +21,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 265 across 9 suites, all green |
+| Tests | 290 across 10 suites, all green |
 
 ### Where the donated engines came from
 Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writers),
@@ -53,7 +53,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 9 | Fidelity prediction ✅ + "what will be lost" ✅; conversion report doc ⛔, project health ⛔ (§22, §29) | 🟡 partial |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
 | 11 | Vertex editor, snapping, measurement, geometry ops, attribute table (§25, §26) | ⛔ not started |
-| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅; styled KMZ + borehole balloons ⛔ (§27, §28) | 🟡 partial |
+| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
 | 13 | Dual canvas + visual diff, command palette, workflows, project file (§30, §31) | ⛔ not started |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
@@ -85,7 +85,8 @@ Mercator, LCC), `epsg.ts` (bundled subset, Indian zones first), `wkt.ts`
 gml, osm, mifmid, landxml, surpac, xlsx), `cad/` (dxf-read, dxf-write), `raster/`
 (asciigrid, worldfile, geotiff, geotiff-write, tiff-codec), `pointcloud/` (las,
 text, decimate),
-`survey/schema.ts`, `archives/zip.ts`, `xml.ts` (worker-safe XML reader).
+`survey/schema.ts`, `survey/borehole.ts` (collar/interval join),
+`vector/kml-templates.ts` (balloons, secret stripping), `archives/zip.ts`, `xml.ts` (worker-safe XML reader).
 
 **QA** — `topology.ts` (per-feature checks + in-pipeline repair), `defects.ts`
 (the relational catalogue: overlaps, shared-edge mismatch, slivers, spikes,
@@ -170,8 +171,8 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 12 remainder (§28).** Styled KML/KMZ with the borehole core-log balloon
-   and the template system. The placement and burn-in engines it builds on are done.
+1. **Phase 13 (§30, §31).** Dual canvas with visual diff, command palette, saved
+   workflows, presets and the project file — the last unbuilt phase.
 2. **Phase 9 remainder (§22.4, §29.2).** The per-file conversion report document,
    and the project health score. The prediction engine they both build on is done.
 3. **Phase 11 (§25, §26).** The vertex editor, cross-feature snapping and the
@@ -195,6 +196,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 | Date | Session | What landed |
 |---|---|---|
 | 2026-09-04/05 | initial build | Phases 0–3 and 7 complete; Phase 5 partial (LAS/PLY/PTS/XYZ + decimation); Phase 6 partial (DWG native host). 116 tests, CI, instruction document, generated format matrix, PR. |
+| 2026-09-07 | mining deliverables | §28: `engines/survey/borehole.ts` joins collars to interval logs by hole id across layers and packages (Datamine/Surpac/Micromine/spreadsheet aliases), computes thickness from the depths, reports orphaned intervals and finds log gaps and overlaps. `engines/vector/kml-templates.ts` renders the core-log balloon and six field-ordering templates, escapes every value, strips credential-shaped fields and reports the omission. 290 tests (`borehole.test.ts` new, 25). |
 | 2026-09-07 | cadastral semantics | Phase 12: `qa/label-placement.ts` (pole of inaccessibility — the centroid of a C-shaped parcel falls outside it), `qa/burn-in.ts` (text inside polygons → attribute/label/geometry/CAD/KML, five tie-break rules, rejected candidates reported), `qa/polygonize.ts` (separate LINE entities → closed boundaries, gap recorded per polygon, crossing lines deliberately not noded). Both wired into the pipeline as opt-in stages and exposed as a Cadastral tools panel. 265 tests (`burnin.test.ts` new, 28). |
 | 2026-09-07 | QA catalogue + rename | Phase 10: `core/spatial-index.ts` (uniform grid), `qa/defects.ts` (11 relational detectors), `qa/rules.ts` (10 asserted rules with scope), `qa/repair.ts` (plan → apply → diff-based undo, protected layers, fix-safe-issues). Found and fixed an inverted ring-winding convention that made every shapefile and MIF/MID this tool wrote non-conforming. Product renamed to **Universal BhuNex Converter**. 237 tests (`qa.test.ts` new, 37). |
 | 2026-09-06 | fidelity prediction | Phase 9: `core/predict.ts` — eleven-axis GREEN/YELLOW/RED prediction computed before conversion, from a one-pass `DatasetProfile` so ranking 30 targets costs one walk over the features. `FormatLimits` moved the writer constraints (DBF 10-char names, 254-byte values, shapefile one-shape-type, mandated CRS, layer model) into the registry. Wired into the pipeline as a pre-flight (R22): impossible targets fail with a reason, lossy ones proceed with counted warnings. UI: fidelity badge on every format card, cards ordered by predicted fidelity, and a "What will be lost" tab with the axis grid. 199 tests (`predict.test.ts` new, 24). |
