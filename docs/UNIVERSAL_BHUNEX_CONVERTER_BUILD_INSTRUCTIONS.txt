@@ -1113,19 +1113,29 @@ when a test covers it.
   [~] LiDAR workflow works where supported             LAS yes; LAZ refused
   [~] CAD layer tools work                             layers read/written; no
                                                        isolate/freeze/merge UI
-  [~] Geometry QA works                                qa/topology.ts subset
-  [~] Geometry repair works                            four repairs, no preview
-  [~] Export validation works                          writers refuse; no
-                                                       pre-flight report
+  [x] Geometry QA works                                defects.ts + rules.ts,
+                                                       37 tests
+  [~] Geometry repair works                            six operations with
+                                                       preview/apply/undo; the
+                                                       rest of §24.2 is open
+  [x] Export validation works                          predict.ts pre-flight
+                                                       blocks the impossible,
+                                                       counts the lossy
   [ ] Source canvas works                              single canvas today
   [ ] Target canvas works                              section 30
-  [ ] Side-by-side comparison works                    section 30
+  [~] Side-by-side comparison works                    measured on ten axes in
+                                                       the Compare tab; the
+                                                       overlay needs canvas two
   [ ] Collapse/expand behavior works                   section 30
   [ ] Vertex editor works                              section 25
   [ ] Snap works                                       section 25
   [ ] Individual shared-edge snap works                section 25
-  [ ] Overlap detection works                          section 24
-  [ ] Gap detection works                              section 24
+  [x] Overlap detection works                          defects.ts + rules.ts,
+                                                       tested
+  [~] Gap detection works                              finds gaps along
+                                                       adjacent boundaries; a
+                                                       missing parcel inside a
+                                                       coverage needs a union
   [x] Point-in-polygon detection works                 qa/burn-in.ts, tested
   [x] Text-in-polygon detection works                  qa/burn-in.ts, tested
   [x] Label burn-in works                              five modes, tested
@@ -1134,13 +1144,24 @@ when a test covers it.
   [ ] PDF/image map workflow works where supported     section 28.3
   [x] Borehole KMZ generation works                    core-log balloon, tested
   [x] Styled KML balloons work                         six templates, tested
-  [ ] Undo/redo works                                  section 31 (R19)
+  [x] Fidelity prediction works                        eleven axes before the
+                                                       conversion runs, tested
+  [x] Command palette works                            Ctrl/Cmd+K, ranked, tested
+  [x] Presets work                                     twelve, guarded by tests
+  [~] Undo/redo works                                  repair undoes exactly,
+                                                       as a diff; no global
+                                                       history yet (§31.1)
   [ ] Project save/reopen works                        section 31
 
   [x] built and tested   [~] partial, gap stated   [ ] specified, not built
 
+Standing at 28 built, 7 partial, 9 not built.
+
 This checklist is rewritten at the end of every session in the same commit as
-the work it describes. A tick that no test supports is a rule R1 violation.
+the work it describes. A tick that no test supports is a rule R1 violation - and
+so, less obviously, is a box left unticked after the work landed: a checklist
+that understates what exists stops being read, and then it stops being true in
+the other direction too.
 
 
 ================================================================================
