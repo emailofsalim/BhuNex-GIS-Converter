@@ -17,7 +17,11 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run lint && npm run test && npm run build"
+    "verify": "npm run lint && npm run test && npm run build",
+    "build:store": "STORE_BUILD=1 vite build",
+    "store:check": "node scripts/assert-store-ready.mjs",
+    "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs",
+    "assets": "node scripts/make-store-assets.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

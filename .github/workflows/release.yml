@@ -46,6 +46,14 @@ jobs:
       - name: Assert the build is offline-only
         run: node scripts/assert-offline.mjs
 
+      - name: Build the store package
+        # No source maps: they were 78% of the package and a store listing has
+        # no bug reports to symbolicate.
+        run: npm run build:store
+
+      - name: Assert the package satisfies the store rules
+        run: npm run store:check
+
       - name: Package extension
         run: npm run package
 

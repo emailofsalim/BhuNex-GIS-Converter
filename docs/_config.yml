@@ -1,0 +1,12 @@
+# GitHub Pages configuration.
+#
+# Exists so the privacy policy has a public URL: both stores require one before
+# a listing can be published, and a link into the repository's file browser is
+# accepted but reads as an afterthought next to a real page.
+#
+# Enable at Settings -> Pages -> Deploy from a branch -> main -> /docs.
+# docs/PRIVACY.md is then served at /Universal-Converter/PRIVACY.html.
+title: Universal BhuNex Converter
+description: Offline GIS, CAD, survey, LiDAR and mining data conversion.
+theme: jekyll-theme-minimal
+show_downloads: false

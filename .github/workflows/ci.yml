@@ -59,6 +59,13 @@ jobs:
         # catches an accidental import long before a reviewer would.
         run: node scripts/assert-offline.mjs
 
+      - name: Assert the package satisfies the store rules
+        # Every rule here is one the Chrome Web Store or Edge Add-ons rejects
+        # for. The description limit is 132 characters and is enforced silently
+        # at upload — this project shipped at 134 once, which would have been an
+        # automatic rejection nobody could have spotted by reading the manifest.
+        run: npm run store:check
+
       - name: Package extension
         run: npm run package
 

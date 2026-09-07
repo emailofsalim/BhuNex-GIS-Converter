@@ -1121,12 +1121,14 @@ when a test covers it.
   [x] Export validation works                          predict.ts pre-flight
                                                        blocks the impossible,
                                                        counts the lossy
-  [ ] Source canvas works                              single canvas today
-  [ ] Target canvas works                              section 30
-  [~] Side-by-side comparison works                    measured on ten axes in
-                                                       the Compare tab; the
-                                                       overlay needs canvas two
-  [ ] Collapse/expand behavior works                   section 30
+  [x] Source canvas works                              ui/dual-canvas.ts, left
+  [x] Target canvas works                              the re-imported output,
+                                                       not a preview of intent
+  [x] Side-by-side comparison works                    ten measured axes plus
+                                                       the geometry overlay
+                                                       drawn over both, tested
+  [x] Collapse/expand behavior works                   draggable divider, each
+                                                       side maximisable
   [ ] Vertex editor works                              section 25
   [ ] Snap works                                       section 25
   [ ] Individual shared-edge snap works                section 25
@@ -1148,14 +1150,19 @@ when a test covers it.
                                                        conversion runs, tested
   [x] Command palette works                            Ctrl/Cmd+K, ranked, tested
   [x] Presets work                                     twelve, guarded by tests
-  [~] Undo/redo works                                  repair undoes exactly,
-                                                       as a diff; no global
-                                                       history yet (§31.1)
-  [ ] Project save/reopen works                        section 31
+  [x] Workflow record and replay works                 core/workflow.ts; a step
+                                                       that would prompt by
+                                                       hand still prompts on
+                                                       replay (R18), tested
+  [x] Undo/redo works                                  core/history.ts spans
+                                                       every operation, with
+                                                       checkpoints, tested
+  [x] Project save/reopen works                        core/project.ts, hash-
+                                                       matched sources, tested
 
   [x] built and tested   [~] partial, gap stated   [ ] specified, not built
 
-Standing at 28 built, 7 partial, 9 not built.
+Standing at 34 built, 6 partial, 4 not built.
 
 This checklist is rewritten at the end of every session in the same commit as
 the work it describes. A tick that no test supports is a rule R1 violation - and
@@ -1738,9 +1745,9 @@ into the exact contributing items. A score with no drill-down is decoration.
 ================================================================================
 30. DUAL CANVAS, VISUAL DIFF AND NAVIGATION
 ================================================================================
-STATUS: SPECIFIED. Phase 13. Today there is one preview canvas.
+STATUS: BUILT. Phase 13. ui/dual-canvas.ts + qa/geometry-overlay.ts.
 
-30.1 TWO CANVASES
+30.1 TWO CANVASES (BUILT - ui/dual-canvas.ts)
 LEFT: import/source. RIGHT: export/target, showing the actual converted
 representation before export. Both support pan, zoom, fit-to-data, coordinate
 readout, layer control, selection, measurement, visibility and render
@@ -1751,8 +1758,8 @@ other takes the space. Pan, zoom and extent synchronise, and can be unlinked.
 
 Nobody should have to export a file to discover that the conversion damaged it.
 
-30.2 VISUAL DIFF (BUILT as a measured comparison - qa/diff.ts; the geometry
-overlay itself waits on the second canvas)
+30.2 VISUAL DIFF (BUILT - qa/diff.ts for the numbers, qa/geometry-overlay.ts
+for where they are, drawn over both canvases)
 Ten axes: feature count, geometry types, vertex count, coordinates, area,
 perimeter, extent, attributes, CRS and Z range. Each reports the source value,
 the output value, the measured difference and the tolerance it was judged
@@ -1776,7 +1783,8 @@ Three behaviours worth keeping:
   - An extent difference in the thousands is called out as almost certainly a
     CRS mismatch, because that is what it almost always is.
 
-30.3 NAVIGATION (PARTIAL - the palette is built; the two-canvas shell is not)
+30.3 NAVIGATION (PARTIAL - the palette and the two-canvas shell are built;
+the PROJECT|IMPORT|CONVERT|QA|EDIT|EXPORT|SETTINGS top-level nav is not)
 Primary navigation: PROJECT | IMPORT | CONVERT | QA | EDIT | EXPORT | SETTINGS.
 Home: drop files, recent projects, quick conversions, saved workflows.
 Status bar: CRS, units, features, vertices, file size, processing status,
@@ -1788,13 +1796,13 @@ task needs them (R24).
 ================================================================================
 31. PROJECT, HISTORY, WORKFLOWS AND COMMAND PALETTE
 ================================================================================
-STATUS: SPECIFIED. Phase 13.
+STATUS: BUILT. Phase 13. core/history.ts, core/workflow.ts, core/project.ts.
 
-31.1 OPERATION HISTORY (R19)
+31.1 OPERATION HISTORY (R19) (BUILT - core/history.ts)
 Import, CRS change, repair, edit, snap, burn-in, reproject, simplify, export -
 each recorded, each reversible, with checkpoints and project snapshots.
 
-31.2 WORKFLOW BUILDER
+31.2 WORKFLOW BUILDER (BUILT - core/workflow.ts)
 Record a sequence and replay it on new data. Example:
   IMPORT DXF -> detect CRS -> repair topology -> polygonise closed polylines
   -> burn text into polygons -> reproject to WGS 84 -> KML -> KMZ -> report
@@ -1829,10 +1837,32 @@ A further guard: any preset targeting KML or KMZ must set EPSG:4326. Projected
 coordinates written into a KML place the geometry in the wrong part of the
 world, and the file still opens - so the failure is silent.
 
-31.4 PROJECT FILE
+31.4 PROJECT FILE (BUILT - core/project.ts)
 Saves source references, imported data, transformations, CRS, styles, edits, QA
 results, workflows and export configuration, and reopens without losing editing
 state. It MUST NOT contain credentials or tokens (R23).
+
+A project file is the most shareable artefact this tool produces: small, JSON,
+and emailed. Everything written into one passes through stripSecretsDeep first
+and what was removed is LISTED IN THE FILE, so an omission is visible rather
+than mysterious.
+
+Sources are recorded as IDENTITIES, not bytes: name, path, size, format and the
+SHA-256 the importer already computed. On reopen, matching is on the hash where
+both sides have one, because that is the only test that answers the question
+that matters - is this the same data the edits were made against? Name and size
+agreeing is not the same claim: a re-export from the same CAD file is very often
+the same name and a similar size, and replaying a vertex edit onto it would move
+the wrong vertex. Where a hash is absent the state is `unverifiable`, never
+`same`.
+
+A DEFECT WORTH RECORDING, found while building this. The credential value
+pattern was case-SENSITIVE. It matched a lower-case `bearer ` and missed
+`Bearer ` - the capitalisation every HTTP header uses and therefore the only one
+anyone ever pastes into an attribute table. R23 looked enforced in review and in
+the tests while letting the real case through into KMZ balloons. The detection
+now lives in core/secrets.ts, once, shared by every writer, with the `i` flag
+and a test asserting all three capitalisations.
 
 31.5 COMMAND PALETTE (BUILT - ui/command-palette.ts)
 Ctrl/Cmd+K. Commands are built FRESH on every open, not once at start-up,

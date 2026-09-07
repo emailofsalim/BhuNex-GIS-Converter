@@ -16,6 +16,8 @@ import type { DatasetProfile, FidelityPrediction } from '../core/predict';
 import type { BurnInMode, BurnInPriority } from '../qa/burn-in';
 import type { DiffReport } from '../qa/diff';
 import type { GeometryOverlay } from '../qa/geometry-overlay';
+import type { ProjectHealth } from '../qa/health';
+import type { ConversionReport } from '../core/report';
 import type { HistoryState } from '../core/history';
 import type { Workflow } from '../core/workflow';
 import type { KmlTemplate } from '../engines/vector/kml-templates';
@@ -63,6 +65,10 @@ export interface QueueItem {
   outputDataset?: any;
   /** Where the source and the output differ, drawn over both canvases. */
   overlay?: GeometryOverlay;
+  /** Project health, assessed on the source (spec §29.2). */
+  health?: ProjectHealth;
+  /** The per-file conversion report (spec §22.4). */
+  report?: ConversionReport;
   /**
    * Every operation that changed this file's data, each reversible (§31.1).
    *
@@ -134,6 +140,11 @@ export interface AppSettings {
   kmlBoreholeLog: boolean;
   /** Footer line on every balloon, e.g. a survey date. */
   kmlBalloonFooter: string;
+
+  /** Attach a per-file conversion report to the delivery (spec §22.4). */
+  embedReport: boolean;
+  /** Assess project health while converting (spec §29.2). */
+  assessHealth: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -177,6 +188,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   kmlTemplate: 'plain',
   kmlBoreholeLog: false,
   kmlBalloonFooter: '',
+  embedReport: false,
+  // On by default: it is the one component that costs nothing the user did not
+  // already ask for when they enabled QA, and a health score nobody switched on
+  // is a health score nobody ever sees.
+  assessHealth: true,
 };
 
 export interface LogEntry {

@@ -46,7 +46,9 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 
 1. Download `universal-bhunex-converter-<version>.zip` from
    **[Releases](https://github.com/emailofsalim/Universal-Converter/releases)**.
-2. **Unzip it** — browsers load a folder, not an archive.
+2. **Extract it to a plain local folder such as `C:\Extensions\`** — browsers
+   load a folder, not an archive, and a folder inside OneDrive loads as
+   unreadable placeholders on a managed laptop.
 3. `chrome://extensions` (or `edge://extensions`) → turn on **Developer mode**.
 4. **Load unpacked** → select the unzipped folder, the one that directly
    contains `manifest.json`.
@@ -67,8 +69,9 @@ Then **Load unpacked** → select **`dist/`**. Not the repository root, and not
 
 `npm run package` also produces `dist-zip/universal-bhunex-converter-1.0.0.zip`.
 
-Full instructions, including what to do when the manifest error appears, are in
-**[docs/INSTALL.md](docs/INSTALL.md)**.
+Seeing *"Manifest file is missing or unreadable"*? On a work laptop it is
+usually OneDrive, not the wrong folder — **[docs/INSTALL.md](docs/INSTALL.md)**
+explains both causes and how to tell them apart.
 
 Optional: DWG support needs a small local helper — see
 [docs/NATIVE_HOST.md](docs/NATIVE_HOST.md). Everything else works without it.

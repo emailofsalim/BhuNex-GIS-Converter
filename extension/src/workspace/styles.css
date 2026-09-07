@@ -1444,3 +1444,56 @@ details.adv > div {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ------------------------------------------- project health (spec §29.2) */
+
+.health__component {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.health__summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+}
+
+.health__summary::-webkit-details-marker { display: none; }
+
+/* A disclosure triangle drawn in CSS rather than relying on the platform
+   marker, which is hidden above so the row can be laid out as a grid. */
+.health__summary::before {
+  content: '▸';
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.health__component[open] .health__summary::before {
+  transform: rotate(90deg);
+}
+
+.health__label {
+  font-weight: 600;
+  flex: 1 1 auto;
+}
+
+.health__score {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.health__score--ok { color: var(--ok, #3fb950); }
+.health__score--warn { color: var(--warn, #d29922); }
+.health__score--fail { color: var(--error, #f85149); }
+.health__score--muted { color: var(--text-muted); font-style: italic; }
+
+.health__weight {
+  color: var(--text-faint);
+  font-size: 11px;
+}
