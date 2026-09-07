@@ -927,17 +927,27 @@ budget, refuse with:
 14.4 REPORTED METRICS
 read speed, conversion speed, output size, elapsed time, peak memory estimate.
 
-14.5 ALGORITHM SELECTION BY DATASET SIZE (STATUS: SPECIFIED, Phase 11)
+14.5 ALGORITHM SELECTION BY DATASET SIZE (STATUS: PARTIAL - the index is built)
 The engine picks the strategy; the user never has to know which:
   small       direct geometry operations
   medium      indexed spatial queries (R-tree or equivalent)
   large       tiling, chunking, streaming
   very large  progressive visualisation and selective processing
-Spatial indexing is not needed by format conversion, which is why none is built
-yet: a reader walks its input once. It becomes necessary the moment topology,
-overlap detection, snapping and burn-in arrive, because each of those is a
-pairwise query that is quadratic without an index. The index therefore lands in
-the same phase as the first feature that needs it, not before.
+Spatial indexing is not needed by format conversion: a reader walks its input
+once. It became necessary the moment topology and overlap detection arrived,
+because each is a pairwise query that is quadratic without one - 40,000 parcels
+is 800 million comparisons unindexed and a few hundred thousand indexed. It
+therefore landed in the same phase as the first feature that needed it, not
+before.
+
+core/spatial-index.ts is a uniform grid, not an R-tree, deliberately: it
+bulk-loads in one pass with no balancing, so it is cheap enough to build per
+check rather than maintain across edits; and its behaviour stays predictable
+when boxes overlap heavily, which is exactly what cadastral parcels and contour
+lines look like. A feature far larger than the rest goes in an oversized list
+scanned on every query - correct, and slower only for the few that deserve it.
+
+Tiling and streaming for very large datasets remain open.
 
 
 ================================================================================
@@ -1033,8 +1043,9 @@ here:
                        prediction and "show exactly what will be lost" - DONE;
                        still open: per-file conversion report document and the
                        project health score                    (sections 22, 29)
-  PHASE 10 QA/REPAIR   full defect catalogue, configurable topology rules,
-                       preview-and-apply repair with undo, fix-safe-issues
+  PHASE 10 QA/REPAIR   defect catalogue, topology rules, preview-and-apply
+                       repair with undo, fix-safe-issues, spatial index - DONE;
+                       still open: the remaining repair operations in 24.2
                                                                (sections 23, 24)
   PHASE 11 EDIT        vertex editor, snapping, measurement, advanced geometry
                        operations, attribute table              (sections 25, 26)
@@ -1301,28 +1312,76 @@ same data rendered for one file.
 ================================================================================
 23. GEOMETRY QA, TOPOLOGY AND SPATIAL RELATIONSHIPS
 ================================================================================
-STATUS: PARTIAL. qa/topology.ts implements a subset. Phase 10.
+STATUS: BUILT (qa/defects.ts, qa/rules.ts, tests/qa.test.ts). The canvas
+interaction that lets a user click a defect and see it is Phase 11.
 
 23.1 DEFECT CATALOGUE
-Built: unclosed rings, duplicate and consecutive-duplicate vertices,
-zero-length segments, ring orientation, self-intersection, duplicate features.
-Specified: bow-ties, invalid rings, sliver polygons, spikes, overshoots,
-undershoots, gaps, overlaps, multipart inconsistency, nested polygons, invalid
-holes, hole outside shell, nearly coincident vertices, near-duplicate
-geometries, dangling lines, unconnected endpoints, crossing lines,
-polygon/line and polygon/point conflicts, Z anomalies, coordinate outliers.
+qa/topology.ts checks a feature against ITSELF - unclosed rings, duplicate and
+consecutive-duplicate vertices, zero-length segments, ring orientation,
+self-intersection, duplicate features.
 
-Every defect MUST carry: severity, location, feature id, explanation, suggested
-repair, preview, apply, undo. A defect the user cannot locate on the canvas is
-not reported usefully.
+qa/defects.ts checks features against EACH OTHER, which is where cadastral and
+mine-survey data actually goes wrong. Built: sliver polygons, spikes, bow-ties,
+hole outside shell, Z anomalies, polygon overlaps, shared-edge mismatch, nested
+polygons, near-duplicate geometry, crossing lines, dangling endpoints.
 
-23.2 CONFIGURABLE TOPOLOGY RULES
+Three rules govern every detector:
+
+  LOCATABLE. Severity, layer, feature id and a position. A defect the user
+  cannot go and look at is a statistic, not a finding.
+
+  NAMES ITS TOLERANCE. "These parcels overlap" is meaningless without "by more
+  than 0.01 m". A millimetre is survey noise; a metre is a boundary dispute. The
+  threshold is stated in the finding and is always the user's to set (R21).
+
+  DETECTS ONLY. Detection and repair are separate modules so that a scan can be
+  run for information alone, and so a legally operative boundary can be
+  inspected without being touched (R18).
+
+Three implementation decisions worth keeping:
+
+  Slivers are found by THINNESS, not by area. The Polsby-Popper ratio
+  4*pi*area/perimeter^2 is 1 for a circle and near 0 for a strip. A 0.2 sq m
+  survey monument pad is small and valid; a 0.2 sq m strip 40 m long is an
+  artefact. Testing area alone flags every small legitimate parcel.
+
+  Z anomalies use the MEDIAN and MEDIAN ABSOLUTE DEVIATION, not the mean and
+  standard deviation. A single transposed decimal - 4123.45 for 412.345 -
+  inflates the standard deviation so far that it drags the threshold past
+  itself and goes unreported. That masking effect defeats the exact blunder the
+  check exists to catch.
+
+  Shared-edge mismatch is measured VERTEX TO SEGMENT, not vertex to vertex. The
+  usual case is one parcel carrying an extra vertex that bulges a few
+  millimetres into the other's straight edge; there is no opposing vertex near
+  it, so a vertex-to-vertex test finds nothing and the sliver survives to the
+  dissolve.
+
+Pairwise checks run through core/spatial-index.ts. Above maxPairwiseFeatures
+they are REFUSED with the count and the reason - never silently reduced to a
+subset that reports a clean result which is not.
+
+23.2 CONFIGURABLE TOPOLOGY RULES (BUILT - qa/rules.ts)
 Must not overlap; must not have gaps; must contain; must be within; must touch;
 must be covered by; must not self-intersect; shared boundaries must match;
 lines must connect; polygons must close.
 
-Scope is selectable: whole dataset, one layer, selected features, one parcel.
-Global repair MUST NOT be forced when the user asked to fix one feature.
+A rule differs from a defect: a defect is a suspicion a heuristic raises, a rule
+is a standard the USER asserts, so a violation is a failure against their stated
+intent. Both are reported; only rules can be said to pass or fail.
+
+Scope is part of every rule: whole dataset, one layer, or named features. A
+surveyor fixing one disputed boundary runs "must not overlap" on that parcel and
+gets two violations, not four thousand. Forcing whole-dataset evaluation is how
+tools push people into global repairs they never wanted (R18).
+
+A rule that CANNOT be evaluated - a relational rule with no second layer, an
+empty scope - reports notEvaluated with the reason. It MUST NOT report "passed":
+a rule that did not run has not been satisfied.
+
+"Must not have gaps" finds gaps along adjacent boundaries. It does NOT find an
+entire missing parcel inside a coverage, which needs a boolean union this build
+does not have, and the violation text says so rather than implying wider cover.
 
 23.3 OVERLAP AND GAP INTELLIGENCE
 Classify each pair: overlaps, contains, touches, crosses, separated, gap.
@@ -1335,27 +1394,57 @@ Legal boundaries are never modified without explicit per-operation confirmation
 ================================================================================
 24. GEOMETRY REPAIR
 ================================================================================
-STATUS: PARTIAL. Four repairs exist, all off by default. Phase 10.
+STATUS: BUILT for the preview/apply/undo contract and six operations
+(qa/repair.ts). The remaining operations in 24.2 are Phase 11, and they inherit
+the contract rather than reinventing it.
 
-24.1 BUILT
-Close rings, remove duplicate vertices, normalise orientation, deduplicate
-features - each off by default, each counted when applied.
+24.1 THE CONTRACT
+qa/topology.ts repairs as part of a CONVERSION: switch an option on and the
+pipeline applies it. That is the wrong shape for editing. qa/repair.ts splits
+every operation in two:
 
-24.2 SPECIFIED
-Remove zero-length segments; snap vertices; snap shared edges; regularise;
-smooth; simplify; densify; fix ring direction; repair self-intersection; remove
-slivers; merge adjacent polygons; split polygon; split line; extend, trim and
-join lines; make and explode multipart; fill and remove holes; rebuild topology.
+  planRepair(dataset, operation, scope)  -> RepairPlan   nothing is modified
+  applyRepair(dataset, operation, scope) -> RepairResult new dataset + undo
+
+Both call the SAME rewrite function - the preview is literally the apply, run
+without keeping the result. There is no second code path that could describe one
+thing and do another, which is how preview features usually become lies.
+
+A plan lists every change with its feature, its position and the distance moved,
+so "close rings" can be inspected before it touches a boundary.
+
+UNDO IS A DIFF, NOT A SNAPSHOT (R19). Only the features that actually changed
+are held, each as its geometry before the edit. A layer of 400,000 contours
+where one ring was closed costs one stored geometry, not 400,000 - the
+difference between undo working and undo running the tab out of memory.
+
+PROTECTED LAYERS. A layer named in protectedLayers is refused, with the refusal
+reported and counted, never silently skipped. Cadastral and lease boundaries are
+legally operative: moving one is a change to a title, not a data fix (R18).
+
+Built: close rings, remove duplicate vertices, remove zero-length segments, fix
+ring direction, remove spikes, snap vertices within a feature.
+
+24.2 SPECIFIED (Phase 11)
+Snap shared edges across features; regularise; smooth; simplify; densify;
+repair self-intersection; remove slivers; merge adjacent polygons; split
+polygon; split line; extend, trim and join lines; make and explode multipart;
+fill and remove holes; rebuild topology.
 
 Every operation: previewable before commit, tolerance-aware with the tolerance
 displayed in the data's own units (R21), undoable (R19).
 
-24.3 FIX ALL SAFE ISSUES
-One action, restricted to repairs that are safe and reversible: consecutive
-duplicate vertices, zero-length segments, ring closure strictly within
-tolerance, encoding normalisation, and exact duplicate records where the user
-has approved that policy. It MUST refuse to touch uncertain cadastral, lease or
-mining geometry, and MUST list what it changed.
+24.3 FIX ALL SAFE ISSUES (BUILT)
+Safe means two things at once: reversible, AND incapable of moving a boundary
+beyond a stated tolerance.
+
+Ring closure qualifies only when the gap is small enough to be a digitising slip.
+A ring left half a metre open is a question for the surveyor, and the refusal
+says so rather than quietly shutting it.
+
+SNAPPING IS NEVER INCLUDED. Snapping moves survey positions; on cadastral data
+that is a legal act, not a tidy-up. Protected layers are never touched. Every
+operation applied and every one skipped is listed with its reason.
 
 
 ================================================================================
