@@ -40,7 +40,17 @@ export interface LabelAnchor {
 }
 
 export interface LabelPlacementOptions {
-  /** Stop subdividing once the answer cannot improve by more than this. */
+  /**
+   * Absolute floor on how far the search will refine, in dataset units.
+   *
+   * A *relative* floor of one-thousandth of the polygon's longer extent applies
+   * as well, and whichever is coarser wins. That matters more than it sounds:
+   * refining a 144-unit parcel to a millimetre costs four more levels of
+   * subdivision — sixteen times the cells — to move the anchor by a millimetre,
+   * which is invisible under a label that is metres tall. Multiplied by four
+   * thousand parcels on a cadastral sheet, it is the difference between a
+   * placement pass that finishes and one nobody waits for.
+   */
   precision: number;
   /**
    * A polygon whose clearance is below this fraction of its longer extent is
@@ -65,6 +75,59 @@ interface Cell {
   distance: number;
   /** Best distance any point in this cell could possibly have. */
   bound: number;
+}
+
+/**
+ * A max-heap keyed on `bound`.
+ *
+ * The search is best-first, so every iteration needs the cell with the highest
+ * upper bound. Scanning an array for it makes the whole thing quadratic in the
+ * number of cells, and the cell count explodes on exactly the shapes this
+ * function exists for: a thin diagonal strip fills a nearly square bounding box
+ * with cells that are all outside the polygon and all still plausible. That
+ * cost measured at eleven seconds for one road reserve — unusable when a
+ * cadastral sheet holds four thousand parcels.
+ *
+ * A heap makes selection O(log n) and the same placement immediate.
+ */
+class CellQueue {
+  private readonly items: Cell[] = [];
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  push(cell: Cell): void {
+    this.items.push(cell);
+    let index = this.items.length - 1;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (this.items[parent].bound >= this.items[index].bound) break;
+      [this.items[parent], this.items[index]] = [this.items[index], this.items[parent]];
+      index = parent;
+    }
+  }
+
+  pop(): Cell | undefined {
+    if (this.items.length === 0) return undefined;
+    const top = this.items[0];
+    const last = this.items.pop()!;
+    if (this.items.length === 0) return top;
+
+    this.items[0] = last;
+    let index = 0;
+    for (;;) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      let largest = index;
+      if (left < this.items.length && this.items[left].bound > this.items[largest].bound) largest = left;
+      if (right < this.items.length && this.items[right].bound > this.items[largest].bound) largest = right;
+      if (largest === index) break;
+      [this.items[largest], this.items[index]] = [this.items[index], this.items[largest]];
+      index = largest;
+    }
+    return top;
+  }
 }
 
 /**
@@ -140,7 +203,7 @@ export function labelAnchor(rings: Position[][], options: Partial<LabelPlacement
   // Seed with a grid over the bounding box, and with the centroid as a
   // candidate — for a convex polygon the centroid is already close to optimal,
   // which cuts the search short.
-  const queue: Cell[] = [];
+  const queue = new CellQueue();
   for (let x = minX; x < maxX; x += cellSize) {
     for (let y = minY; y < maxY; y += cellSize) {
       queue.push(makeCell(x + half, y + half, half, rings));
@@ -151,18 +214,15 @@ export function labelAnchor(rings: Position[][], options: Partial<LabelPlacement
   const bboxCell = makeCell(minX + width / 2, minY + height / 2, 0, rings);
   if (bboxCell.distance > best.distance) best = bboxCell;
 
-  // Precision is bounded so a huge extent cannot spin for ever on a target it
-  // will never reach.
-  const precision = Math.max(settings.precision, cellSize / 1e5);
+  // The coarser of the absolute floor and one-thousandth of the polygon's
+  // longer extent: enough to place a label, not enough to waste levels of
+  // subdivision on a difference no one can see.
+  const precision = Math.max(settings.precision, Math.max(width, height) / 1000);
   let guard = 0;
 
-  while (queue.length > 0 && guard++ < 100000) {
-    // Best-first: take the cell with the highest upper bound.
-    let bestIndex = 0;
-    for (let index = 1; index < queue.length; index++) {
-      if (queue[index].bound > queue[bestIndex].bound) bestIndex = index;
-    }
-    const cell = queue.splice(bestIndex, 1)[0];
+  for (;;) {
+    const cell = queue.pop();
+    if (!cell || guard++ >= 100000) break;
 
     if (cell.distance > best.distance) best = cell;
     // No point in this cell can beat what we already have.
