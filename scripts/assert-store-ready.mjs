@@ -172,6 +172,55 @@ for (const size of REQUIRED_ICONS) {
   }
 }
 
+// --------------------------------------------------------- loadability
+
+/**
+ * Every file the manifest points at must exist, and every asset the pages pull
+ * in must exist too.
+ *
+ * This is the check that catches "the extension loads but the workspace is
+ * blank" — a build that dropped a chunk still has a valid manifest and still
+ * installs without complaint, and the failure only shows up when a person
+ * clicks the toolbar icon and gets nothing. A missing file is cheap to detect
+ * here and expensive to diagnose there.
+ */
+const manifestRefs = [
+  manifest.background?.service_worker,
+  manifest.action?.default_popup,
+  manifest.side_panel?.default_path,
+  manifest.options_page,
+  ...Object.values(manifest.icons ?? {}),
+  ...Object.values(manifest.action?.default_icon ?? {}),
+].filter(Boolean);
+
+for (const ref of [...new Set(manifestRefs)]) {
+  if (!existsSync(join(distDir, ref))) {
+    fail('loadability', `The manifest points at ${ref}, which is not in dist/.`, 'The build did not emit it, or the path is wrong.');
+  }
+}
+
+// Local assets referenced by the extension's own pages.
+const LOCAL_REF = /(?:src|href)\s*=\s*["']([^"':]+)["']/gi;
+for (const file of walk(distDir)) {
+  if (!/\.html?$/i.test(file)) continue;
+  const html = readFileSync(file, 'utf8');
+  const pageDir = dirname(file);
+  LOCAL_REF.lastIndex = 0;
+  let match;
+  while ((match = LOCAL_REF.exec(html))) {
+    const ref = match[1].split('?')[0].split('#')[0];
+    if (ref === '' || ref.startsWith('data:') || ref.startsWith('#')) continue;
+    const resolved = ref.startsWith('/') ? join(distDir, ref) : resolve(pageDir, ref);
+    if (!existsSync(resolved)) {
+      fail(
+        'loadability',
+        `${relative(distDir, file)} references ${ref}, which is not in the package.`,
+        'The page would load with that asset missing — which looks like a blank or broken workspace, not a missing file.'
+      );
+    }
+  }
+}
+
 // --------------------------------------------------------------- remote code
 
 /**
