@@ -55,6 +55,7 @@ import {
 import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
 import { predictConversion, type FidelityPrediction } from './predict';
 import { diffDatasets, type DiffReport } from '../qa/diff';
+import { buildGeometryOverlay, type GeometryOverlay } from '../qa/geometry-overlay';
 import { burnIn, describeBurnIn, DEFAULT_BURN_IN_OPTIONS, type BurnInOptions } from '../qa/burn-in';
 import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type PolygonizeOptions } from '../qa/polygonize';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
@@ -189,6 +190,17 @@ export interface ConversionResult {
    * comparison against nothing is not a comparison.
    */
   diff?: DiffReport;
+  /**
+   * The output read back as a dataset, for the second canvas (§30.1).
+   *
+   * This is the SAME re-import the QA verdict and the measured diff are
+   * computed from, so what the right-hand pane draws is the geometry the
+   * numbers describe — not a third reading of the file that could differ from
+   * either. Absent for the same reasons `diff` is.
+   */
+  outputDataset?: CirDataset;
+  /** Where the source and the output differ, for the overlay (§30.1). */
+  overlay?: GeometryOverlay;
   provenance: {
     sourceFile: string;
     sha256: string;
@@ -916,6 +928,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   // ---- QA: re-import the bytes just written and compare.
   let qa: FidelityReport;
   let diff: DiffReport | undefined;
+  let outputDataset: CirDataset | undefined;
+  let overlay: GeometryOverlay | undefined;
   if (!settings.runQa) {
     qa = notValidated('QA was switched off in the conversion settings.');
   } else if (plan.units.length > 1) {
@@ -923,6 +937,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     // layer as missing, so the check runs against the layer that was written.
     const checked = await runQa(plan.units[0].dataset, firstWritten, target, settings);
     diff = checked.diff;
+    outputDataset = checked.outputDataset;
+    overlay = checked.overlay;
     qa = {
       ...checked.report,
       summary: `${checked.report.summary} Checked the first of ${plan.units.length} layer files; each layer is written by the same engine on the same path.`,
@@ -931,6 +947,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     const checked = await runQa(prepared.dataset, firstWritten, target, settings);
     qa = checked.report;
     diff = checked.diff;
+    outputDataset = checked.outputDataset;
+    overlay = checked.overlay;
   }
 
   const finishedAt = new Date();
@@ -975,6 +993,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     qa,
     prediction,
     diff,
+    outputDataset,
+    overlay,
     provenance: {
       sourceFile: input.fileName,
       sha256: await sha256Hex(input.bytes),
@@ -1003,7 +1023,7 @@ async function runQa(
   files: OutputFile[],
   target: FormatDef,
   settings: ConversionSettings
-): Promise<{ report: FidelityReport; diff?: DiffReport }> {
+): Promise<{ report: FidelityReport; diff?: DiffReport; outputDataset?: CirDataset; overlay?: GeometryOverlay }> {
   if (target.support.import === 'none' || target.support.import === 'adapter') {
     return { report: notValidated(`${target.name} has no reader in this build, so the output could not be re-imported and checked.`) };
   }
@@ -1031,8 +1051,8 @@ async function runQa(
     // very writer, so its identity is known even if the sniffer is unsure.
     const reimported = await readSource(reimportInput, { ...detection, formatId: target.id, formatName: target.name, confidence: 1, requiresConfirmation: false }, settings);
 
-    if (source.pointcloud) return { report: comparePointCloud(source, reimported) };
-    if (source.raster) return { report: compareRaster(source, reimported) };
+    if (source.pointcloud) return { report: comparePointCloud(source, reimported), outputDataset: reimported };
+    if (source.raster) return { report: compareRaster(source, reimported), outputDataset: reimported };
     const prepared = source.kind === 'table' ? tableToPoints(source).dataset : source;
     const coordinateTolerance = settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.linearDecimals, 6);
     const report = compareVector(prepared, reimported, {
@@ -1048,7 +1068,11 @@ async function runQa(
       coordinateTolerance,
       featureCountTolerance: target.id === 'shapefile' || target.id === 'csv' || target.id === 'xlsx' ? Number.MAX_SAFE_INTEGER : 0,
     });
-    return { report, diff };
+    // Where the differences are, for the second canvas to draw. Judged against
+    // the same coordinate tolerance the diff used, so a coordinate the numbers
+    // call "within tolerance" is not simultaneously drawn as moved.
+    const overlay = buildGeometryOverlay(prepared, reimported, { tolerance: coordinateTolerance });
+    return { report, diff, outputDataset: reimported, overlay };
   } catch (error) {
     return { report: notValidated(`Re-import failed: ${error instanceof Error ? error.message : String(error)}`) };
   }

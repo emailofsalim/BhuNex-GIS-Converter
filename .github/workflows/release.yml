@@ -1,0 +1,83 @@
+name: Release
+
+# Builds the extension and attaches it to a GitHub Release, so it can be
+# installed WITHOUT Node, npm or a build step.
+#
+# This workflow exists because of a real failure: the repository ships
+# TypeScript, `dist/` is gitignored, and someone who downloads the source ZIP
+# and points "Load unpacked" at the folder gets "Manifest file is missing or
+# unreadable". A downloadable, already-built package is the fix — telling
+# people to install a toolchain first is not.
+on:
+  push:
+    tags: ['v*']
+  # Manual runs matter as much as tagged ones: it is how a ready-to-install
+  # build is produced from the current branch without inventing a version.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create or update (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, package and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify
+        # The same gate CI applies. A release that skipped the tests would be
+        # the one build nobody checked, which is the wrong one to hand out.
+        run: npm run verify
+
+      - name: Assert the build is offline-only
+        run: node scripts/assert-offline.mjs
+
+      - name: Package extension
+        run: npm run package
+
+      - name: Resolve the tag
+        id: tag
+        run: echo "value=${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: Universal BhuNex Converter ${{ steps.tag.outputs.value }}
+          generate_release_notes: true
+          files: dist-zip/*.zip
+          body: |
+            ## Install — no build step, no Node
+
+            1. Download the `.zip` below.
+            2. **Unzip it.** Browsers load a folder, not an archive, and this is
+               the step people miss.
+            3. Open `chrome://extensions` (Chrome) or `edge://extensions`
+               (Edge) and turn on **Developer mode**.
+            4. Click **Load unpacked** and select the **unzipped folder** —
+               the one that directly contains `manifest.json`.
+            5. Click the toolbar icon → **Open converter workspace**.
+
+            If you see *"Manifest file is missing or unreadable"*, the selected
+            folder is the wrong one: pick the folder that has `manifest.json`
+            in it, not the folder containing that folder, and not the source
+            code downloaded from the green **Code** button — the source has to
+            be built first and this package is that build.
+
+            Everything runs locally. No file leaves the machine, and the
+            packaged build is checked to contain no remote script, style or
+            font before it is published.

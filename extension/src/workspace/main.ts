@@ -13,6 +13,7 @@
 
 import './styles.css';
 
+import { ENGINE_VERSION } from '../core/cir';
 import { groupCompanions, type IngestFile } from '../core/companions';
 import { CONFIRM_THRESHOLD } from '../core/detect';
 import { ConversionError } from '../core/errors';
@@ -48,7 +49,38 @@ import {
 import { KML_TEMPLATE_DESCRIPTION, KML_TEMPLATE_LABEL, type KmlTemplate } from '../engines/vector/kml-templates';
 import { describePreset, presetsFor, type Preset } from '../core/presets';
 import { CommandPalette, type Command } from '../ui/command-palette';
+import { DualCanvas } from '../ui/dual-canvas';
 import { DIFF_AXIS_LABEL } from '../qa/diff';
+import { OVERLAY_ROLE_LABEL, type GeometryOverlay } from '../qa/geometry-overlay';
+import {
+  canRedo,
+  canUndo,
+  createHistory,
+  describeEntry,
+  markCheckpoint,
+  nextRedoLabel,
+  nextUndoLabel,
+  recordOperation,
+  revertTo,
+  type HistoryState,
+} from '../core/history';
+import {
+  buildProject,
+  matchSources,
+  readProject,
+  summariseMatches,
+  writeProject,
+  PROJECT_EXTENSION,
+  type ProjectSource,
+} from '../core/project';
+import {
+  describeWorkflow,
+  recordWorkflow,
+  runWorkflow,
+  validateWorkflow,
+  type Workflow,
+  type WorkflowSettings,
+} from '../core/workflow';
 import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../crs/epsg';
 import { crsLabel } from '../crs/transform';
 import { checkNativeHealth, NATIVE_STATUS_LABEL } from '../adapters/native-messaging/client';
@@ -360,6 +392,8 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
       tree: result.tree,
       prediction: result.prediction,
       diff: result.diff,
+      outputDataset: result.outputDataset,
+      overlay: result.overlay,
       qa: result.qa,
       warnings: result.warnings,
       provenance: result.provenance,
@@ -459,7 +493,10 @@ async function downloadBatchZip(): Promise<void> {
 // --------------------------------------------------------------------- render
 
 let preview: PreviewCanvas | null = null;
+let dual: DualCanvas | null = null;
 let palette: CommandPalette | null = null;
+/** Opens the project picker. Assigned in `wire`, where the input is created. */
+let openProjectPicker: () => void = () => {};
 
 function render(): void {
   const state = store.get();
@@ -488,6 +525,7 @@ function render(): void {
   dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
   $('inspectorTabs').classList.toggle('hidden', !selected);
   $('previewWrap').classList.toggle('hidden', state.inspectorTab !== 'preview' || !selected);
+  $('compareWrap').classList.toggle('hidden', state.inspectorTab !== 'compare' || !selected);
 }
 
 function renderQueue(): void {
@@ -806,6 +844,7 @@ function renderInspector(): void {
       break;
     case 'compare':
       body.append(...compareTab(item));
+      renderCompare(item);
       break;
     case 'warnings':
       body.append(...warningsTab(item));
@@ -965,7 +1004,7 @@ function crsTab(item: QueueItem): HTMLElement[] {
 
   const section = element('div', { class: 'section' });
   section.append(element('h3', { class: 'section__title', text: 'Source CRS (used when the file declares none)' }));
-  section.append(crsSelect(state.settings.sourceCrsEpsg, (epsg) => void store.patchSettings({ sourceCrsEpsg: epsg })));
+  section.append(crsSelect(state.settings.sourceCrsEpsg, (epsg) => void assignSourceCrs(item.id, epsg)));
   nodes.push(section);
 
   const targetSection = element('div', { class: 'section' });
@@ -1217,7 +1256,52 @@ function compareTab(item: QueueItem): HTMLElement[] {
       text: 'Measured against the output re-imported during QA, so these numbers describe the bytes that were actually written.',
     })
   );
+
+  if (item.overlay) wrap.append(overlaySummary(item.overlay));
   return [wrap];
+}
+
+/**
+ * The overlay's findings as text beside the canvases.
+ *
+ * The picture shows where; this says how many and how far, which is what gets
+ * written into a handover note. An unpaired layer is stated rather than left as
+ * an absence — a user who sees nothing marked "moved" must be able to tell the
+ * difference between "nothing moved" and "we could not tell".
+ */
+function overlaySummary(overlay: GeometryOverlay): HTMLElement {
+  const wrap = element('div', { class: 'section', style: 'margin-top:12px' });
+  wrap.append(element('h3', { class: 'section__title', text: 'Where the differences are' }));
+  wrap.append(element('p', { class: 'small', text: overlay.summary }));
+
+  const roles = ['added', 'removed', 'moved', 'retyped'] as const;
+  const chips = element('div', { class: 'chips' });
+  for (const role of roles) {
+    if (overlay.counts[role] === 0) continue;
+    chips.append(element('span', { class: `chip chip--overlay chip--overlay-${role}`, text: `${OVERLAY_ROLE_LABEL[role]}: ${overlay.counts[role].toLocaleString()}` }));
+  }
+  if (chips.childElementCount > 0) wrap.append(chips);
+
+  for (const unpaired of overlay.unpaired) {
+    wrap.append(
+      messageBlock(
+        'warn',
+        `Layer “${unpaired.layer}” could not be paired feature for feature.`,
+        `${unpaired.sourceFeatures.toLocaleString()} features in the source, ${unpaired.outputFeatures.toLocaleString()} in the output. ${unpaired.reason}`
+      )
+    );
+  }
+
+  if (overlay.omitted > 0) {
+    wrap.append(
+      element('p', {
+        class: 'small faint',
+        text: `${overlay.omitted.toLocaleString()} more differences are counted above but not drawn — the canvas caps what it renders. The counts are exact.`,
+      })
+    );
+  }
+
+  return wrap;
 }
 
 function warningsTab(item: QueueItem): HTMLElement[] {
@@ -1272,6 +1356,130 @@ function renderPreview(item: QueueItem): void {
 
   $('previewOnlyBadge').classList.toggle('hidden', !data.truncated);
   preview.setData(data);
+}
+
+/** Builds the drawable form of a worker-summarised dataset. */
+function previewDataFor(dataset: any): PreviewData {
+  const data: PreviewData = { layers: [], truncated: false };
+  if (dataset?.layers?.length) {
+    dataset.layers.forEach((layer: any, index: number) => {
+      data.layers.push({
+        name: layer.name,
+        visible: true,
+        color: LAYER_COLORS[index % LAYER_COLORS.length],
+        features: layer.preview ?? [],
+      });
+      if (layer.previewTruncated) data.truncated = true;
+    });
+  }
+  if (dataset?.pointcloud?.previewX) {
+    data.cloud = {
+      x: dataset.pointcloud.previewX,
+      y: dataset.pointcloud.previewY,
+      z: dataset.pointcloud.previewZ,
+      classification: dataset.pointcloud.previewClassification,
+    };
+  }
+  if (dataset?.raster?.extent) {
+    data.raster = {
+      extent: dataset.raster.extent,
+      label: `${dataset.raster.width} × ${dataset.raster.height}${dataset.raster.hasPixelData ? '' : ' — georeference only'}`,
+    };
+  }
+  return data;
+}
+
+/**
+ * Splits the overlay into what each pane draws.
+ *
+ * The left pane gets the source geometry of every difference, the right pane
+ * the output geometry — so a feature that exists only in the output appears on
+ * the right and is simply absent on the left, which is the truth about it. The
+ * alternative, drawing both sides on both canvases, produces two identical
+ * pictures and answers nothing.
+ */
+function splitOverlay(overlay: GeometryOverlay | undefined): {
+  source: PreviewData['overlay'];
+  output: PreviewData['overlay'];
+} {
+  if (!overlay) return { source: [], output: [] };
+  const source: NonNullable<PreviewData['overlay']> = [];
+  const output: NonNullable<PreviewData['overlay']> = [];
+  for (const item of overlay.items) {
+    if (item.role === 'unchanged') continue;
+    if (item.source) source.push({ role: item.role, geometry: item.source, at: item.at });
+    if (item.output) output.push({ role: item.role, geometry: item.output, at: item.at });
+  }
+  return { source, output };
+}
+
+function renderCompare(item: QueueItem): void {
+  const host = $('compareCanvas');
+  if (!dual) {
+    dual = new DualCanvas(host, {
+      onReadout: (text, side) => ($('compareReadout').textContent = `${side === 'source' ? 'Source' : 'Output'} ${text}`),
+      onAutoUnlink: (reason) => {
+        store.set({ compareLinked: false });
+        const note = $('compareNote');
+        note.textContent = reason;
+        note.classList.remove('hidden');
+        updateLinkButton();
+      },
+    });
+  }
+
+  const overlay = splitOverlay(item.overlay);
+  const sourceData = previewDataFor(item.dataset);
+  sourceData.overlay = overlay.source;
+
+  const hasOutput = Boolean(item.outputDataset);
+  const outputData = hasOutput ? previewDataFor(item.outputDataset) : null;
+  if (outputData) outputData.overlay = overlay.output;
+
+  dual.setData(sourceData, outputData);
+  dual.setLinked(store.get().compareLinked);
+  dual.setStatus('source', describeDatasetShort(item.dataset));
+  dual.setStatus(
+    'output',
+    hasOutput
+      ? describeDatasetShort(item.outputDataset)
+      : item.status === 'done'
+        ? 'The target has no reader in this build, so the output cannot be drawn.'
+        : 'Not converted yet.'
+  );
+
+  renderOverlayLegend(item.overlay);
+  updateLinkButton();
+}
+
+function describeDatasetShort(dataset: any): string {
+  if (!dataset) return '';
+  const features = (dataset.layers ?? []).reduce((sum: number, layer: any) => sum + (layer.featureCount ?? 0), 0);
+  const crs = dataset.crs ? crsLabel(dataset.crs) : 'no CRS declared';
+  return `${features.toLocaleString()} features · ${crs}`;
+}
+
+function renderOverlayLegend(overlay: GeometryOverlay | undefined): void {
+  const legend = $('compareLegend');
+  legend.replaceChildren();
+  if (!overlay) return;
+  for (const role of ['added', 'removed', 'moved', 'retyped'] as const) {
+    if (overlay.counts[role] === 0) continue;
+    const item = element('span', { class: `compare__key compare__key--${role}` });
+    item.append(element('i', { class: 'compare__swatch' }));
+    item.append(element('span', { text: `${OVERLAY_ROLE_LABEL[role]} (${overlay.counts[role].toLocaleString()})` }));
+    legend.append(item);
+  }
+}
+
+function updateLinkButton(): void {
+  const linked = store.get().compareLinked;
+  const button = $('compareLinkBtn');
+  button.textContent = linked ? 'Linked' : 'Unlinked';
+  button.title = linked
+    ? 'The two panes pan and zoom together. Click to move them independently.'
+    : 'The two panes move independently. Click to link them.';
+  button.classList.toggle('btn--on', linked);
 }
 
 // ------------------------------------------------------------ settings panel
@@ -1597,6 +1805,448 @@ function numberField(label: string, value: number, step: number, onChange: (valu
 
 // -------------------------------------------------------------------- bottom
 
+// ------------------------------------------------- history, workflows, project
+
+function historyOf(item: QueueItem | undefined): HistoryState {
+  return item?.history ?? createHistory();
+}
+
+/**
+ * The operation history for the selected file (§31.1, R19).
+ *
+ * Every entry is clickable: clicking one returns the data to the state just
+ * after it. That is the whole point of keeping a stack rather than a single
+ * undo — the regret is usually about a specific step three operations back, not
+ * about the last thing that happened.
+ */
+function historyPanel(item: QueueItem | undefined): HTMLElement[] {
+  const wrap = element('div', { style: 'padding:12px' });
+
+  if (!item) {
+    wrap.append(element('p', { class: 'muted', text: 'Select a file to see what has been done to it.' }));
+    return [wrap];
+  }
+
+  const history = historyOf(item);
+  const controls = element('div', { class: 'row', style: 'gap:8px; margin-bottom:10px; flex-wrap:wrap' });
+
+  const undoButton = element('button', {
+    class: 'btn',
+    type: 'button',
+    text: canUndo(history) ? `Undo ${nextUndoLabel(history)}` : 'Undo',
+  }) as HTMLButtonElement;
+  undoButton.disabled = !canUndo(history);
+  undoButton.addEventListener('click', () => stepHistory(item.id, historyOf(store.selected()).position - 1));
+  controls.append(undoButton);
+
+  const redoButton = element('button', {
+    class: 'btn',
+    type: 'button',
+    text: canRedo(history) ? `Redo ${nextRedoLabel(history)}` : 'Redo',
+  }) as HTMLButtonElement;
+  redoButton.disabled = !canRedo(history);
+  redoButton.addEventListener('click', () => stepHistory(item.id, historyOf(store.selected()).position + 1));
+  controls.append(redoButton);
+
+  const checkpoint = element('button', { class: 'btn btn--ghost', type: 'button', text: 'Mark checkpoint' }) as HTMLButtonElement;
+  checkpoint.disabled = history.position === 0;
+  checkpoint.title = 'Names the current state so it can be returned to later.';
+  checkpoint.addEventListener('click', () => {
+    const name = window.prompt('Name this checkpoint', `Checkpoint ${history.entries.filter((entry) => entry.checkpoint).length + 1}`);
+    if (!name) return;
+    store.updateItem(item.id, { history: markCheckpoint(historyOf(store.selected()), name) });
+    store.log('info', `${item.fileName}: checkpoint “${name}” marked.`);
+    render();
+  });
+  controls.append(checkpoint);
+  wrap.append(controls);
+
+  if (history.entries.length === 0) {
+    wrap.append(
+      element('p', {
+        class: 'muted',
+        text: 'Nothing has changed this file yet. Repairs, polygonisation, burn-in and CRS changes are recorded here as they happen, and each one can be reversed.',
+      })
+    );
+    return [wrap];
+  }
+
+  if (history.dropped > 0) {
+    wrap.append(
+      messageBlock(
+        'info',
+        `The ${history.dropped} oldest operation(s) can no longer be undone.`,
+        'The history keeps a bounded number of steps so a long session cannot grow without limit.'
+      )
+    );
+  }
+
+  const list = element('div', { class: 'history' });
+  // The imported state is an entry too: it is where "undo everything" lands,
+  // and a stack whose bottom is unreachable is a stack missing a rung.
+  list.append(historyRow(item.id, 'As imported', 'The file exactly as it was read.', 0, history.position === 0, false));
+
+  history.entries.forEach((entry, index) => {
+    list.append(
+      historyRow(
+        item.id,
+        entry.label,
+        describeEntry(entry),
+        index + 1,
+        history.position === index + 1,
+        index + 1 > history.position,
+        entry.checkpoint
+      )
+    );
+  });
+
+  wrap.append(list);
+  return [wrap];
+}
+
+function historyRow(
+  itemId: string,
+  label: string,
+  detail: string,
+  position: number,
+  current: boolean,
+  undone: boolean,
+  checkpoint?: string
+): HTMLElement {
+  const row = element('button', {
+    class: `history__row${current ? ' history__row--now' : ''}${undone ? ' history__row--undone' : ''}`,
+    type: 'button',
+  });
+  row.append(element('span', { class: 'history__label', text: label }));
+  if (checkpoint) row.append(element('span', { class: 'badge badge--accent', text: checkpoint }));
+  row.append(element('span', { class: 'history__detail', text: detail }));
+  if (current) row.append(element('span', { class: 'badge badge--muted', text: 'current' }));
+  row.addEventListener('click', () => stepHistory(itemId, position));
+  return row;
+}
+
+/**
+ * Moves a file's data to a point in its history.
+ *
+ * The dataset held in the workspace is the worker's summary, not the full CIR,
+ * so what is reversed here is the preview. The conversion itself always re-reads
+ * the source in the worker, which is why undoing in the UI cannot leave the
+ * exported bytes disagreeing with what is on screen.
+ */
+function stepHistory(itemId: string, position: number): void {
+  const item = store.get().items.find((entry) => entry.id === itemId);
+  if (!item?.history) return;
+  const stepped = revertTo(item.history, item.dataset, position);
+  store.updateItem(itemId, { history: stepped.history, dataset: stepped.dataset });
+  if (stepped.entry) {
+    store.log('info', `${item.fileName}: history moved to “${position === 0 ? 'as imported' : stepped.entry.label}”.`);
+  }
+  render();
+}
+
+/**
+ * Asserts a source CRS on a file that declares none (§31.1).
+ *
+ * The assertion is applied to the preview dataset as well as to the settings,
+ * so the CRS tab and the compare panes show what the conversion will actually
+ * use rather than leaving the user to hold the difference in their head. It is
+ * recorded in the history because reinterpreting every coordinate in a file is
+ * exactly the kind of decision R19 says must be reversible.
+ *
+ * A file that DECLARES a CRS is left alone: this setting exists for the ones
+ * that do not, and silently overriding a declaration would be the tool
+ * inventing a fact about someone's survey.
+ */
+async function assignSourceCrs(itemId: string, epsg: number | null): Promise<void> {
+  await store.patchSettings({ sourceCrsEpsg: epsg });
+
+  const item = store.get().items.find((entry) => entry.id === itemId);
+  if (!item?.dataset || item.dataset.crsOrigin === 'declared' || item.dataset.crsOrigin === 'sidecar') {
+    render();
+    return;
+  }
+
+  const before = item.dataset;
+  const crs = epsg ? crsFromEpsg(epsg) : null;
+  const after = { ...before, crs, crsOrigin: crs ? 'user' : 'unknown' };
+
+  store.updateItem(itemId, {
+    dataset: after,
+    history: recordOperation(historyOf(item), before, after, {
+      kind: 'crs-assign',
+      label: crs ? `Assign source CRS ${crsLabel(crs)}` : 'Clear the asserted source CRS',
+      settings: { sourceCrsEpsg: epsg },
+    }),
+  });
+  store.log('info', `${item.fileName}: source CRS set to ${crs ? crsLabel(crs) : 'unset'}.`);
+  render();
+}
+
+/** The settings in force, in the shape a workflow records and replays. */
+function workflowSettings(): WorkflowSettings {
+  const settings = store.get().settings;
+  return {
+    globalTargetFormatId: settings.globalTargetFormatId ?? undefined,
+    outputLayout: settings.outputLayout,
+    precisionMode: settings.precisionMode,
+    precisionDecimals: settings.precisionDecimals,
+    preserveZ: settings.preserveZ,
+    sourceCrsEpsg: settings.sourceCrsEpsg,
+    targetCrsEpsg: settings.targetCrsEpsg,
+    arcTolerance: settings.arcTolerance,
+    kmlTemplate: settings.kmlTemplate,
+    kmlBoreholeLog: settings.kmlBoreholeLog,
+    kmlBalloonFooter: settings.kmlBalloonFooter,
+    polygonizeEnabled: settings.polygonizeEnabled,
+    polygonizeTolerance: settings.polygonizeTolerance,
+    polygonizeKeepLines: settings.polygonizeKeepLines,
+    burnInEnabled: settings.burnInEnabled,
+    burnInField: settings.burnInField,
+    burnInMode: settings.burnInMode,
+    burnInPriority: settings.burnInPriority,
+    burnInReplaceSource: settings.burnInReplaceSource,
+    decimationMode: settings.decimationMode,
+    mirrorBatchTree: settings.mirrorBatchTree,
+    repairCloseRings: settings.repairCloseRings,
+    repairRemoveDuplicateVertices: settings.repairRemoveDuplicateVertices,
+    repairNormalizeOrientation: settings.repairNormalizeOrientation,
+    repairDeduplicateFeatures: settings.repairDeduplicateFeatures,
+    snapTolerance: settings.snapTolerance,
+    runQa: settings.runQa,
+    embedMetadata: settings.embedMetadata,
+  };
+}
+
+function workflowsPanel(): HTMLElement[] {
+  const state = store.get();
+  const wrap = element('div', { style: 'padding:12px' });
+
+  const controls = element('div', { class: 'row', style: 'gap:8px; margin-bottom:10px; flex-wrap:wrap' });
+  const record = element('button', { class: 'btn btn--primary', type: 'button', text: 'Record current settings as a workflow' });
+  record.addEventListener('click', () => saveWorkflowFromSettings());
+  controls.append(record);
+  wrap.append(controls);
+
+  wrap.append(
+    element('p', {
+      class: 'small faint',
+      text: 'A workflow replays the settings that produced a conversion on new data. Steps that would ask before running — a CRS assertion, polygonisation, a burn-in that deletes the source text — still ask on replay.',
+    })
+  );
+
+  if (state.workflows.length === 0) {
+    wrap.append(element('p', { class: 'muted', text: 'No workflows saved yet.' }));
+    return [wrap];
+  }
+
+  for (const workflow of state.workflows) {
+    const card = element('div', { class: 'section' });
+    const head = element('div', { class: 'row', style: 'gap:8px; align-items:center' });
+    head.append(element('h3', { class: 'section__title', style: 'margin:0', text: workflow.name }));
+    head.append(element('span', { class: 'topbar__spacer' }));
+
+    const runButton = element('button', { class: 'btn', type: 'button', text: 'Replay' }) as HTMLButtonElement;
+    runButton.disabled = !store.selected();
+    runButton.title = store.selected() ? 'Applies this workflow to the selected file.' : 'Select a file to replay a workflow onto it.';
+    runButton.addEventListener('click', () => void replayWorkflow(workflow));
+    head.append(runButton);
+
+    const remove = element('button', { class: 'btn btn--ghost', type: 'button', text: 'Delete' });
+    remove.addEventListener('click', () => {
+      store.set({ workflows: store.get().workflows.filter((entry) => entry.id !== workflow.id) });
+      store.log('info', `Workflow “${workflow.name}” deleted.`);
+      render();
+    });
+    head.append(remove);
+    card.append(head);
+
+    if (workflow.recordedFrom) {
+      card.append(element('p', { class: 'small faint', text: `Recorded from a ${workflow.recordedFrom.toUpperCase()} source.` }));
+    }
+
+    const steps = element('ol', { class: 'workflow__steps' });
+    for (const line of describeWorkflow(workflow)) {
+      steps.append(element('li', { class: 'workflow__step', text: line.replace(/^\d+\.\s*/, '') }));
+    }
+    card.append(steps);
+
+    for (const problem of validateWorkflow(workflow)) {
+      card.append(messageBlock(problem.severity === 'error' ? 'error' : 'warn', problem.message));
+    }
+
+    wrap.append(card);
+  }
+
+  return [wrap];
+}
+
+function saveWorkflowFromSettings(): void {
+  const item = store.selected();
+  const suggestion = item?.detection?.formatId ? `${item.detection.formatId.toUpperCase()} job` : 'New workflow';
+  const name = window.prompt('Name this workflow', suggestion);
+  if (!name) return;
+
+  const workflow = recordWorkflow(workflowSettings(), { name, recordedFrom: item?.detection?.formatId });
+  const problems = validateWorkflow(workflow);
+  const blocking = problems.filter((problem) => problem.severity === 'error');
+  if (blocking.length > 0) {
+    store.log('error', `Workflow “${name}” not saved: ${blocking.map((problem) => problem.message).join(' ')}`);
+    render();
+    return;
+  }
+
+  store.set({ workflows: [...store.get().workflows, workflow] });
+  store.log('ok', `Workflow “${name}” saved with ${workflow.steps.length} steps.`);
+  render();
+}
+
+/**
+ * Replays a workflow onto the selected file.
+ *
+ * The confirmation handler is a real prompt, not a rubber stamp: it is what
+ * keeps a replayed step and a hand-run step the same act (R18). A user who
+ * cancels a step gets a conversion without it, and the log says which step did
+ * not run rather than reporting a clean replay.
+ */
+async function replayWorkflow(workflow: Workflow): Promise<void> {
+  const item = store.selected();
+  if (!item) return;
+
+  const result = await runWorkflow(workflow, {
+    base: workflowSettings(),
+    confirm: (request) =>
+      window.confirm(
+        `${workflow.name} — step ${request.index} of ${request.total}\n\n${request.step.label}\n\n${request.confirmation.what}\n\n${request.confirmation.why}\n\nRun this step?`
+      ),
+  });
+
+  const patch: Partial<AppSettings> = {};
+  for (const [key, value] of Object.entries(result.settings)) {
+    if (value !== undefined) (patch as Record<string, unknown>)[key] = value;
+  }
+  await store.patchSettings(patch);
+
+  store.log(result.complete ? 'ok' : 'warn', result.summary);
+  render();
+}
+
+/**
+ * Saves the project (§31.4).
+ *
+ * Sources are recorded as identities rather than embedded: see `core/project.ts`
+ * for why. What travels is every decision — CRS, settings, edits, workflows and
+ * the export configuration — which is what makes reopening one resume the job
+ * rather than restart it.
+ */
+async function saveProject(): Promise<void> {
+  const state = store.get();
+  const name = window.prompt('Project name', state.projectName ?? 'Untitled project');
+  if (!name) return;
+
+  const sources: ProjectSource[] = state.items.map((item) => ({
+    id: item.id,
+    fileName: item.fileName,
+    path: item.path,
+    containers: item.containers ?? [],
+    size: item.size,
+    sha256: item.provenance?.sha256,
+    formatId: item.detection?.formatId ?? 'unknown',
+    formatName: item.detection?.formatName ?? 'Unknown',
+    detectionConfidence: item.detection?.confidence ?? 0,
+    forcedFormatId: item.forcedFormatId,
+    crs: item.dataset?.crs ?? null,
+    crsOrigin: item.dataset?.crsOrigin ?? 'unknown',
+    targetFormatId: item.targetFormatId,
+    carriage: 'reference',
+    history: item.history ? { entries: item.history.entries, position: item.history.position, dropped: item.history.dropped } : undefined,
+    qa: item.qa ? { passed: item.qa.verdict === 'PASS', summary: item.qa.summary, checkedAt: Date.now() } : undefined,
+    diff: item.diff ? { passed: item.diff.passed, summary: item.diff.summary } : undefined,
+  }));
+
+  const project = buildProject({
+    name,
+    productVersion: ENGINE_VERSION,
+    settings: state.settings as unknown as Record<string, unknown>,
+    sources,
+    workflows: state.workflows,
+    exportConfig: {
+      globalTargetFormatId: state.settings.globalTargetFormatId,
+      outputLayout: state.settings.outputLayout,
+      naming: state.settings.naming,
+      mirrorBatchTree: state.settings.mirrorBatchTree,
+      embedMetadata: state.settings.embedMetadata,
+    },
+  });
+
+  downloadBytes(writeProject(project), `${sanitiseFileName(name)}.${PROJECT_EXTENSION}`, 'application/json');
+  store.set({ projectName: name });
+  if (project.droppedSecretFields.length > 0) {
+    store.log('warn', `Project saved. ${project.droppedSecretFields.length} credential-shaped field(s) were not written: ${project.droppedSecretFields.join(', ')}.`);
+  } else {
+    store.log('ok', `Project “${name}” saved with ${sources.length} source(s) and ${state.workflows.length} workflow(s).`);
+  }
+  render();
+}
+
+/** Opens a project file and restores what does not need the source bytes. */
+async function openProject(file: File): Promise<void> {
+  const result = readProject(new Uint8Array(await file.arrayBuffer()));
+  if (!result.project) {
+    store.log('error', `${file.name}: ${result.error?.what} ${result.error?.why} ${result.error?.action}`);
+    render();
+    return;
+  }
+
+  const project = result.project;
+  for (const note of result.notes) store.log('info', `${project.name}: ${note}`);
+
+  // Settings are merged over the defaults so a project written by an older
+  // build gains this build's new settings instead of leaving them undefined.
+  await store.patchSettings({ ...DEFAULT_SETTINGS, ...(project.settings as Partial<AppSettings>) });
+  store.set({ workflows: project.workflows, projectName: project.name });
+
+  const matches = matchSources(
+    project,
+    store.get().items.map((item) => ({ fileName: item.fileName, path: item.path, size: item.size, sha256: item.provenance?.sha256 }))
+  );
+  store.log('ok', `Project “${project.name}” opened. ${summariseMatches(matches)}`);
+
+  for (const match of matches) {
+    if (match.state === 'same' || match.state === 'missing') continue;
+    store.log('warn', `${match.source.fileName}: ${match.note}`);
+  }
+  render();
+}
+
+function sanitiseFileName(name: string): string {
+  return name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
+}
+
+/**
+ * Selects a tab from code, moving the button state with it.
+ *
+ * Setting `inspectorTab` alone renders the right panel under the wrong
+ * highlighted tab — a small inconsistency that makes a palette command look
+ * like it half worked.
+ */
+function showInspectorTab(name: string): void {
+  store.set({ inspectorTab: name });
+  for (const tab of Array.from(document.querySelectorAll('[data-tab]'))) {
+    const on = (tab as HTMLElement).dataset.tab === name;
+    tab.classList.toggle('tab--on', on);
+    tab.setAttribute('aria-selected', String(on));
+  }
+  render();
+}
+
+function showBottomTab(name: string): void {
+  store.set({ bottomTab: name });
+  for (const tab of Array.from(document.querySelectorAll('[data-bottom]'))) {
+    tab.classList.toggle('tab--on', (tab as HTMLElement).dataset.bottom === name);
+  }
+  renderBottom();
+}
+
 function renderBottom(): void {
   const state = store.get();
   const body = $('bottomBody');
@@ -1624,7 +2274,17 @@ function renderBottom(): void {
     return;
   }
 
+  if (state.bottomTab === 'workflows') {
+    body.append(...workflowsPanel());
+    return;
+  }
+
   const item = store.selected();
+
+  if (state.bottomTab === 'history') {
+    body.append(...historyPanel(item));
+    return;
+  }
 
   if (state.bottomTab === 'delivery') {
     if (!item?.tree?.length) {
@@ -1904,6 +2564,33 @@ function wire(): void {
   $('fitBtn').addEventListener('click', () => preview?.fit());
   $('gridBtn').addEventListener('click', () => preview?.toggleGrid());
 
+  $('compareFitBtn').addEventListener('click', () => dual?.fit());
+  $('compareGridBtn').addEventListener('click', () => dual?.toggleGrid());
+  $('compareLinkBtn').addEventListener('click', () => {
+    const linked = !store.get().compareLinked;
+    store.set({ compareLinked: linked });
+    dual?.setLinked(linked);
+    // The auto-unlink note is about a state the user has now overridden, so it
+    // stops being true the moment they choose for themselves.
+    $('compareNote').classList.add('hidden');
+    updateLinkButton();
+  });
+
+  // The project picker is separate from the file picker: a .ubnx is not a
+  // dataset, and routing it through the converter's ingest would have the
+  // detector trying to work out what kind of survey a project file is.
+  const projectPicker = document.createElement('input');
+  projectPicker.type = 'file';
+  projectPicker.accept = `.${PROJECT_EXTENSION},application/json`;
+  projectPicker.className = 'hidden';
+  projectPicker.addEventListener('change', async () => {
+    const file = projectPicker.files?.[0];
+    projectPicker.value = '';
+    if (file) await openProject(file);
+  });
+  document.body.append(projectPicker);
+  openProjectPicker = () => projectPicker.click();
+
   document.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'o') {
       event.preventDefault();
@@ -1912,6 +2599,14 @@ function wire(): void {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       void convertAll(store.get().settings.runQa);
+    }
+    // Undo and redo, on the keys every application uses. Scoped to the selected
+    // file, because two queued surveys are two independent jobs.
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+      const item = store.selected();
+      if (!item?.history) return;
+      event.preventDefault();
+      stepHistory(item.id, item.history.position + (event.shiftKey ? 1 : -1));
     }
     // Ctrl/Cmd+K, the shortcut every palette uses. Muscle memory is the whole
     // point of matching the convention rather than inventing one.
@@ -1997,6 +2692,105 @@ function buildCommands(): Command[] {
     });
   }
 
+  // --- history, workflows and the project (spec §31.1, §31.2, §31.4)
+  const history = historyOf(item);
+
+  commands.push({
+    id: 'undo',
+    title: canUndo(history) ? `Undo ${nextUndoLabel(history)}` : 'Undo',
+    group: 'History',
+    keywords: ['undo', 'revert', 'back', 'reverse', 'mistake'],
+    shortcut: 'Ctrl+Z',
+    enabled: Boolean(item) && canUndo(history),
+    disabledReason: item ? 'Nothing has changed this file yet.' : 'Select a queued file first.',
+    run: () => item && stepHistory(item.id, history.position - 1),
+  });
+
+  commands.push({
+    id: 'redo',
+    title: canRedo(history) ? `Redo ${nextRedoLabel(history)}` : 'Redo',
+    group: 'History',
+    keywords: ['redo', 'forward', 'reapply'],
+    shortcut: 'Ctrl+Shift+Z',
+    enabled: Boolean(item) && canRedo(history),
+    disabledReason: item ? 'There is nothing to redo.' : 'Select a queued file first.',
+    run: () => item && stepHistory(item.id, history.position + 1),
+  });
+
+  commands.push({
+    id: 'show-history',
+    title: 'Show the operation history',
+    group: 'History',
+    keywords: ['history', 'operations', 'checkpoint', 'audit', 'what changed'],
+    detail: 'Every change to this file, each reversible.',
+    run: () => showBottomTab('history'),
+  });
+
+  commands.push({
+    id: 'record-workflow',
+    title: 'Record these settings as a workflow',
+    group: 'Workflow',
+    keywords: ['workflow', 'record', 'save', 'automate', 'repeat', 'macro'],
+    detail: 'Replays this configuration on new data, still asking before anything destructive.',
+    run: () => saveWorkflowFromSettings(),
+  });
+
+  for (const workflow of state.workflows) {
+    commands.push({
+      id: `run-workflow-${workflow.id}`,
+      title: `Replay “${workflow.name}”`,
+      group: 'Workflow',
+      keywords: ['workflow', 'replay', 'run', ...workflow.name.toLowerCase().split(/[^a-z]+/)],
+      detail: `${workflow.steps.length} steps.`,
+      enabled: Boolean(item),
+      disabledReason: 'Select a queued file to replay a workflow onto.',
+      run: () => void replayWorkflow(workflow),
+    });
+  }
+
+  commands.push({
+    id: 'save-project',
+    title: 'Save project',
+    group: 'Project',
+    keywords: ['project', 'save', 'session', 'ubnx'],
+    detail: 'Sources, CRS decisions, settings, edits and workflows — no source bytes, no credentials.',
+    enabled: state.items.length > 0,
+    disabledReason: 'There is nothing to save yet.',
+    run: () => void saveProject(),
+  });
+
+  commands.push({
+    id: 'open-project',
+    title: 'Open project',
+    group: 'Project',
+    keywords: ['project', 'open', 'load', 'reopen', 'ubnx'],
+    run: () => openProjectPicker(),
+  });
+
+  commands.push({
+    id: 'compare-canvases',
+    title: 'Compare source and output side by side',
+    group: 'View',
+    keywords: ['compare', 'diff', 'dual', 'canvas', 'overlay', 'side by side', 'before after'],
+    detail: 'Two canvases with the geometry difference drawn over both.',
+    enabled: Boolean(item),
+    disabledReason: 'Select a queued file first.',
+    run: () => showInspectorTab('compare'),
+  });
+
+  commands.push({
+    id: 'toggle-link',
+    title: state.compareLinked ? 'Unlink the compare panes' : 'Link the compare panes',
+    group: 'View',
+    keywords: ['link', 'sync', 'pan', 'zoom', 'together', 'independent'],
+    run: () => {
+      const linked = !store.get().compareLinked;
+      store.set({ compareLinked: linked });
+      dual?.setLinked(linked);
+      updateLinkButton();
+    },
+  });
+
   for (const [tab, label] of [
     ['overview', 'Overview'],
     ['geometry', 'Geometry'],
@@ -2014,10 +2808,7 @@ function buildCommands(): Command[] {
       keywords: ['tab', 'panel', 'inspect', tab],
       enabled: Boolean(item),
       disabledReason: 'Select a queued file first.',
-      run: () => {
-        store.set({ inspectorTab: tab });
-        render();
-      },
+      run: () => showInspectorTab(tab),
     });
   }
 

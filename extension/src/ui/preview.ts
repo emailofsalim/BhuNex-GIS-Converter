@@ -26,12 +26,42 @@ export interface PreviewPointCloud {
   classification?: Uint8Array;
 }
 
+/**
+ * A geometry difference drawn on top of the data (spec §30.1).
+ *
+ * Kept separate from the layers rather than folded into them: an overlay is
+ * evidence about the conversion, not part of the dataset, and it must stay
+ * legible when the layer beneath it is hidden.
+ */
+export interface PreviewOverlayItem {
+  role: 'added' | 'removed' | 'moved' | 'retyped';
+  geometry: any;
+  /** Marker position, when the item has one. */
+  at?: number[];
+}
+
 export interface PreviewData {
   layers: PreviewLayer[];
   cloud?: PreviewPointCloud;
   raster?: { extent: Bounds; label: string };
+  /** Where the source and the output differ, drawn over both canvases. */
+  overlay?: PreviewOverlayItem[];
   /** True when what is drawn is a subset of what will be exported. */
   truncated: boolean;
+}
+
+/**
+ * The view as world coordinates rather than pixels.
+ *
+ * Two canvases of different widths must show the same ground, not the same
+ * pixel offsets, so linking exchanges a centre and a scale. Sharing `offsetX`
+ * between panes of unequal width would put the same feature in two different
+ * places and call it synchronised.
+ */
+export interface ViewState {
+  scale: number;
+  centreX: number;
+  centreY: number;
 }
 
 interface View {
@@ -39,6 +69,14 @@ interface View {
   offsetX: number;
   offsetY: number;
 }
+
+/** Overlay colours, chosen to read on both themes and against every layer colour. */
+const OVERLAY_COLORS: Record<PreviewOverlayItem['role'], string> = {
+  added: '#3fb950',
+  removed: '#f85149',
+  moved: '#d29922',
+  retyped: '#a371f7',
+};
 
 /** Classification colours follow the ASPRS LAS class table. */
 const CLASS_COLORS: Record<number, string> = {
@@ -66,6 +104,15 @@ export class PreviewCanvas {
   private lastPointer = { x: 0, y: 0 };
   private onReadout?: (text: string) => void;
   private resizeObserver?: ResizeObserver;
+  /** Called whenever the user pans, zooms or fits, for linked panes. */
+  onViewChange?: (view: ViewState) => void;
+  /**
+   * Set while a linked pane is being driven from another.
+   *
+   * Without it, A moves B, B reports back, A moves again: the two panes chase
+   * each other and neither settles.
+   */
+  private echoing = false;
 
   constructor(canvas: HTMLCanvasElement, onReadout?: (text: string) => void) {
     this.canvas = canvas;
@@ -74,6 +121,32 @@ export class PreviewCanvas {
     this.context = context;
     this.onReadout = onReadout;
     this.attach();
+  }
+
+  /** The view in world terms, for handing to a linked pane. */
+  getView(): ViewState {
+    const rect = this.canvas.getBoundingClientRect();
+    const centre = this.toWorld((rect.width || 800) / 2, (rect.height || 400) / 2);
+    return { scale: this.view.scale, centreX: centre.x, centreY: centre.y };
+  }
+
+  /** Shows the same ground at the same scale as another pane. */
+  setView(view: ViewState): void {
+    if (!Number.isFinite(view.scale) || view.scale <= 0) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const width = rect.width || 800;
+    const height = rect.height || 400;
+    this.view.scale = view.scale;
+    this.view.offsetX = width / 2 - view.centreX * view.scale;
+    this.view.offsetY = height / 2 + view.centreY * view.scale;
+    this.echoing = true;
+    this.render();
+    this.echoing = false;
+  }
+
+  private announceView(): void {
+    if (this.echoing) return;
+    this.onViewChange?.(this.getView());
   }
 
   private attach(): void {
@@ -92,6 +165,7 @@ export class PreviewCanvas {
         this.view.offsetY += event.offsetY - this.lastPointer.y;
         this.lastPointer = { x: event.offsetX, y: event.offsetY };
         this.render();
+        this.announceView();
       }
       const world = this.toWorld(event.offsetX, event.offsetY);
       this.onReadout?.(`${world.x.toFixed(3)}, ${world.y.toFixed(3)}`);
@@ -108,6 +182,7 @@ export class PreviewCanvas {
         this.view.offsetX += (after.x - before.x) * this.view.scale;
         this.view.offsetY -= (after.y - before.y) * this.view.scale;
         this.render();
+        this.announceView();
       },
       { passive: false }
     );
@@ -148,6 +223,7 @@ export class PreviewCanvas {
     if (!this.bounds || !Number.isFinite(this.bounds.minX)) {
       this.view = { scale: 1, offsetX: width / 2, offsetY: height / 2 };
       this.render();
+      this.announceView();
       return;
     }
     const spanX = Math.max(this.bounds.maxX - this.bounds.minX, 1e-9);
@@ -160,6 +236,12 @@ export class PreviewCanvas {
     // Screen y grows downward while northing grows upward, hence the sign.
     this.view.offsetY = height / 2 + centreY * this.view.scale;
     this.render();
+    this.announceView();
+  }
+
+  /** The data's own extent, so a linked pane can fit to the other's data. */
+  extent(): Bounds | null {
+    return this.bounds;
   }
 
   private toScreen(x: number, y: number): { x: number; y: number } {
@@ -208,6 +290,45 @@ export class PreviewCanvas {
       context.lineWidth = 1.2;
       for (const feature of layer.features) this.drawGeometry(feature.geometry);
     }
+
+    if (this.data.overlay?.length) this.drawOverlay();
+  }
+
+  /**
+   * Draws the source-versus-output difference on top of the data.
+   *
+   * Thicker and in the role colour, so a moved boundary reads as a difference
+   * rather than as another layer. Markers are drawn last and unscaled: at the
+   * zoom where a 4 mm shift is visible, the parcel it belongs to is not, and
+   * the marker is what leads the eye to it.
+   */
+  private drawOverlay(): void {
+    const context = this.context;
+    context.save();
+    context.lineWidth = 2.4;
+
+    for (const item of this.data.overlay ?? []) {
+      const color = OVERLAY_COLORS[item.role];
+      context.strokeStyle = color;
+      context.fillStyle = color;
+      // Removed geometry is dashed: it is not in the output, and drawing it
+      // solid alongside geometry that is would misrepresent what was written.
+      context.setLineDash(item.role === 'removed' ? [5, 4] : []);
+      if (item.geometry) this.drawGeometry(item.geometry);
+    }
+
+    context.setLineDash([]);
+    for (const item of this.data.overlay ?? []) {
+      if (!item.at) continue;
+      const screen = this.toScreen(item.at[0], item.at[1]);
+      context.strokeStyle = OVERLAY_COLORS[item.role];
+      context.lineWidth = 1.6;
+      context.beginPath();
+      context.arc(screen.x, screen.y, 6, 0, Math.PI * 2);
+      context.stroke();
+    }
+
+    context.restore();
   }
 
   private drawGrid(width: number, height: number): void {
@@ -348,6 +469,16 @@ function computeBounds(data: PreviewData): Bounds | null {
   if (data.raster) {
     visit(data.raster.extent.minX, data.raster.extent.minY);
     visit(data.raster.extent.maxX, data.raster.extent.maxY);
+  }
+  // Overlay geometry counts towards the extent: a feature that exists only in
+  // the output is not in this pane's layers, and fitting without it would put
+  // the very difference the user opened the pane for outside the view.
+  for (const item of data.overlay ?? []) {
+    if (item.geometry?.type === 'GeometryCollection') {
+      for (const child of item.geometry.geometries ?? []) walk(child.coordinates);
+    } else {
+      walk(item.geometry?.coordinates);
+    }
   }
 
   return Number.isFinite(bounds.minX) ? bounds : null;

@@ -14,6 +14,7 @@ import { convert, expandArchive, readSource } from '../core/pipeline';
 import { detectFormat, type DetectionResult } from '../core/detect';
 import { profileDataset, type DatasetProfile, type FidelityPrediction } from '../core/predict';
 import type { DiffReport } from '../qa/diff';
+import type { GeometryOverlay } from '../qa/geometry-overlay';
 import { ConversionError } from '../core/errors';
 import type { TransferableFile, WorkerRequest, WorkerResponse } from './convert.worker';
 
@@ -48,6 +49,10 @@ export interface ConvertPayload {
   prediction: FidelityPrediction;
   /** Measured source-versus-output differences. */
   diff?: DiffReport;
+  /** The output read back, summarised for the second canvas (§30.1). */
+  outputDataset?: any;
+  /** Where the source and the output differ, for the overlay. */
+  overlay?: GeometryOverlay;
   warnings: any[];
   qa: any;
   provenance: any;

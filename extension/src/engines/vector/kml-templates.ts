@@ -22,6 +22,7 @@
 
 import type { Borehole, BoreholeInterval } from '../survey/borehole';
 import { checkLogContinuity } from '../survey/borehole';
+import { CREDENTIALED_URL, stripSecrets } from '../../core/secrets';
 
 export type KmlTemplate = 'plain' | 'cadastral' | 'survey' | 'borehole' | 'mining' | 'contour';
 
@@ -54,45 +55,12 @@ export interface BalloonOptions {
 }
 
 /**
- * Property names that must never reach a KMZ.
- *
- * Matched loosely and deliberately over-broadly: a false positive drops one
- * field from a balloon, a false negative publishes a credential in a file that
- * gets emailed around (R23).
+ * What must never reach a KMZ is defined once, in `core/secrets.ts`, and shared
+ * with the project file and the conversion report. R23 covers every export, and
+ * a rule re-implemented per writer is a rule that holds in some writers.
  */
-const SECRET_PATTERN = /(password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth|bearer|session[_-]?id|signature|sas[_-]?token)/i;
-
-/** Values that look like a credential regardless of the field name. */
-const SECRET_VALUE_PATTERN = /^(bearer\s+\S+|eyJ[A-Za-z0-9_-]{10,}\.|sk-[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,})/;
-
-/** A URL carrying credentials or a signed query — never embedded. */
-const CREDENTIALED_URL = /^https?:\/\/[^/\s]*:[^/\s]*@|[?&](sig|signature|token|access_token|key)=/i;
-
-export interface SanitisedProperties {
-  safe: Record<string, unknown>;
-  /** Field names dropped because they looked like credentials. */
-  dropped: string[];
-}
-
-/** Removes anything credential-shaped before it can reach the output. */
-export function stripSecrets(properties: Record<string, unknown>): SanitisedProperties {
-  const safe: Record<string, unknown> = {};
-  const dropped: string[] = [];
-
-  for (const [key, value] of Object.entries(properties)) {
-    if (SECRET_PATTERN.test(key)) {
-      dropped.push(key);
-      continue;
-    }
-    if (typeof value === 'string' && (SECRET_VALUE_PATTERN.test(value.trim()) || CREDENTIALED_URL.test(value.trim()))) {
-      dropped.push(key);
-      continue;
-    }
-    safe[key] = value;
-  }
-
-  return { safe, dropped };
-}
+export { stripSecrets, CREDENTIALED_URL } from '../../core/secrets';
+export type { SanitisedProperties } from '../../core/secrets';
 
 /**
  * HTML escaping for balloon content.
