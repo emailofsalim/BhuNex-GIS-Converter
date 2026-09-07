@@ -54,6 +54,7 @@
             <button class="tab" data-tab="crs" role="tab" aria-selected="false">CRS</button>
             <button class="tab" data-tab="attributes" role="tab" aria-selected="false">Attributes</button>
             <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
+            <button class="tab" data-tab="edit" role="tab" aria-selected="false">Edit</button>
             <button class="tab" data-tab="metadata" role="tab" aria-selected="false">Source metadata</button>
             <button class="tab" data-tab="fidelity" role="tab" aria-selected="false">What will be lost</button>
             <button class="tab" data-tab="compare" role="tab" aria-selected="false">Compare</button>
@@ -69,6 +70,13 @@
             <div class="preview__tools">
               <button class="btn btn--ghost" id="fitBtn" title="Fit to extent">Fit</button>
               <button class="btn btn--ghost" id="gridBtn" title="Toggle grid">Grid</button>
+            </div>
+            <div class="edit__bar hidden" id="editBar">
+              <button class="btn btn--ghost" id="editToggle" title="Turn vertex editing on or off">Edit off</button>
+              <span class="edit__hint">drag a vertex · Alt-click a segment to insert · Del to delete · Shift to multi-select</span>
+              <span class="topbar__spacer"></span>
+              <label class="edit__snap"><input type="checkbox" id="editSnap" /> Snap</label>
+              <span class="edit__readout" id="editReadout"></span>
             </div>
             <div class="preview__overlay">
               <span class="preview__readout" id="readout">—</span>

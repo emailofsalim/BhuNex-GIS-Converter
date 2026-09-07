@@ -244,6 +244,36 @@ export class PreviewCanvas {
     return this.bounds;
   }
 
+  /** The element, so an interaction layer can bind its own pointer events. */
+  get element(): HTMLCanvasElement {
+    return this.canvas;
+  }
+
+  /**
+   * Called after every render, for a layer that draws its own thing.
+   *
+   * The editing overlay needs to draw vertex handles in the same transform the
+   * geometry was drawn in, and it must redraw whenever the view moves. A hook
+   * here keeps that in step without PreviewCanvas knowing anything about
+   * editing — it hands over the context and the projection and nothing else.
+   */
+  onOverlay?: (context: CanvasRenderingContext2D, project: (x: number, y: number) => { x: number; y: number }) => void;
+
+  /** World to screen, for an interaction layer drawing on top. */
+  project(x: number, y: number): { x: number; y: number } {
+    return this.toScreen(x, y);
+  }
+
+  /** Screen to world, for hit testing a pointer position. */
+  unproject(screenX: number, screenY: number): { x: number; y: number } {
+    return this.toWorld(screenX, screenY);
+  }
+
+  /** How many world units one screen pixel covers, for pick tolerances. */
+  get unitsPerPixel(): number {
+    return this.view.scale === 0 ? 1 : 1 / this.view.scale;
+  }
+
   private toScreen(x: number, y: number): { x: number; y: number } {
     return { x: x * this.view.scale + this.view.offsetX, y: this.view.offsetY - y * this.view.scale };
   }
@@ -292,6 +322,9 @@ export class PreviewCanvas {
     }
 
     if (this.data.overlay?.length) this.drawOverlay();
+
+    // Last, so handles sit above every layer and above the diff overlay.
+    this.onOverlay?.(context, (x, y) => this.toScreen(x, y));
   }
 
   /**

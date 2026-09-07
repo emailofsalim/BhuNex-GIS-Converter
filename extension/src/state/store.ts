@@ -141,6 +141,17 @@ export interface AppSettings {
   /** Footer line on every balloon, e.g. a survey date. */
   kmlBalloonFooter: string;
 
+  /**
+   * Layers whose geometry must not be changed by any automated operation.
+   *
+   * A cadastral or lease boundary is legally operative — moving one is a change
+   * to a title, not a data fix. Repair, snap and the vertex editor all refuse
+   * a layer named here rather than quietly skipping it (R18).
+   */
+  protectedLayers: string[];
+  /** Snap a dragged vertex to nearby geometry while editing (spec §25.2). */
+  editSnapEnabled: boolean;
+
   /** Attach a per-file conversion report to the delivery (spec §22.4). */
   embedReport: boolean;
   /** Assess project health while converting (spec §29.2). */
@@ -188,6 +199,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   kmlTemplate: 'plain',
   kmlBoreholeLog: false,
   kmlBalloonFooter: '',
+  protectedLayers: [],
+  // Off by default: snapping moves a vertex somewhere other than where the
+  // pointer was released, and that must be asked for rather than assumed.
+  editSnapEnabled: false,
   embedReport: false,
   // On by default: it is the one component that costs nothing the user did not
   // already ask for when they enabled QA, and a health score nobody switched on
