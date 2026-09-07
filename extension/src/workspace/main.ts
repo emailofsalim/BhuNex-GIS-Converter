@@ -38,6 +38,14 @@ import {
   type FormatCategory,
   type FormatDef,
 } from '../core/registry';
+import {
+  BURN_IN_MODE_DESCRIPTION,
+  BURN_IN_MODE_LABEL,
+  PRIORITY_LABEL,
+  type BurnInMode,
+  type BurnInPriority,
+} from '../qa/burn-in';
+import { KML_TEMPLATE_DESCRIPTION, KML_TEMPLATE_LABEL, type KmlTemplate } from '../engines/vector/kml-templates';
 import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../crs/epsg';
 import { crsLabel } from '../crs/transform';
 import { checkNativeHealth, NATIVE_STATUS_LABEL } from '../adapters/native-messaging/client';
@@ -270,6 +278,29 @@ function buildSettings(): Partial<ConversionSettings> {
         ? undefined
         : { mode: settings.decimationMode, factor: settings.decimationFactor, cell: settings.decimationCell },
     dxf: { arcTolerance: settings.arcTolerance } as never,
+    // Both cadastral tools are opt-in: passing undefined leaves the pipeline
+    // stage switched off entirely rather than running it with defaults.
+    kml: {
+      template: settings.kmlTemplate,
+      boreholeLog: settings.kmlBoreholeLog,
+      balloonFooter: settings.kmlBalloonFooter || undefined,
+    },
+    polygonize: settings.polygonizeEnabled
+      ? {
+          tolerance: settings.polygonizeTolerance,
+          keepSourceLines: settings.polygonizeKeepLines,
+        }
+      : undefined,
+    burnIn:
+      settings.burnInEnabled && settings.burnInTargetLayer
+        ? {
+            targetLayer: settings.burnInTargetLayer,
+            fieldName: settings.burnInField,
+            mode: settings.burnInMode,
+            priority: settings.burnInPriority,
+            replaceSource: settings.burnInReplaceSource,
+          }
+        : undefined,
   };
 }
 
@@ -1258,6 +1289,36 @@ function renderSettingsPanel(): void {
   }
   if (target.id === 'kml' || target.id === 'kmz') {
     body.append(element('p', { class: 'small faint', text: 'KML is written in WGS 84 longitude/latitude. Set the target CRS to EPSG:4326 so projected data is transformed rather than mis-placed.' }));
+
+    const templateField = element('div', { class: 'field' });
+    templateField.append(element('label', { class: 'field__label', text: 'Balloon template' }));
+    const templateSelect = element('select', { class: 'select' }) as HTMLSelectElement;
+    for (const template of ['plain', 'cadastral', 'survey', 'borehole', 'mining', 'contour'] as KmlTemplate[]) {
+      templateSelect.append(element('option', { value: template, text: KML_TEMPLATE_LABEL[template] }));
+    }
+    templateSelect.value = state.settings.kmlTemplate;
+    templateSelect.addEventListener('change', () => void store.patchSettings({ kmlTemplate: templateSelect.value as KmlTemplate }));
+    templateField.append(templateSelect);
+    templateField.append(element('p', { class: 'small faint', text: KML_TEMPLATE_DESCRIPTION[state.settings.kmlTemplate] }));
+    body.append(templateField);
+
+    body.append(
+      checkbox(
+        'Render boreholes as core logs',
+        state.settings.kmlBoreholeLog,
+        (value) => void store.patchSettings({ kmlBoreholeLog: value }),
+        'Joins collars to their depth intervals by hole id and renders a full log — from, to, thickness, lithology, recovery, RQD, sample and assay — in each balloon.'
+      )
+    );
+    body.append(
+      textField('Balloon footer (optional)', state.settings.kmlBalloonFooter, (value) => void store.patchSettings({ kmlBalloonFooter: value }))
+    );
+    body.append(
+      element('p', {
+        class: 'small faint',
+        text: 'Fields whose names or values look like credentials are left out of the balloons, and the omission is reported. A KMZ is shared freely, so a token inside one has leaked.',
+      })
+    );
   }
   if (target.id === 'shapefile') {
     body.append(element('p', { class: 'small faint', text: 'Mixed geometry is split into _point, _line and _polygon files, and the package is delivered as one ZIP with .prj and .cpg. DBF field names are capped at 10 bytes; every rename is listed in the manifest.' }));
@@ -1306,6 +1367,136 @@ function renderSettingsPanel(): void {
   repairBody.append(checkbox('Remove duplicate features', state.settings.repairDeduplicateFeatures, (value) => void store.patchSettings({ repairDeduplicateFeatures: value })));
   repair.append(repairBody);
   panel.append(repair);
+
+  // Cadastral tools. Only shown for vector data, because polygonising a point
+  // cloud or burning text into a raster is meaningless and an option that can
+  // never apply is noise.
+  const layerNames: string[] = (item?.dataset?.layers ?? []).map((layer: { name: string }) => layer.name);
+  if (item?.dataset?.kind === 'vector' && layerNames.length > 0) {
+    panel.append(cadastralTools(state.settings, layerNames));
+  }
+}
+
+/**
+ * The CAD-to-cadastral-GIS tools (spec §27).
+ *
+ * Both change the data, so both are off until switched on, and each states what
+ * it will do before it does it. They live together because they are one
+ * workflow: a cadastral DXF needs polygonising *and* burning-in, in that order,
+ * and separating them would hide that.
+ */
+function cadastralTools(settings: AppSettings, layerNames: string[]): HTMLElement {
+  const tools = element('details', { class: 'adv' });
+  tools.append(element('summary', { text: 'Cadastral tools — polygons and labels from CAD' }));
+  const body = element('div');
+  body.append(
+    element('p', {
+      class: 'small faint',
+      text: 'A cadastral drawing holds boundaries as line work and plot numbers as separate text, with nothing linking them. These two steps make that link explicit. Both are off by default and both change your data.',
+    })
+  );
+
+  // ---- Polygonise -------------------------------------------------------
+  body.append(
+    checkbox(
+      'Build polygons from closed CAD line work',
+      settings.polygonizeEnabled,
+      (value) => void store.patchSettings({ polygonizeEnabled: value }),
+      'Assembles separate LINE entities into closed boundaries, so parcels export as areas rather than as strokes.'
+    )
+  );
+  if (settings.polygonizeEnabled) {
+    body.append(
+      numberField('Largest gap that may be closed (dataset units)', settings.polygonizeTolerance, 0.0001, (value) =>
+        void store.patchSettings({ polygonizeTolerance: value })
+      )
+    );
+    body.append(
+      element('p', {
+        class: 'small faint',
+        text: 'Closing a few millimetres recovers a snap error. Closing metres invents a boundary — a gap larger than this is left as an open line and reported.',
+      })
+    );
+    body.append(
+      checkbox('Keep the source line work alongside the polygons', settings.polygonizeKeepLines, (value) =>
+        void store.patchSettings({ polygonizeKeepLines: value })
+      )
+    );
+  }
+
+  // ---- Burn-in ----------------------------------------------------------
+  body.append(
+    checkbox(
+      'Attach text found inside polygons to those polygons',
+      settings.burnInEnabled,
+      (value) => void store.patchSettings({ burnInEnabled: value }),
+      'The plot number drawn beside a boundary becomes an attribute on it, so it survives into any GIS format.'
+    )
+  );
+  if (settings.burnInEnabled) {
+    const targetField = element('div', { class: 'field' });
+    targetField.append(element('label', { class: 'field__label', text: 'Polygon layer to label' }));
+    const targetSelect = element('select', { class: 'select' }) as HTMLSelectElement;
+    targetSelect.append(element('option', { value: '', text: 'Choose a layer…' }));
+    for (const name of layerNames) targetSelect.append(element('option', { value: name, text: name }));
+    targetSelect.value = settings.burnInTargetLayer;
+    targetSelect.addEventListener('change', () => void store.patchSettings({ burnInTargetLayer: targetSelect.value }));
+    targetField.append(targetSelect);
+    body.append(targetField);
+
+    const modeField = element('div', { class: 'field' });
+    modeField.append(element('label', { class: 'field__label', text: 'How the text is attached' }));
+    const modeSelect = element('select', { class: 'select' }) as HTMLSelectElement;
+    for (const mode of ['attribute', 'label', 'geometry', 'cad', 'kml'] as BurnInMode[]) {
+      modeSelect.append(element('option', { value: mode, text: BURN_IN_MODE_LABEL[mode] }));
+    }
+    modeSelect.value = settings.burnInMode;
+    modeSelect.addEventListener('change', () => void store.patchSettings({ burnInMode: modeSelect.value as BurnInMode }));
+    modeField.append(modeSelect);
+    modeField.append(element('p', { class: 'small faint', text: BURN_IN_MODE_DESCRIPTION[settings.burnInMode] }));
+    body.append(modeField);
+
+    body.append(
+      textField('Field name for the value', settings.burnInField, (value) => void store.patchSettings({ burnInField: value }))
+    );
+
+    const priorityField = element('div', { class: 'field' });
+    priorityField.append(element('label', { class: 'field__label', text: 'When a polygon holds several texts' }));
+    const prioritySelect = element('select', { class: 'select' }) as HTMLSelectElement;
+    for (const priority of ['nearest-to-centre', 'largest-text', 'first-found', 'concatenate', 'named-field'] as BurnInPriority[]) {
+      prioritySelect.append(element('option', { value: priority, text: PRIORITY_LABEL[priority] }));
+    }
+    prioritySelect.value = settings.burnInPriority;
+    prioritySelect.addEventListener('change', () => void store.patchSettings({ burnInPriority: prioritySelect.value as BurnInPriority }));
+    priorityField.append(prioritySelect);
+    priorityField.append(
+      element('p', { class: 'small faint', text: 'Whichever rule is used, the candidates it rejected are listed in the conversion report.' })
+    );
+    body.append(priorityField);
+
+    body.append(
+      checkbox(
+        'Delete the source text after attaching it',
+        settings.burnInReplaceSource,
+        (value) => void store.patchSettings({ burnInReplaceSource: value }),
+        'Off by default. Burn-in adds an association; it should not have to destroy the drawing it was read from.'
+      )
+    );
+  }
+
+  tools.append(body);
+  return tools;
+}
+
+/** A single-line text input, for a field name and similar. */
+function textField(label: string, value: string, onChange: (next: string) => void): HTMLElement {
+  const wrap = element('div', { class: 'field' });
+  wrap.append(element('label', { class: 'field__label', text: label }));
+  const input = element('input', { class: 'input', type: 'text' }) as HTMLInputElement;
+  input.value = value;
+  input.addEventListener('change', () => onChange(input.value.trim()));
+  wrap.append(input);
+  return wrap;
 }
 
 function checkbox(label: string, checked: boolean, onChange: (value: boolean) => void, hint?: string): HTMLElement {

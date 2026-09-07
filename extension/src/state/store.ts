@@ -13,6 +13,8 @@ import type { FidelityReport } from '../qa/fidelity';
 import type { NamingPattern } from '../core/naming';
 import type { OutputLayout } from '../core/layout';
 import type { DatasetProfile, FidelityPrediction } from '../core/predict';
+import type { BurnInMode, BurnInPriority } from '../qa/burn-in';
+import type { KmlTemplate } from '../engines/vector/kml-templates';
 import type { NativeHealth } from '../adapters/native-messaging/client';
 import type { OutputBlobFile } from '../workers/client';
 
@@ -88,6 +90,32 @@ export interface AppSettings {
   outputLayout: OutputLayout;
   /** Place each batch result under the folder its source came from. */
   mirrorBatchTree: boolean;
+
+  // --- Cadastral tools (spec §27). Both off by default: each changes geometry
+  // or attributes, so neither may happen because a checkbox was already ticked.
+  /** Assemble CAD line work into polygons before writing. */
+  polygonizeEnabled: boolean;
+  /** Largest boundary gap that may be closed, in dataset units. */
+  polygonizeTolerance: number;
+  /** Keep the source line work beside the polygons it produced. */
+  polygonizeKeepLines: boolean;
+  /** Attach text found inside polygons to those polygons. */
+  burnInEnabled: boolean;
+  /** Layer holding the polygons that receive the text. */
+  burnInTargetLayer: string;
+  /** Field the burnt-in value is written to. */
+  burnInField: string;
+  burnInMode: BurnInMode;
+  burnInPriority: BurnInPriority;
+  /** Delete the source text after burning it in. Never implied (R17). */
+  burnInReplaceSource: boolean;
+
+  /** Which balloon a KML/KMZ description uses (spec §28.5). */
+  kmlTemplate: KmlTemplate;
+  /** Render boreholes as core-log balloons rather than attribute tables. */
+  kmlBoreholeLog: boolean;
+  /** Footer line on every balloon, e.g. a survey date. */
+  kmlBalloonFooter: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -119,6 +147,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 'single' by default so the obvious case stays obvious: one file in, one out.
   outputLayout: 'single',
   mirrorBatchTree: true,
+  polygonizeEnabled: false,
+  polygonizeTolerance: 0.01,
+  polygonizeKeepLines: false,
+  burnInEnabled: false,
+  burnInTargetLayer: '',
+  burnInField: 'label',
+  burnInMode: 'attribute',
+  burnInPriority: 'nearest-to-centre',
+  burnInReplaceSource: false,
+  kmlTemplate: 'plain',
+  kmlBoreholeLog: false,
+  kmlBalloonFooter: '',
 };
 
 export interface LogEntry {

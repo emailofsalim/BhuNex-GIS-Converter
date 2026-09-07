@@ -54,6 +54,8 @@ import {
 } from '../engines/pointcloud/text';
 import { readAsciiGrid, writeAsciiGrid } from '../engines/raster/asciigrid';
 import { predictConversion, type FidelityPrediction } from './predict';
+import { burnIn, describeBurnIn, DEFAULT_BURN_IN_OPTIONS, type BurnInOptions } from '../qa/burn-in';
+import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type PolygonizeOptions } from '../qa/polygonize';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
@@ -119,6 +121,21 @@ export interface ConversionSettings {
   las?: Partial<WriteLasOptions>;
   textCloud?: Partial<WriteTextCloudOptions>;
   geotiff?: Partial<WriteGeoTiffOptions>;
+  /**
+   * Assemble CAD line work into polygons before writing (spec §27.4).
+   *
+   * Off unless configured. Closing a boundary is a geometry change, so it obeys
+   * the tolerance discipline: the gap closed for each polygon is recorded, and
+   * a boundary that will not close within tolerance stays a line (R18, R21).
+   */
+  polygonize?: Partial<PolygonizeOptions>;
+  /**
+   * Attach text found inside polygons to those polygons (spec §27).
+   *
+   * Off unless configured. This is what makes a cadastral DXF usable as GIS:
+   * the plot number drawn beside the boundary becomes an attribute on it.
+   */
+  burnIn?: Partial<BurnInOptions>;
   /** Attach a provenance record to the output package. */
   embedMetadata?: boolean;
   /**
@@ -614,6 +631,73 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     const decimated = applyDecimation(working, settings.decimation ?? { mode: 'none' }, settings.pointFilter);
     working = decimated.dataset;
     warnings.push(...decimated.warnings);
+  }
+
+  // Polygonisation runs BEFORE repair and before burn-in: repair should act on
+  // the polygons the user will actually export, and burn-in needs polygons to
+  // put text inside. Running it later would repair line work that is about to
+  // be replaced.
+  if (settings.polygonize) {
+    const options = { ...DEFAULT_POLYGONIZE_OPTIONS, ...settings.polygonize };
+    const result = polygonize(working, options);
+    working = result.dataset;
+    const closed = result.report.built.filter((entry) => entry.closedGap > 0);
+    warnings.push(
+      warn('POLYGONIZED', describePolygonize(result.report, options), {
+        severity: closed.length > 0 ? 'warning' : 'info',
+        count: result.report.built.length,
+        reason: 'CAD line work was assembled into polygons, so closed boundaries can be exported as areas rather than as strokes.',
+        action:
+          closed.length > 0
+            ? `${closed.length} boundar(y/ies) had to be closed within the ${options.tolerance}-unit tolerance. Each gap is recorded on the polygon as _polygonized_gap.`
+            : 'Every boundary was already closed; no geometry was changed.',
+        detail: { built: result.report.built.length, holes: result.report.holes, unclosed: result.report.unclosed.length },
+      })
+    );
+    for (const entry of result.report.unclosed) {
+      warnings.push(
+        warn('POLYGONIZE_UNCLOSED', `${entry.sourceIds.length} line(s) in "${entry.layer}" did not form a closed boundary.`, {
+          count: entry.sourceIds.length,
+          reason: entry.reason,
+          action: 'Raise the tolerance only if the gap is a digitising error. A genuinely open boundary must not be forced shut.',
+        })
+      );
+    }
+  }
+
+  if (settings.burnIn?.targetLayer) {
+    const options = { ...DEFAULT_BURN_IN_OPTIONS, ...settings.burnIn };
+    const result = burnIn(working, options);
+    working = result.dataset;
+    warnings.push(
+      warn('BURNED_IN', describeBurnIn(result.report, options), {
+        severity: 'info',
+        count: result.report.matched.length,
+        reason: 'Text found inside each polygon was attached to it, making an association that was only spatial into one the target format can carry.',
+        action: options.replaceSource
+          ? 'The source text was removed, as "replace source" was selected.'
+          : 'The source text is unchanged; burn-in only adds.',
+        detail: { matched: result.report.matched.length, ambiguous: result.report.ambiguous, orphans: result.report.orphanText.length },
+      })
+    );
+    if (result.report.orphanText.length > 0) {
+      warnings.push(
+        warn('BURN_IN_ORPHANS', `${result.report.orphanText.length} text item(s) fell inside no polygon and were not attached to anything.`, {
+          count: result.report.orphanText.length,
+          reason: 'They sit outside every boundary in the target layer, or inside a hole.',
+          action: 'Check the source drawing: text outside its parcel usually means the boundary is missing or the layers do not align.',
+        })
+      );
+    }
+    if (result.report.ambiguous > 0) {
+      warnings.push(
+        warn('BURN_IN_AMBIGUOUS', `${result.report.ambiguous} polygon(s) contained more than one candidate text.`, {
+          count: result.report.ambiguous,
+          reason: `One was chosen by the rule "${options.priority}"; the rejected candidates are listed in the conversion report.`,
+          action: 'Check these parcels if the plot numbers matter. A wrong number attached confidently is worse than one questioned.',
+        })
+      );
+    }
   }
 
   if (working.layers.length > 0) {

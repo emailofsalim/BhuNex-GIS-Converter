@@ -1049,9 +1049,10 @@ here:
                                                                (sections 23, 24)
   PHASE 11 EDIT        vertex editor, snapping, measurement, advanced geometry
                        operations, attribute table              (sections 25, 26)
-  PHASE 12 SEMANTICS   label and attribute burn-in, label placement, CAD
-                       polygonisation, styled KML/KMZ templates and borehole
-                       core-log balloons                        (sections 27, 28)
+  PHASE 12 SEMANTICS   burn-in, label placement, CAD polygonisation, the
+                       borehole model and the core-log balloon - DONE; still
+                       open: KML overlays, icons and template branding
+                                                               (sections 27, 28)
   PHASE 13 WORKFLOW    dual canvas with visual diff, command palette, presets,
                        saved workflows, project file, undo history
                                                                (sections 30, 31)
@@ -1124,14 +1125,14 @@ when a test covers it.
   [ ] Individual shared-edge snap works                section 25
   [ ] Overlap detection works                          section 24
   [ ] Gap detection works                              section 24
-  [ ] Point-in-polygon detection works                 section 27
-  [ ] Text-in-polygon detection works                  section 27
-  [ ] Label burn-in works                              section 27
-  [ ] Attribute burn-in works                          section 27
-  [ ] CAD closed-boundary polygonization works         section 27.4
+  [x] Point-in-polygon detection works                 qa/burn-in.ts, tested
+  [x] Text-in-polygon detection works                  qa/burn-in.ts, tested
+  [x] Label burn-in works                              five modes, tested
+  [x] Attribute burn-in works                          qa/burn-in.ts, tested
+  [x] CAD closed-boundary polygonization works         qa/polygonize.ts, tested
   [ ] PDF/image map workflow works where supported     section 28.3
-  [ ] Borehole KMZ generation works                    section 28
-  [ ] Styled KML balloons work                         section 28
+  [x] Borehole KMZ generation works                    core-log balloon, tested
+  [x] Styled KML balloons work                         six templates, tested
   [ ] Undo/redo works                                  section 31 (R19)
   [ ] Project save/reopen works                        section 31
 
@@ -1515,8 +1516,9 @@ missing fields.
 ================================================================================
 27. LABEL AND ATTRIBUTE BURN-IN, CAD POLYGONISATION
 ================================================================================
-STATUS: SPECIFIED. Phase 12. This is the master document's most distinctive
-requirement and has no equivalent in the current build.
+STATUS: BUILT (qa/burn-in.ts, qa/label-placement.ts, qa/polygonize.ts,
+tests/burnin.test.ts). Both stages are wired into the pipeline as opt-in
+settings, so they apply to what is actually written and work at any file size.
 
 27.1 THE PROBLEM
 A cadastral DXF typically holds plot boundaries on one layer and plot numbers as
@@ -1525,8 +1527,16 @@ Exported naively, the polygons arrive unlabelled and the text arrives as
 detached points - which is why CAD-to-GIS cadastral conversion is usually redone
 by hand.
 
-27.2 DETECTION AND MODES
+27.2 DETECTION AND MODES (BUILT)
 Detect points, TEXT, MTEXT, block text and attribute labels inside polygons.
+A candidate inside a HOLE belongs to no parcel and is reported as an orphan
+rather than attached to the ring that surrounds the hole.
+
+The text is read from the property names this project's own DXF reader writes
+(`_text`, `_textHeight`) before the GIS-style names. A burn-in engine that only
+understood `text` would find nothing in the CAD files it exists for - which is
+exactly what the end-to-end test caught.
+
 Then offer:
   A ATTRIBUTE burn-in   text content becomes a polygon attribute
   B LABEL burn-in       a label representation bound to the polygon
@@ -1534,49 +1544,124 @@ Then offer:
   D CAD burn-in         CAD-compatible annotation
   E KML/KMZ burn-in     polygon name and description for Google Earth
 
-When several candidates fall inside one polygon: configurable priority,
-concatenate, nearest, largest, or a named attribute field.
+When several candidates fall inside one polygon: nearest to centre, largest
+text, first found, concatenate, or a named attribute field. Every rule is
+DETERMINISTIC - the same input must always yield the same plot number - and the
+concatenate rule sorts before joining so the result does not depend on read
+order.
+
+AMBIGUITY IS REPORTED, NOT RESOLVED SILENTLY. The rule that picked the winner is
+named in the report and every rejected candidate is listed with the reason it
+lost. A wrong plot number attached confidently is far worse than one the user
+was asked about.
 
 The source point or text is NEVER deleted unless the user explicitly chooses
 "replace source" (R17, R18).
 
-27.3 LABEL PLACEMENT
-Centroid, pole of inaccessibility, largest empty area, interior point, with
-collision avoidance, rotation and scale. A label MUST NOT be placed outside its
-polygon; narrow polygons rotate or reposition their label instead.
+27.3 LABEL PLACEMENT (BUILT - qa/label-placement.ts)
+The anchor is the POLE OF INACCESSIBILITY: the interior point furthest from any
+edge, found by the quadtree search polylabel uses - subdivide, keep the cell
+whose upper bound on distance is best, stop when the bound can no longer beat
+the best point found.
 
-27.4 CAD CLOSED-BOUNDARY POLYGONISATION (PARTIAL)
-Built: closed LWPOLYLINE and POLYLINE become polygons; layer names and entity
-handles are preserved.
-Specified: nearly-closed boundary detection within a stated tolerance, boundary
-loop assembly from separate segments, nested boundary and hole resolution.
-Closing a gap is a geometry change and obeys R18 and R21 - within tolerance,
-counted, previewed, undoable.
+Not the centroid, and this is the whole point of the module. The area centroid
+of a C-shaped parcel, a river bend or a lease wrapped around a pit falls OUTSIDE
+the polygon, so the plot number lands in the neighbouring plot. On cadastral
+output that is not cosmetic: it mislabels someone's land. Holes are handled too,
+so a label never lands in an exclusion.
+
+The search returns CLEARANCE - the distance to the nearest edge - for free,
+which is the label's usable half-width. A label wider than that is still placed
+but reported as overflowing: suppressing it silently would lose the plot number.
+
+Narrow polygons (clearance below a fraction of the longer extent) rotate to
+follow the longest edge, kept upright so the text stays readable.
+
+Collisions are resolved by clearance: the label with the most room keeps its
+position, and a label that cannot be placed without overlapping is SUPPRESSED
+rather than nudged. A plot number a few metres into the neighbouring parcel is
+worse than one the user can see is missing.
+
+27.4 CAD CLOSED-BOUNDARY POLYGONISATION (BUILT - qa/polygonize.ts)
+The DXF reader already turns a CLOSED polyline into a polygon. This handles the
+rest: boundaries drawn as separate LINE entities, assembled end-to-end into
+loops; boundaries that nearly close, within a stated tolerance; and loops inside
+loops, resolved into shells and holes.
+
+The tolerance discipline matters more here than anywhere else in the tool.
+Closing a 3 mm gap recovers the draughtsman's intent; closing a 3 m gap invents
+a boundary. So the gap closed is recorded per polygon as _polygonized_gap,
+nothing is closed beyond the tolerance the user set, and a boundary that will
+not close is returned as an OPEN LINE with the gap that defeated it - never
+quietly forced shut (R18, R21).
+
+Provenance survives: _polygonized_from lists the entity handles the polygon was
+assembled from, and _polygonized_segments how many (R20).
+
+DELIBERATE LIMIT: lines that cross in their INTERIORS are not noded. Crossing
+lines are a defect that qa/defects.ts reports; silently noding them here would
+build polygons out of geometry the user has not been told is broken.
+
+ORDER IN THE PIPELINE: polygonise runs before repair and before burn-in. Repair
+should act on the polygons that will actually be exported, and burn-in needs
+polygons to put text inside.
 
 
 ================================================================================
 28. STYLED KML/KMZ, MINING OUTPUT AND GEOREFERENCING
 ================================================================================
-STATUS: SPECIFIED except where noted. Phase 12.
+STATUS: BUILT for the borehole model, the core-log balloon and the template
+system (engines/survey/borehole.ts, engines/vector/kml-templates.ts,
+tests/borehole.test.ts). Georeferencing panel and overlays remain open.
 
-28.1 BOREHOLE AND MINING MODEL (PARTIAL)
-Built: borehole, bench, crest/toe, blast-hole and cadastral field recognition
-(Khasra, Khewat, Khatian included); Surpac STR.
-Specified as a first-class CIR object: hole id, collar E/N/RL, total depth,
-azimuth, dip, from/to intervals, lithology, sample id, assay fields, core
-recovery, remarks, linked photographs and reports.
+28.1 BOREHOLE AND MINING MODEL (BUILT)
+A borehole never arrives as one thing: the collar is a point (hole id, easting,
+northing, RL, depth, azimuth, dip) and the geology is a separate table of depth
+intervals keyed by hole id. Two files, joined by a column, and every mining
+package spells the columns differently.
 
-28.2 STYLED KML/KMZ ENGINE
-Built: folders (nested, R16), placemarks, geometry, extended data.
-Specified: styles, icons, labels, line styles, polygon fills, transparency,
-altitude modes, ground and screen overlays, NetworkLink, HTML descriptions.
+engines/survey/borehole.ts recognises both shapes and joins them by hole id
+ACROSS layers and across a table that was never converted to points, because
+that is how the data actually arrives. Column aliases cover Datamine, Surpac,
+Micromine, Vulcan and spreadsheet naming; assay columns are recognised by
+element symbol and grade suffix.
 
-BOREHOLE CORE-LOG BALLOON. A styled, self-contained Google Earth balloon:
-header (hole id, site, coordinates, RL, depth, azimuth, dip) and core log
-(from, to, thickness, lithology, recovery, RQD, sample, assay, remarks), with
-collapsible sections, clean tables, responsive layout and a design that reads in
-both Earth themes. Optional photographs and an optional hosted report link.
-No credential, token or signed URL secret may appear in the output (R23).
+Three rules:
+  - Thickness is COMPUTED from the depths, never read from a thickness column.
+    Sources routinely carry a stale one that disagrees with its own from/to,
+    and the depths are the measurement.
+  - An interval whose hole id matches no collar is reported as ORPHANED, never
+    attached to the nearest hole. A log against the wrong borehole is worse
+    than a log the user is told is unmatched (R2).
+  - checkLogContinuity finds gaps and overlaps: a gap means a missing interval,
+    an overlap means two records claim the same metre and one is wrong. Both
+    are common in hand-compiled logs and invisible from the table.
+
+28.2 STYLED KML/KMZ ENGINE (BUILT for balloons; overlays still open)
+Built: nested folders (R16), placemarks, geometry, line and polygon styles,
+altitude modes, and HTML description balloons from a template.
+Specified: icons, transparency control, ground and screen overlays, NetworkLink.
+
+BOREHOLE CORE-LOG BALLOON (BUILT). Collar header, then the interval table, then
+any continuity problem found. Only the columns that carry data are emitted: an
+empty RQD column on every row of a sixty-interval log pushes the lithology
+off-screen. The continuity warnings sit BESIDE the log rather than in a separate
+report, because the balloon is where a geologist actually looks at the hole.
+
+THREE SAFETY RULES, all tested:
+  - EVERYTHING IS ESCAPED. Values come from files this tool did not write and
+    the output is HTML rendered in someone else's viewer. The balloon is
+    assembled from a fixed skeleton and no source text can become markup.
+  - NO SECRETS LEAVE. Property names and values that look like credentials are
+    dropped before rendering, a signed report URL is refused, and the omission
+    is REPORTED as a warning - a silent drop would be its own dishonesty. A KMZ
+    is emailed around; a token inside one has leaked (R3, R23).
+  - The CDATA terminator is escaped inside balloon content, so a value
+    containing "]]>" cannot close the section early and corrupt the file.
+
+Styling is inline: Google Earth strips a <style> block in some versions and
+ignores external stylesheets entirely. Colours hold contrast on both the light
+and dark balloon backgrounds.
 
 28.3 PDF AND IMAGE MAP GEOREFERENCING
 Render a scanned map at its true aspect ratio; zoom, pan, place, crop, rotate.
@@ -1590,10 +1675,13 @@ Built: QGIS GCP point files read and written; world files read and written.
 Specified: the panel itself - GCP table, canvas, coordinate entry, residuals,
 RMS, transformation type, target CRS, and add/delete/move/import/export GCP.
 
-28.5 KML/KMZ TEMPLATE SYSTEM
-Reusable templates: Simple GIS, Cadastral, Survey, Mining, Borehole, Core Log,
-Drill Pattern, Stockpile, Contour, DEM/DSM, Custom - each carrying logo, title,
-colours, icons, HTML layout, table fields, footer and links.
+28.5 KML/KMZ TEMPLATE SYSTEM (BUILT for field ordering; branding still open)
+Templates: plain, cadastral, survey, borehole, mining, contour. A template
+decides which fields come FIRST - the plot number, the hole id, the elevation -
+so the identity a reader opened the balloon for is at the top instead of
+alphabetically in the middle. 'plain' is the default and is never wrong.
+
+Specified: logo, custom colours, icon sets and a saved layout per template.
 
 
 ================================================================================
