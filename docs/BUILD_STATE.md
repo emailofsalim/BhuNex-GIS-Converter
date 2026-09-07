@@ -22,7 +22,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 450 across 15 suites, all green |
+| Tests | 477 across 16 suites, all green |
 | Install | **Load `dist/`, never the repo root.** On a managed laptop, extract outside OneDrive — `docs/INSTALL.md` |
 | Store | Package + listing ready: `npm run store:package`, `docs/STORE_LISTING.md`, `docs/PRIVACY.md` |
 
@@ -55,7 +55,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
-| 11 | Measurement ✅, snapping ✅ (incl. shared edge); vertex editor, geometry ops, attribute table ⛔ (§25, §26) | 🟡 partial |
+| 11 | Measurement ✅, snapping ✅ (incl. shared edge), vertex editor ✅; geometry ops, attribute table, layer manager ⛔ (§25, §26) | 🟡 partial |
 | 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
 | 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
@@ -80,6 +80,8 @@ noisy-OR confidence), `companions.ts`, `units.ts`, `geometry.ts`, `precision.ts`
 `history.ts` (reversible operation history), `workflow.ts` (record and replay),
 `measure.ts` (CRS-aware measurement; Vincenty on a geographic CRS, planar on a
 projected one, and it says which),
+`vertex-edit.ts` (move, insert-on-segment, delete, multi-select drag, with the
+live readout and the refusals that keep geometry valid),
 `report.ts` (the per-file conversion report),
 `project.ts` (the project file), `secrets.ts` (one definition of credential-shaped,
 shared by every writer), `pipeline.ts` (the single dispatch point).
@@ -199,10 +201,10 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Phase 11 remainder (§25, §26).** Measurement and snapping are done. Next:
-   the vertex editor (§25.1) on top of the snap engine, the attribute table
-   (§25.5), and the geometry operations of §26.2 — all inheriting the
-   plan/apply/undo contract `qa/repair.ts` and `qa/snap.ts` already share.
+1. **Phase 11 remainder (§25, §26).** Measurement, snapping and the vertex
+   editor are done as engines; none is wired into the canvas yet, which is the
+   next step and the one that makes them usable. Then the attribute table
+   (§25.5), the layer manager (§25.4) and the geometry operations of §26.2.
 2. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter`. Until then the honest refusal stays.
 3. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
@@ -220,6 +222,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 | Date | Session | What landed |
 |---|---|---|
+| 2026-09-07 | vertex editor | `core/vertex-edit.ts`: move, move-by-bearing-and-distance, insert-on-segment, delete, and multi-select drag — same plan/apply/undo contract as repair and snap, so there is one preview-and-commit flow in the tool rather than three. The editor is the most destructive thing here, so most of it is refusals: deleting below three polygon corners or two line vertices is refused with the reason rather than allowed to produce something that parses but is not a polygon; a closed ring's duplicated endpoint always moves in step, so an edit cannot open a ring and create the defect the topology checker reports; an insert is projected onto the segment rather than placed where the pointer was, since a click is never exactly on a line and a kink in a straight boundary is invisible at the working zoom. Z is preserved on a plan-view drag and interpolated on an insert. The live readout goes through `measure.ts`, so a geographic CRS reports geodesic lengths rather than arithmetic on degrees. 477 tests (`vertex-edit.test.ts` new, 27). |
 | 2026-09-07 | scope: Chrome extension only | Scope decided and recorded in `docs/SCOPE.md`: the Chrome MV3 extension is the product, a web app is deferred with the reasoning written down (the engines are portable, but the extension apparatus is not, and a hosted page turns "nothing is uploaded" from a property of the artefact into a claim about a server's configuration). The packaged ZIP now carries `INSTALL-FIRST.txt` at its root — extracting it puts the instructions where the person is looking, including the OneDrive placeholder trap. `assert-store-ready.mjs` gained a loadability check: every file the manifest points at and every asset the pages reference must exist, which is what catches "loads but the workspace is blank"; proved by deleting a chunk and watching it fail. Version 1.0.1. |
 | 2026-09-07 | snapping | `qa/snap.ts`: vertex, segment, intersection, grid and — the one the spec singles out — shared-edge snapping. Nothing moves unless it is named: a snap takes the features it may touch, so closing the gap between two parcels cannot also drag a road centreline or a monument that happened to be within tolerance. The shared run is found by testing each vertex against the other feature's *outline* rather than by pairing vertices, so it works when the two boundaries have different vertex counts, which after a re-survey they always do. Same plan/apply/undo contract as `qa/repair.ts`, closed rings stay closed, Z is preserved, and the maximum displacement is reported before anything moves. 450 tests (`snap.test.ts` new, 21). |
 | 2026-09-07 | measurement | Phase 11 begins: `core/measure.ts` — distance, area, perimeter, bearing, azimuth, angle, slope and bearing/distance entry, each choosing its arithmetic from the CRS. Vincenty's inverse and direct solutions on a geographic CRS, planar on a projected one, and `planar-undeclared` when none is declared — carried in `Measurement.method` so a number is never read without knowing what produced it. This is the error the spec names: a degree of longitude is 111.3 km at the equator and 102.5 km at 23N, and a tool that treats degrees as a plane reports areas out by a factor that grows with latitude. 429 tests (`measure.test.ts` new, 32), anchored to published geodetic vectors rather than to the module itself. |
