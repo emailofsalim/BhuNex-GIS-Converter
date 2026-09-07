@@ -621,7 +621,7 @@ export function writePly(dataset: CirDataset, options: WriteTextCloudOptions): {
   const header = [
     'ply',
     'format ascii 1.0',
-    'comment Universal Geo Converter',
+    'comment Universal BhuNex Converter',
     `element vertex ${cloud.loaded}`,
     'property float x',
     'property float y',

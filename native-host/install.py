@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installs the Universal Geo Converter native messaging host.
+"""Installs the Universal BhuNex Converter native messaging host.
 
 Writes the host manifest into the per-user location Chrome reads, with the
 extension id supplied on the command line. Nothing is installed system-wide and
@@ -21,9 +21,9 @@ import os
 import sys
 from pathlib import Path
 
-HOST_NAME = "com.universal_geo_converter.host"
+HOST_NAME = "com.universal_bhunex_converter.host"
 HERE = Path(__file__).resolve().parent
-HOST_SCRIPT = HERE / "universal_geo_host.py"
+HOST_SCRIPT = HERE / "universal_bhunex_host.py"
 
 
 def manifest_directories() -> list[Path]:
@@ -53,7 +53,7 @@ def manifest_directories() -> list[Path]:
 def build_manifest(extension_id: str) -> dict[str, object]:
     return {
         "name": HOST_NAME,
-        "description": "Universal Geo Converter DWG helper (drives your installed ODA File Converter).",
+        "description": "Universal BhuNex Converter DWG helper (drives your installed ODA File Converter).",
         # Chrome executes this path directly, so it must be absolute.
         "path": str(HOST_SCRIPT),
         "type": "stdio",

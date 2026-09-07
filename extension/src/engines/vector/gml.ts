@@ -402,7 +402,7 @@ export function writeGml(dataset: CirDataset, options: WriteGmlOptions): { text:
 
   const text =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<ugc:FeatureCollection xmlns:gml="http://www.opengis.net/gml" xmlns:ugc="http://universal-geo-converter.local/ns">\n` +
+    `<ugc:FeatureCollection xmlns:gml="http://www.opengis.net/gml" xmlns:ugc="http://universal-bhunex-converter.local/ns">\n` +
     members.join('\n') +
     `\n</ugc:FeatureCollection>\n`;
 

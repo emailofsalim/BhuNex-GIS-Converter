@@ -1,7 +1,7 @@
-# BUILD STATE — Universal Geo Converter
+# BUILD STATE — Universal BhuNex Converter
 
 **Resumable progress ledger.** Any session (human or AI) picking this work up reads
-`docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt` first, then this file, then
+`docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt` first, then this file, then
 runs `npm ci && npm run verify`, does the next open task, updates this file, commits
 and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 
@@ -16,7 +16,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Product | Chrome MV3 extension — GIS / geomatics / survey / CAD / LiDAR / mining converter |
 | Base project | `vendor/reference/Universal-Conveter.zip` (Flask + ODA DWG→DXF prototype) |
 | Engine donor | `vendor/reference/Geo-Studio-Pro-main.zip` (React/TS, `src/lib/*`) |
-| Spec of record | `docs/UNIVERSAL_GEO_CONVERTER_BUILD_INSTRUCTIONS.txt` (v2.0) |
+| Spec of record | `docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt` (v2.0) |
 | Owner's master doc | merged into the spec; verbatim copy at `docs/reference/MASTER_INSTRUCTIONS_AS_SUPPLIED.txt` |
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
@@ -30,7 +30,7 @@ Ported/adapted from `Geo-Studio-Pro-main/src/lib/`: `formats.ts` (parsers/writer
 `parseClient.ts` (worker threshold = 2 MB), `workers/parseWorker.ts`.
 From `Universal-Conveter/Pakhar_CAD_GIS_Local_Server/`:
 `backend/services/dwg_converter.py` (ODA invocation, isolated job dirs, output
-validation) → became `native-host/universal_geo_host.py`.
+validation) → became `native-host/universal_bhunex_host.py`.
 
 The engines were **re-implemented against the CIR**, not copy-pasted: the originals
 were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model.
@@ -92,7 +92,7 @@ so an unreadable target can never show PASS).
 **UI** — `workspace/` (full page), `sidepanel/`, `popup/`, `ui/preview.ts` (canvas,
 no tiles), `state/store.ts`, `workers/`.
 
-**Native host** — `native-host/universal_geo_host.py` + `install.py`.
+**Native host** — `native-host/universal_bhunex_host.py` + `install.py`.
 
 **Docs** — instruction TXT, this file, `NATIVE_HOST.md`, `FORMAT_MATRIX.md`
 (generated from the registry; CI fails if stale).

@@ -1,5 +1,5 @@
 /**
- * Universal Geo Converter workspace.
+ * Universal BhuNex Converter workspace.
  *
  * Framework-free: the workspace has one state tree and a handful of views, and a
  * render-on-change loop is the whole requirement. It also keeps the bundle small
@@ -416,7 +416,7 @@ async function downloadBatchZip(): Promise<void> {
   }));
   const { zip, manifestCsv, tree } = await packageBatch(results as never, { mirrorSource: store.get().settings.mirrorBatchTree });
   store.set({ manifestCsv });
-  downloadBytes(zip, `universal-geo-converter-batch-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip');
+  downloadBytes(zip, `universal-bhunex-converter-batch-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip');
   store.log('ok', `Batch ZIP written with ${done.length} dataset(s), ${tree.length} file(s) and a manifest.`);
   render();
 }
@@ -1670,7 +1670,7 @@ async function boot(): Promise<void> {
   store.subscribe(() => {
     /* views re-render explicitly; the subscription keeps the store honest */
   });
-  store.log('info', 'Universal Geo Converter ready. All processing is local.');
+  store.log('info', 'Universal BhuNex Converter ready. All processing is local.');
   render();
   void refreshNative();
 }

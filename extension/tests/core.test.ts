@@ -201,12 +201,32 @@ describe('geometry helpers', () => {
     [0, 0],
   ];
 
-  it('computes signed area and orientation', () => {
+  it('computes signed area and orientation against the shoelace definition', () => {
+    // Anchored to the textbook shoelace sum rather than to our own helper, so
+    // the two cannot agree on a convention that is wrong. Ring winding decides
+    // outer ring from hole in a shapefile: inverted, a parcel renders as a void
+    // in ArcGIS, and a round trip through this tool alone never notices because
+    // the reader and the writer make the same mistake.
+    const shoelace = (ring: number[][]): number => {
+      let sum = 0;
+      for (let index = 0; index < ring.length - 1; index++) {
+        sum += ring[index][0] * ring[index + 1][1] - ring[index + 1][0] * ring[index][1];
+      }
+      return sum / 2;
+    };
+
+    // `square` runs right, up, left, down: counter-clockwise, positive shoelace.
+    expect(shoelace(square)).toBeGreaterThan(0);
+    expect(signedArea(square)).toBeCloseTo(shoelace(square), 9);
     expect(Math.abs(signedArea(square))).toBeCloseTo(100, 9);
+
     const clockwise = orientRing(square, true);
-    expect(signedArea(clockwise)).toBeGreaterThan(0);
+    expect(shoelace(clockwise)).toBeLessThan(0);
+    expect(signedArea(clockwise)).toBeLessThan(0);
+
     const counter = orientRing(square, false);
-    expect(signedArea(counter)).toBeLessThan(0);
+    expect(shoelace(counter)).toBeGreaterThan(0);
+    expect(signedArea(counter)).toBeGreaterThan(0);
   });
 
   it('tests point containment', () => {

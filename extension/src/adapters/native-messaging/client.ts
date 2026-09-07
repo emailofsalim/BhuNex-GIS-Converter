@@ -13,7 +13,7 @@ import { ConversionError } from '../../core/errors';
 import { readDxf } from '../../engines/cad/dxf-read';
 import { decodeText } from '../../engines/shared';
 
-export const HOST_NAME = 'com.universal_geo_converter.host';
+export const HOST_NAME = 'com.universal_bhunex_converter.host';
 
 export type NativeStatus = 'READY' | 'NOT_INSTALLED' | 'CONFIGURATION_ERROR' | 'ENGINE_ERROR' | 'TIMEOUT' | 'UNKNOWN';
 
@@ -102,7 +102,7 @@ function send(op: string, payload: Record<string, unknown> = {}, timeoutMs = 300
               : text,
             action: missing
               ? 'Run native-host/install.py with this extension id (see docs/NATIVE_HOST.md), then restart the browser.'
-              : 'Check that Python 3 is installed and that native-host/universal_geo_host.py is executable.',
+              : 'Check that Python 3 is installed and that native-host/universal_bhunex_host.py is executable.',
           })
         );
         return;
@@ -113,7 +113,7 @@ function send(op: string, payload: Record<string, unknown> = {}, timeoutMs = 300
             code: 'NATIVE_NO_RESPONSE',
             what: 'The native helper returned no response.',
             why: 'The host process exited without writing a message, which usually means it crashed on start-up.',
-            action: 'Run `python3 native-host/universal_geo_host.py` in a terminal to see the start-up error.',
+            action: 'Run `python3 native-host/universal_bhunex_host.py` in a terminal to see the start-up error.',
           })
         );
         return;

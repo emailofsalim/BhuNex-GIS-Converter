@@ -213,6 +213,59 @@ describe('CSV survey table round trips', () => {
     expect(decoder.decode(back.outputs[0].bytes)).toContain('BENCHMARK');
   });
 
+  it('writes shapefile outer rings clockwise, as the specification requires', async () => {
+    // The external-facing guarantee, checked against the written bytes rather
+    // than against our own reader. Winding is how a shapefile distinguishes an
+    // outer ring from a hole: written backwards, a parcel opens in ArcGIS as a
+    // void. A round trip through this tool alone cannot catch that, because the
+    // reader would make the identical mistake and cancel it out.
+    const result = await convert({
+      input: input('plots.geojson', GEOJSON_POLYGON),
+      targetFormatId: 'shapefile',
+      settings: { precision: FULL_PRECISION, sourceCrs: UTM45N },
+    });
+
+    const entries = await readZip(result.outputs[0].bytes);
+    const shp = entries.find((entry) => entry.name.endsWith('.shp'))!;
+    const view = new DataView(shp.bytes.buffer, shp.bytes.byteOffset, shp.bytes.byteLength);
+
+    // Walk the .shp records: 100-byte file header, then per record an 8-byte
+    // record header, then the polygon (type, box, numParts, numPoints, parts,
+    // points) in little-endian.
+    let at = 100;
+    let ringsChecked = 0;
+    while (at + 8 < shp.bytes.length) {
+      const contentWords = view.getInt32(at + 4, false);
+      const recordAt = at + 8;
+      const shapeType = view.getInt32(recordAt, true);
+      if (shapeType === 5 || shapeType === 15) {
+        const partCount = view.getInt32(recordAt + 36, true);
+        const pointCount = view.getInt32(recordAt + 40, true);
+        const partsAt = recordAt + 44;
+        const pointsAt = partsAt + partCount * 4;
+        for (let part = 0; part < partCount; part++) {
+          const start = view.getInt32(partsAt + part * 4, true);
+          const end = part + 1 < partCount ? view.getInt32(partsAt + (part + 1) * 4, true) : pointCount;
+          let shoelace = 0;
+          for (let index = start; index < end - 1; index++) {
+            const x1 = view.getFloat64(pointsAt + index * 16, true);
+            const y1 = view.getFloat64(pointsAt + index * 16 + 8, true);
+            const x2 = view.getFloat64(pointsAt + (index + 1) * 16, true);
+            const y2 = view.getFloat64(pointsAt + (index + 1) * 16 + 8, true);
+            shoelace += x1 * y2 - x2 * y1;
+          }
+          // Part 0 is the outer ring, and clockwise means a negative shoelace.
+          if (part === 0) {
+            expect(shoelace).toBeLessThan(0);
+            ringsChecked++;
+          }
+        }
+      }
+      at = recordAt + contentWords * 2;
+    }
+    expect(ringsChecked).toBeGreaterThan(0);
+  });
+
   it('CSV -> Shapefile -> GeoJSON keeps points and attributes', async () => {
     const toShapefile = await convert({
       input: input('survey.csv', SURVEY_CSV),

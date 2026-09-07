@@ -1,5 +1,5 @@
 /**
- * Packages dist/ into dist-zip/universal-geo-converter-<version>.zip using only
+ * Packages dist/ into dist-zip/universal-bhunex-converter-<version>.zip using only
  * Node built-ins, so CI needs no zip binary and the produced archive is the same
  * on every runner.
  */
@@ -81,6 +81,6 @@ eocd.writeUInt32LE(centralBuf.length, 12);
 eocd.writeUInt32LE(offset, 16);
 
 mkdirSync(outDir, { recursive: true });
-const target = resolve(outDir, `universal-geo-converter-${version}.zip`);
+const target = resolve(outDir, `universal-bhunex-converter-${version}.zip`);
 writeFileSync(target, Buffer.concat([...locals, centralBuf, eocd]));
 console.log(`packaged ${files.length} files -> ${relative(root, target)}`);

@@ -65,13 +65,13 @@ jobs:
       - name: Upload unpacked extension
         uses: actions/upload-artifact@v4
         with:
-          name: universal-geo-converter-unpacked
+          name: universal-bhunex-converter-unpacked
           path: dist/
           if-no-files-found: error
 
       - name: Upload packaged extension
         uses: actions/upload-artifact@v4
         with:
-          name: universal-geo-converter-zip
+          name: universal-bhunex-converter-zip
           path: dist-zip/*.zip
           if-no-files-found: error

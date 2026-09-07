@@ -304,9 +304,10 @@ function assemblePolygons(rings: Position[][], dimension: 2 | 3 | 4): CirGeometr
   const holes: Position[][] = [];
   for (const ring of rings) {
     if (ring.length < 4) continue;
-    // Shapefile Y grows north, so a clockwise ring has negative shoelace area in
-    // the standard orientation used here.
-    if (signedArea(ring) > 0) outers.push(ring);
+    // The shapefile specification: walking an outer ring in vertex order keeps
+    // the polygon interior on your right, which is clockwise, which is a
+    // negative shoelace area. Holes run the other way.
+    if (signedArea(ring) < 0) outers.push(ring);
     else holes.push(ring);
   }
   if (outers.length === 0) {
