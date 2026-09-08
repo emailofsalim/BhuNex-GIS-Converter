@@ -66,7 +66,17 @@ jobs:
         # automatic rejection nobody could have spotted by reading the manifest.
         run: npm run store:check
 
-      - name: Package extension
+      - name: Package extension and verify the archive
+        # `npm run package` builds the ZIP and then validates it with
+        # scripts/verify-package.mjs, which reads the archive the way a STRICT
+        # extractor does rather than the way a tolerant library does.
+        #
+        # This matters because v1.0.0 through v1.0.2 shipped an archive whose
+        # End Of Central Directory record under-reported its entry count by
+        # one. Node, Python, 7-Zip and macOS all scan and recover, so every
+        # check we had passed. `unzip` and Windows Explorer do not, and a
+        # partial extraction on Windows shows up in the browser as
+        # "Manifest file is missing or unreadable" — which is what a user hit.
         run: npm run package
 
       - name: Upload unpacked extension

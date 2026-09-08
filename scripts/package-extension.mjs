@@ -163,12 +163,22 @@ for (const entry of entries) {
 const centralBuf = Buffer.concat(centrals);
 const eocd = Buffer.alloc(22);
 eocd.writeUInt32LE(0x06054b50, 0);
-eocd.writeUInt16LE(files.length, 8);
-eocd.writeUInt16LE(files.length, 10);
+// `entries.length`, NOT `files.length`: INSTALL-FIRST.txt is a synthetic entry
+// that exists in the archive but not in dist/. Under-reporting the count by one
+// makes a strict extractor read that many central-directory records, then find
+// another record's signature where it expected the end of the archive.
+//
+// The tolerant readers (Node, Python, 7-Zip, macOS) scan and recover, so the
+// archive looks fine. `unzip` reports "expected central file header signature
+// not found", and Windows Explorer — which every Windows user extracts with —
+// can extract partially and silently. A partial extract missing manifest.json
+// is reported by the browser as "Manifest file is missing or unreadable".
+eocd.writeUInt16LE(entries.length, 8);
+eocd.writeUInt16LE(entries.length, 10);
 eocd.writeUInt32LE(centralBuf.length, 12);
 eocd.writeUInt32LE(offset, 16);
 
 mkdirSync(outDir, { recursive: true });
 const target = resolve(outDir, `universal-bhunex-converter-${version}.zip`);
 writeFileSync(target, Buffer.concat([...locals, centralBuf, eocd]));
-console.log(`packaged ${files.length} files -> ${relative(root, target)}`);
+console.log(`packaged ${entries.length} entries -> ${relative(root, target)}`);
