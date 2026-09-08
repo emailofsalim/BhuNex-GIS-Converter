@@ -17,11 +17,12 @@ Every "Met" claim below was checked against the code, not assumed.
 
 | | Rules |
 |---|---|
-| **Met** | 34 of 40 |
+| **Met** | 37 of 40 |
 | **Met, different naming** | 2 (RULE 04 output path, §2 folder names) |
-| **Gap** | 4 — RULE 15, RULE 27/28, RULE 31, RULE 32 |
+| **Gap** | 1 — RULE 32 |
 
-The four gaps are tracked in `BUILD_STATE.md` and listed at the end.
+Three of the four gaps found in the first audit are now closed; the remaining
+one is listed at the end and tracked in `BUILD_STATE.md`.
 
 ---
 
@@ -75,9 +76,12 @@ The specification's §2 tree is illustrative. This project's equivalent:
 | Rule | State | Evidence |
 |---|---|---|
 | 14 Web Workers for expensive work | **Met** | `src/workers/convert.worker.ts`; anything over 2 MB goes off-thread. |
-| 15 Worker pools for parallel work | **GAP** | See below. |
+| 15 Worker pools for parallel work | **Met** | `src/workers/pool.ts`: a lazily-spawned pool sized from `hardwareConcurrency`, one core left free for the UI thread, capped at 8 for memory. Previously `parallelJobs` started N jobs that all queued behind ONE worker. |
 | 16 WebAssembly where it helps | **Met by decision** | No WASM today. `wasm-unsafe-eval` is in the CSP so a decoder can be added; the specification says not to use WASM merely for complexity. |
 | 17 Memory efficiency | **Met** | `estimatePeakBytes` / `preflight` refuse a job that would exhaust memory, with a message saying what to do instead. Buffers are transferred, not copied, across the worker boundary. |
+| 27 Cancellation | **Met** | `cancelJob(id)` TERMINATES the worker running it — a conversion is a synchronous parse loop that never returns to its message loop to read a flag. This is only safe because of the pool: with one shared worker, cancelling one job killed the batch. |
+| 28 Progress reporting | **Met** | The pipeline reports nine stage boundaries; the worker relays each as a message. A stage, not a percentage — see below. |
+| 31 Benchmarks | **Met** | `benchmarks/`, `npm run bench`. See "What measuring found". |
 | 26 Chunking / streaming | **Partly met** | Archives expand entry by entry and point clouds decimate on read. Vector readers load the whole file, which is documented per format. |
 
 ---
@@ -139,44 +143,41 @@ operation returns a plausible wrong answer in place of a refusal.
 
 ---
 
-## The four gaps
+## What measuring found
 
-### 1. RULE 15 — worker pool
+Three gaps from the first audit are closed. The measurements are in
+`benchmarks/README.md`; the summary is that measuring first was the right call,
+because it exonerated one suspect and convicted another.
 
-`AppSettings.parallelJobs` exists, and the batch runner starts that many
-conversions concurrently. But `src/workers/client.ts` holds **one** module-level
-`Worker`, so every concurrent job queues behind the same thread.
+### `unionAll` was quadratic
 
-This is worse than not having the setting: it promises parallelism it cannot
-deliver, and on an 8-core machine a 200-file batch runs at one-eighth of the
-speed the control implies.
+`accumulated = union(accumulated, next)` looks linear and is not: unioning two
+adjacent parcels keeps the collinear vertices where the seam was, so the
+accumulator grows and every further union re-sweeps all of it.
 
-**Fix:** a pool sized from `navigator.hardwareConcurrency`, capped by
-`parallelJobs`.
+Replaced with a balanced reduction. Union is associative, so only the order of
+the same merges changed and all 121 geometry tests pass unchanged.
 
-### 2. RULES 27, 28 — cancellation and progress
+| | Before | After |
+|---|---|---|
+| dissolve 128 parcels | 2.69 ms | **1.53 ms** |
+| growth per doubling | ≈4.2× (O(n²)) | **≈2.0×** |
+| buffer a 256-vertex traverse | 281.6 ms | **36.6 ms** (7.7×) |
 
-Neither exists. A conversion cannot be cancelled once started, and reports
-nothing until it finishes. On a 400 MB point cloud that is minutes of a
-progress bar that does not move and a button that does nothing.
+### The boolean sweep was innocent
 
-**Fix:** a task ID per job, `postMessage` progress from the worker, and a
-cancel that terminates the worker running that job — which the pool above makes
-possible without killing the others.
+`StatusLine` is a sorted array with O(n) insertion, so the sweep is O(n²) in the
+worst case, and the first audit flagged it. Measured on real boundaries it runs
+near-linear — 0.50, 1.07, 2.19 ms for 256, 512 and 1024 vertices.
 
-### 3. RULE 31 — benchmarks
+**Left alone, on evidence.** A balanced tree is the textbook fix and would not
+pay for itself at the sizes this tool sees. This is what §25 is asking for.
 
-There is no `benchmarks/`. Specification §25 is explicit that performance must
-be measured rather than assumed, and this project has one measured claim
-(`npm run store:package` drops source maps: 1.1 MB → 303 KB) and no others.
+---
 
-Two things want measuring first: `StatusLine` in the boolean core is a sorted
-array, O(n) per insert, and the buffer's `unionAll` folds pairwise.
+## The remaining gap
 
-**Fix:** `benchmarks/` with scaling runs for the boolean core, buffering and
-whole-file conversion.
-
-### 4. RULE 32, §42 — no giant files
+### RULE 32, §42 — no giant files
 
 `src/workspace/main.ts` is **4,609 lines**. The specification names this exact
 case ("do not create one giant popup.ts"), and it is the one rule this codebase
@@ -187,6 +188,21 @@ still hold — but it is too large to navigate.
 
 **Fix:** split by panel into `workspace/panels/*.ts`, leaving `main.ts` as the
 wiring.
+
+---
+
+## A note on progress (RULE 28)
+
+Progress is reported as the **stage** the pipeline has reached — reading,
+transforming, writing, re-importing, checking — and not as a percentage.
+
+The pipeline knows which stage it is in. It does not know how far through a
+reader it is without instrumenting every one of them, and an invented percentage
+that jumps 0 → 50 → 100 teaches the user that the number means nothing. Then the
+one time a job really is stuck at 40%, they have no reason to believe it.
+
+A percentage appears only where something is genuinely counted: files completed
+in a batch.
 
 ---
 

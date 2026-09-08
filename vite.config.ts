@@ -49,6 +49,7 @@ export default defineConfig({
       '@ui': resolve(extensionRoot, 'src/ui'),
       '@state': resolve(extensionRoot, 'src/state'),
       '@adapters': resolve(extensionRoot, 'src/adapters'),
+      '@workers': resolve(extensionRoot, 'src/workers'),
     },
   },
   build: {

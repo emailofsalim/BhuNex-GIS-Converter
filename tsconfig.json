@@ -26,8 +26,9 @@
       "@qa/*": ["extension/src/qa/*"],
       "@ui/*": ["extension/src/ui/*"],
       "@state/*": ["extension/src/state/*"],
-      "@adapters/*": ["extension/src/adapters/*"]
+      "@adapters/*": ["extension/src/adapters/*"],
+      "@workers/*": ["extension/src/workers/*"]
     }
   },
-  "include": ["extension/src", "extension/tests", "scripts", "vite.config.ts", "vitest.config.ts"]
+  "include": ["extension/src", "extension/tests", "benchmarks", "scripts", "vite.config.ts", "vitest.config.ts"]
 }

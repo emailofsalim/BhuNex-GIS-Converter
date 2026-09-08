@@ -15,11 +15,15 @@ export default defineConfig({
       '@ui': resolve(extensionRoot, 'src/ui'),
       '@state': resolve(extensionRoot, 'src/state'),
       '@adapters': resolve(extensionRoot, 'src/adapters'),
+      '@workers': resolve(extensionRoot, 'src/workers'),
     },
   },
   test: {
     environment: 'node',
     include: ['extension/tests/**/*.test.ts'],
+    // Benchmarks are a separate run (`npm run bench`). A timing suite on a
+    // shared CI runner is noise, and a noisy suite stops being read.
+    benchmark: { include: ['benchmarks/**/*.bench.ts'] },
     reporters: 'default',
   },
 });

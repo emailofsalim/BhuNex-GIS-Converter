@@ -22,7 +22,8 @@
     "store:check": "node scripts/assert-store-ready.mjs",
     "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs && node scripts/verify-package.mjs",
     "assets": "node scripts/make-store-assets.mjs",
-    "package:check": "node scripts/verify-package.mjs"
+    "package:check": "node scripts/verify-package.mjs",
+    "bench": "vitest bench --run"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
