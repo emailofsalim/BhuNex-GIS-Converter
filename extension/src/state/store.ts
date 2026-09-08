@@ -316,6 +316,16 @@ export interface AppState {
   formatSearch: string;
   formatCategory: string | null;
   busy: boolean;
+  /**
+   * Set while a batch is paused.
+   *
+   * Pausing stops the batch from STARTING the next file; it never interrupts
+   * one already running. A conversion is a synchronous parse inside a worker,
+   * and the only thing that stops one mid-file is terminating the worker —
+   * which is what Cancel does, and it throws the work away. Pause that
+   * discarded a half-converted file would be a cancel wearing the wrong label.
+   */
+  batchPaused: boolean;
   progress: number;
   perf: string;
   batchZip?: { name: string; bytes: Uint8Array };
@@ -341,6 +351,7 @@ class Store {
     formatSearch: '',
     formatCategory: null,
     busy: false,
+    batchPaused: false,
     progress: 0,
     perf: '',
   };
