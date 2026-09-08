@@ -128,6 +128,19 @@ export function buildCommands(): Command[] {
   });
 
   commands.push({
+    id: 'raster-tools',
+    title: 'Contours and clipping',
+    group: 'Edit',
+    keywords: ['contour', 'contours', 'dem', 'elevation', 'terrain', 'clip', 'crop', 'mask', 'boundary', 'raster', 'grid'],
+    detail: 'Trace contour lines from an elevation raster, and clip it to a site boundary held in another queued file.',
+    enabled: item?.dataset?.kind === 'raster' && Boolean(item.dataset.raster?.hasPixelData),
+    disabledReason: item
+      ? 'This file is not a raster with readable pixels.'
+      : 'Select a queued raster first.',
+    run: () => host.showBottomTab('settings'),
+  });
+
+  commands.push({
     id: 'measure',
     title: 'Measure on the map',
     group: 'Edit',

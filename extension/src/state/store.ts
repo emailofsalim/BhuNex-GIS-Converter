@@ -182,6 +182,18 @@ export interface AppSettings {
   contourIndexEvery: number;
   /** Drop contour fragments shorter than this. 0 keeps them all. */
   contourMinLength: number;
+  /**
+   * Queue id of the file whose polygons clip the raster. Empty means no clip.
+   *
+   * An id rather than the rings themselves: the boundary file can be edited,
+   * reconverted or removed between now and the conversion, and a copy of its
+   * geometry taken when the checkbox was ticked would quietly go stale.
+   */
+  clipBoundaryItemId: string;
+  /** Keep pixels only partly inside the boundary. Wider by up to one pixel. */
+  clipTouched: boolean;
+  /** Shrink the output grid to the boundary's extent. */
+  clipCrop: boolean;
   /** Attach text found inside polygons to those polygons. */
   burnInEnabled: boolean;
   /** Layer holding the polygons that receive the text. */
@@ -252,6 +264,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   contourInterval: 0,
   contourIndexEvery: 5,
   contourMinLength: 0,
+  clipBoundaryItemId: '',
+  clipTouched: false,
+  clipCrop: true,
   burnInEnabled: false,
   burnInTargetLayer: '',
   burnInField: 'label',

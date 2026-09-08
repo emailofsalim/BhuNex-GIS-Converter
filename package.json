@@ -1,6 +1,6 @@
 {
   "name": "universal-bhunex-converter",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Universal GIS / Geomatics / Survey / CAD / Mining conversion suite as a Chrome MV3 extension.",
   "type": "module",
