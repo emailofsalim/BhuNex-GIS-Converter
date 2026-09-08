@@ -37,7 +37,7 @@
 
       <div class="main">
         <!-- Left: the queue -->
-        <section class="pane" aria-label="Conversion queue">
+        <section class="pane pane--queue" aria-label="Conversion queue">
           <div class="pane__head">
             <span class="pane__title">Queue</span>
             <span class="badge badge--muted" id="queueCount">0 files</span>
@@ -51,7 +51,7 @@
         </section>
 
         <!-- Centre: drop zone, inspector, preview -->
-        <section class="pane" aria-label="Inspector and preview">
+        <section class="pane pane--work" aria-label="Inspector and preview">
           <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop files or folders here to convert">
             <div class="dropzone__title">Drop files or folders here</div>
             <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
@@ -124,7 +124,7 @@
         </section>
 
         <!-- Right: target format and settings -->
-        <section class="pane" aria-label="Output format and conversion settings">
+        <section class="pane pane--settings" aria-label="Output format and conversion settings">
           <div class="pane__head">
             <span class="pane__title">Output format</span>
             <div class="topbar__spacer"></div>
