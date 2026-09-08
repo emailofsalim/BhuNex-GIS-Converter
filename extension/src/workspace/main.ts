@@ -33,6 +33,7 @@ import { attributesTab } from './panels/attributes';
 import { renderCompare, renderPreview, updateLinkButton } from './panels/canvas';
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
+import { geometryOpsTab } from './panels/geometry-ops';
 import { editTab, renderEdit, updateEditBar } from './panels/edit-tab';
 import { renderFormats } from './panels/formats';
 import { healthPanel } from './panels/health';
@@ -72,7 +73,8 @@ function render(): void {
   const dropzone = $('dropzone');
   dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
   $('inspectorTabs').classList.toggle('hidden', !selected);
-  const usesCanvas = state.inspectorTab === 'preview' || state.inspectorTab === 'edit';
+  const usesCanvas =
+    state.inspectorTab === 'preview' || state.inspectorTab === 'edit' || state.inspectorTab === 'geometry-ops';
   $('previewWrap').classList.toggle('hidden', !usesCanvas || !selected);
   $('editBar').classList.toggle('hidden', state.inspectorTab !== 'edit' || !selected);
   // Leaving the Edit tab turns editing off, so a stray Delete on another tab
@@ -112,6 +114,12 @@ function renderInspector(): void {
       break;
     case 'layers':
       body.append(...layersTab(item));
+      break;
+    case 'geometry-ops':
+      body.append(...geometryOpsTab(item));
+      // The canvas comes with it: a plan is checked by its SHAPE, not by the
+      // feature count, so the panel is only half a tool without the drawing.
+      renderPreview(item);
       break;
     case 'preview':
       renderPreview(item);

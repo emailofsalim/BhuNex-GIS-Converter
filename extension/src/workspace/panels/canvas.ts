@@ -6,6 +6,7 @@ import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
+import { geometryPlanOverlay } from './geometry-ops';
 import { ui } from '../ui-state';
 
 export function renderPreview(item: QueueItem): void {
@@ -41,6 +42,13 @@ export function renderPreview(item: QueueItem): void {
       label: `${dataset.raster.width} × ${dataset.raster.height}${dataset.raster.hasPixelData ? '' : ' — georeference only'}`,
     };
   }
+
+  // The geometry planner draws its uncommitted result on top, so the shape can
+  // be checked before it replaces anything. `undefined` clears a stale overlay
+  // when the tab changes — leaving the last plan drawn over a different layer
+  // would be worse than drawing nothing.
+  ui.previewCanvas.onOverlay =
+    store.get().inspectorTab === 'geometry-ops' ? geometryPlanOverlay(item) : undefined;
 
   $('previewOnlyBadge').classList.toggle('hidden', !data.truncated);
   ui.previewCanvas.setData(data);

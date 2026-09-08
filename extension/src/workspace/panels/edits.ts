@@ -6,15 +6,25 @@
  * of the operation to `core/edits.ts` at conversion time.
  */
 
-import { type AttributePlan } from '../../core/attributes';
 import { describeCommand, type EditCommand, isWholeLayer, replayEdits } from '../../core/edits';
 import { recordOperation } from '../../core/history';
-import { type LayerPlan } from '../../core/layers';
 import { type QueueItem, store } from '../../state/store';
 import { element, ghostButton } from '../dom';
 import { host } from '../host';
 import { datasetForTools, protectedFor, truncationOf } from './dataset';
 import { historyOf } from './history';
+
+/**
+ * What `queueEdit` needs from a plan: whether it refused, and why.
+ *
+ * Named structurally rather than as a union of the plan types, because that
+ * union grew by one every time an editing engine was added and nothing here
+ * ever looked at the other fields. A new engine should not have to edit this
+ * file to be queueable.
+ */
+export interface RefusablePlan {
+  refusal?: { what: string; why: string; action: string };
+}
 
 /**
  * Records an edit and shows its effect immediately.
@@ -31,7 +41,7 @@ import { historyOf } from './history';
  * stated on screen rather than hidden, because the alternative — showing only
  * what the preview can do — would under-report a correct edit.
  */
-export function queueEdit(item: QueueItem, command: EditCommand, plan: AttributePlan | LayerPlan, label: string): void {
+export function queueEdit(item: QueueItem, command: EditCommand, plan: RefusablePlan, label: string): void {
   if (plan.refusal) {
     store.log('warn', `${plan.refusal.what} ${plan.refusal.why} ${plan.refusal.action}`);
     host.render();

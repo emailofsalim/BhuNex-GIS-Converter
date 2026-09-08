@@ -977,6 +977,80 @@ describe('edits reach the exported file', () => {
     ).rejects.toThrow(/protected/);
   });
 
+  /**
+   * Geometry operations (§26.2) reaching the written file.
+   *
+   * These engines were complete and tested for a session before anything could
+   * invoke them, which made them worth exactly nothing to the person holding
+   * the tool. The tests below are the ones that would have caught that: they go
+   * through the same `settings.edits` path the workspace uses and read the
+   * BYTES, so "wired up" is a fact about the output rather than a claim about
+   * the UI.
+   */
+  it('writes a derived layer produced by a geometry operation', async () => {
+    const result = await convertWithEdits([
+      { kind: 'geometry', layer: LAYER, operation: 'envelope', options: { outputLayer: 'Extent' } },
+    ]);
+
+    // GeoJSON has one FeatureCollection per file, so a derived layer arrives as
+    // more features in the same file rather than as a second file. Either way
+    // the test is the same: the polygons the operation produced are IN THE
+    // BYTES, and the source points are still there beside them.
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    const types = written.features.map((feature: any) => feature.geometry.type);
+    expect(types).toEqual(['Point', 'Point', 'Polygon', 'Polygon']);
+    expect(written.features).toHaveLength(4);
+  });
+
+  it('replaces the source geometry when the operation names no output layer', async () => {
+    const result = await convertWithEdits([
+      { kind: 'geometry', layer: LAYER, operation: 'centroid', options: {} },
+    ]);
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    expect(written.features.map((feature: any) => feature.geometry.type)).toEqual(['Point', 'Point']);
+    // Attributes survive the operation, which is what makes a centroid layer useful.
+    expect(written.features[0].properties.plot).toBe('A-1');
+  });
+
+  it('refuses the conversion when a buffer is asked for on a geographic CRS', async () => {
+    // This file is longitude and latitude. A 10 "metre" setback here is ten
+    // DEGREES — about 1,100 km — and the output would be a plausible-looking
+    // polygon wrong by five orders of magnitude. Refusing is the feature.
+    try {
+      await convertWithEdits([
+        { kind: 'geometry', layer: LAYER, operation: 'buffer', options: { distance: 10, outputLayer: 'Setback' } },
+      ]);
+      expect.unreachable('a buffer on degrees should be refused');
+    } catch (error) {
+      const conversion = error as ConversionError;
+      expect(conversion.what).toContain('cannot run on a geographic CRS');
+      expect(conversion.why).toContain('1,100 km');
+    }
+  });
+
+  it('records the geometry operation among the applied edits', async () => {
+    const result = await convertWithEdits([
+      { kind: 'geometry', layer: LAYER, operation: 'envelope', options: { outputLayer: 'Extent' } },
+    ]);
+    const applied = result.warnings.filter((warning) => warning.code === 'edit-applied');
+    expect(applied[0].message).toContain('Envelope');
+    expect(applied[0].message).toContain('2 feature(s) → 2');
+  });
+
+  it('refuses a hull of two points rather than returning a line called a polygon', async () => {
+    // This file has exactly two features, so their hull encloses no area. An
+    // engine that returned the two-point "polygon" anyway would produce a
+    // shapefile every downstream tool rejects, and the refusal names why.
+    try {
+      await convertWithEdits([
+        { kind: 'geometry', layer: LAYER, operation: 'convex-hull', options: { outputLayer: 'Hull' } },
+      ]);
+      expect.unreachable('a hull of two points should be refused');
+    } catch (error) {
+      expect((error as ConversionError).what).toContain('no hull');
+    }
+  });
+
   it('reports fidelity for the edited data, not the file as it arrived', async () => {
     // The prediction runs after the replay, so a field added in the workspace is
     // counted among the attributes the target has to carry.

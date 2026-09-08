@@ -128,6 +128,21 @@ export function buildCommands(): Command[] {
   });
 
   commands.push({
+    id: 'geometry-tools',
+    title: 'Geometry tools',
+    group: 'Edit',
+    keywords: [
+      'buffer', 'setback', 'offset', 'union', 'merge', 'intersect', 'intersection', 'difference', 'erase',
+      'clip', 'dissolve', 'hull', 'convex', 'centroid', 'envelope', 'bounding', 'split', 'explode',
+      'multipart', 'geometry',
+    ],
+    detail: 'Buffer, offset, clip, erase, dissolve, hull, centroid, envelope, split and more — previewed on the canvas before anything is applied.',
+    enabled: Boolean(item?.dataset?.layers?.length),
+    disabledReason: item ? 'This file has no vector layers to operate on.' : 'Select a queued file first.',
+    run: () => host.showInspectorTab('geometry-ops'),
+  });
+
+  commands.push({
     id: 'toggle-edit-snap',
     title: state.settings.editSnapEnabled ? 'Turn editing snap off' : 'Turn editing snap on',
     group: 'Edit',
@@ -261,6 +276,7 @@ export function buildCommands(): Command[] {
     ['crs', 'CRS'],
     ['layers', 'Layers'],
     ['attributes', 'Attributes'],
+    ['geometry-ops', 'Geometry tools'],
     ['preview', 'Preview'],
     ['fidelity', 'What will be lost'],
     ['compare', 'Compare source and output'],

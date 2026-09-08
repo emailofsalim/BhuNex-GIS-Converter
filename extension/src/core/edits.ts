@@ -68,6 +68,14 @@ import {
   type SplitBy,
 } from './layers';
 import { applyEdit, type EditPlan } from './vertex-edit';
+import {
+  applyGeometryOperation,
+  describeGeometryPlan,
+  GEOMETRY_LABEL,
+  planGeometryOperation,
+  type GeometryOperation,
+  type GeometryOptions,
+} from './geometry-ops';
 
 export type EditCommand =
   // Attribute table (§25.5)
@@ -85,7 +93,25 @@ export type EditCommand =
   | { kind: 'layer-delete'; layer: string }
   | { kind: 'layer-style'; layer: string; style: StyleHint }
   // Vertex editor (§25.1) — the change list, for the reason given above.
-  | { kind: 'vertices'; plan: EditPlan };
+  | { kind: 'vertices'; plan: EditPlan }
+  // Geometry operations (§26.2). A description, not a result: the buffer the
+  // user previewed covered 5,000 parcels and the one that ships covers 40,000,
+  // and only re-planning gets that right. `crs` is deliberately NOT stored —
+  // the replay reads it from the dataset, so a command saved in a project file
+  // is re-gated against whatever CRS the file actually has when it reopens.
+  | { kind: 'geometry'; layer: string; operation: GeometryOperation; options: StoredGeometryOptions };
+
+/**
+ * The part of `GeometryOptions` a command may carry.
+ *
+ * `protectedLayers` and `crs` are omitted ON PURPOSE. Both are properties of the
+ * dataset and the session, not of the operation: a command that carried its own
+ * protected list could be replayed to edit a layer the user has since locked,
+ * and one that carried its own CRS would let a buffer planned on a projected
+ * copy run against a geographic source — the exact failure the CRS gate exists
+ * to stop. The replay supplies both from the dataset in front of it.
+ */
+export type StoredGeometryOptions = Omit<Partial<GeometryOptions>, 'protectedLayers' | 'crs'>;
 
 export interface ReplayOptions {
   /** Layers the user marked protected or locked. Every command refuses on them. */
@@ -227,6 +253,23 @@ function applyOne(dataset: CirDataset, command: EditCommand, protectedLayers: st
       };
     }
 
+    // ---------------------------------------------------------- geometry
+    case 'geometry': {
+      // Re-planned here, against the full dataset and its real CRS. The plan the
+      // user previewed is deliberately not reused: it was computed over at most
+      // 5,000 features, and a dissolve of 5,000 of 40,000 parcels is a different
+      // shape, not a smaller one.
+      const plan = planGeometryOperation(dataset, command.layer, command.operation, {
+        ...command.options,
+        protectedLayers,
+        crs: dataset.crs ?? null,
+      });
+      if (plan.refusal) return { dataset, description: '', refusal: plan.refusal };
+
+      const applied = applyGeometryOperation(dataset, plan);
+      return { dataset: applied.dataset, description: describeGeometryPlan(plan) };
+    }
+
     default:
       return { dataset, description: '' };
   }
@@ -274,6 +317,11 @@ export function describeCommand(command: EditCommand): string {
       return `Restyle "${command.layer}"`;
     case 'vertices':
       return `${command.plan.operation} ${command.plan.changes.length} vertex/vertices`;
+    case 'geometry': {
+      const target = command.options.outputLayer ? ` → "${command.options.outputLayer}"` : '';
+      const distance = command.options.distance === undefined ? '' : ` by ${command.options.distance}`;
+      return `${GEOMETRY_LABEL[command.operation]} "${command.layer}"${distance}${target}`;
+    }
     default:
       return 'Edit';
   }
@@ -293,6 +341,11 @@ export function isWholeLayer(command: EditCommand): boolean {
       return command.scope === undefined;
     case 'vertices':
       return false;
+    case 'geometry':
+      // A scoped operation names its features by index and touches only those.
+      // An unscoped one runs over the whole layer — which for a dissolve or a
+      // union is not "the same thing on more rows" but a different result.
+      return command.options.scope === undefined;
     default:
       return true;
   }

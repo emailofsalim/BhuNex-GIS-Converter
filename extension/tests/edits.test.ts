@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createDataset, createLayer, type CirDataset, type CirFeature, type FieldDef, type SourceInfo } from '@core/cir';
+import { createDataset, createLayer, type CirDataset, type CirFeature, type CrsRef, type FieldDef, type SourceInfo } from '@core/cir';
 import { describeCommand, isWholeLayer, replayEdits, type EditCommand } from '@core/edits';
 import { planMoveVertex } from '@core/vertex-edit';
 
@@ -270,5 +270,169 @@ describe('the source dataset is never mutated', () => {
     ]);
     expect(before.layers[0].name).toBe('Plots');
     expect(ownersOf(before)[0]).toBe('Rao');
+  });
+});
+
+// ===========================================================================
+// Geometry operations (§26.2) as commands
+// ===========================================================================
+
+/**
+ * The same 5,000-of-40,000 problem, and one more that is specific to geometry.
+ *
+ * An attribute edit planned on a preview is a smaller version of the right
+ * answer. A geometry operation planned on a preview is a DIFFERENT answer: the
+ * convex hull of the first five parcels is not a subset of the hull of two
+ * hundred, it is the wrong polygon. So these tests plan against a preview-sized
+ * dataset and assert the replay produced the whole-dataset result.
+ *
+ * The second property is the CRS gate. A command must NOT carry the CRS it was
+ * planned under, or a buffer configured while a projected copy was loaded would
+ * replay against a geographic source and silently mean 1,100 km.
+ */
+describe('geometry operations as commands', () => {
+  const PROJECTED: CrsRef = {
+    epsg: 32643,
+    name: 'WGS 84 / UTM zone 43N',
+    kind: 'projected',
+    datum: 'WGS 84',
+    projection: 'Transverse Mercator',
+    unit: 'metre',
+    axisOrder: 'xy',
+  };
+
+  const GEOGRAPHIC: CrsRef = { ...PROJECTED, epsg: 4326, name: 'WGS 84', kind: 'geographic', projection: 'none', unit: 'degree' };
+
+  /** `count` unit squares in a row, so the hull of the first N differs from the hull of all. */
+  function squares(count: number, crs: CrsRef | null): CirDataset {
+    const features: CirFeature[] = Array.from({ length: count }, (_, index) => ({
+      id: `S${index}`,
+      geometry: {
+        type: 'Polygon' as const,
+        coordinates: [
+          [
+            [index * 10, 0],
+            [index * 10 + 8, 0],
+            [index * 10 + 8, 8],
+            [index * 10, 8],
+            [index * 10, 0],
+          ],
+        ],
+        dimension: 2,
+      },
+      properties: { plot: `A-${index}`, block: index < 3 ? 'north' : 'south' },
+    }));
+    return createDataset({
+      kind: 'vector',
+      name: 'plots',
+      source: SOURCE,
+      crs,
+      layers: [createLayer('Plots', features, [{ name: 'plot', type: 'string' }, { name: 'block', type: 'string' }])],
+    });
+  }
+
+  function ringOf(dataset: CirDataset, layerName: string): number[][] {
+    const layer = dataset.layers.find((candidate) => candidate.name === layerName);
+    return (layer!.features[0].geometry!.coordinates as number[][][])[0];
+  }
+
+  it('re-plans against the whole dataset, not the preview it was configured on', () => {
+    const command: EditCommand = {
+      kind: 'geometry',
+      layer: 'Plots',
+      operation: 'convex-hull',
+      options: { outputLayer: 'Extent' },
+    };
+
+    // Configured while five squares were loaded...
+    const preview = replayEdits(squares(5, PROJECTED), [command]);
+    expect(ringOf(preview.dataset, 'Extent').some((position) => position[0] === 48)).toBe(true);
+
+    // ...replayed against all twenty. The hull now reaches x = 198, which is not
+    // a bigger version of the preview's answer — it is a different polygon.
+    const full = replayEdits(squares(20, PROJECTED), [command]);
+    const ring = ringOf(full.dataset, 'Extent');
+    expect(Math.max(...ring.map((position) => position[0]))).toBe(198);
+    expect(full.dataset.layers.find((layer) => layer.name === 'Plots')!.features).toHaveLength(20);
+  });
+
+  it('writes into a new layer and leaves the source alone', () => {
+    const result = replayEdits(squares(4, PROJECTED), [
+      { kind: 'geometry', layer: 'Plots', operation: 'envelope', options: { outputLayer: 'Envelopes' } },
+    ]);
+    expect(result.dataset.layers.map((layer) => layer.name)).toEqual(['Plots', 'Envelopes']);
+    expect(result.dataset.layers[0].features).toHaveLength(4);
+    expect(result.dataset.layers[1].features).toHaveLength(4);
+  });
+
+  it('replaces the source layer when no output layer is named', () => {
+    const result = replayEdits(squares(4, PROJECTED), [
+      { kind: 'geometry', layer: 'Plots', operation: 'centroid', options: {} },
+    ]);
+    expect(result.dataset.layers).toHaveLength(1);
+    expect(result.dataset.layers[0].features[0].geometry!.type).toBe('Point');
+  });
+
+  it('takes the CRS from the dataset it is replayed against, not from the command', () => {
+    // A buffer configured while a projected dataset was loaded. The command
+    // stores no CRS, deliberately — see `StoredGeometryOptions`.
+    const command: EditCommand = {
+      kind: 'geometry',
+      layer: 'Plots',
+      operation: 'buffer',
+      options: { distance: 10, outputLayer: 'Setback' },
+    };
+
+    expect(replayEdits(squares(3, PROJECTED), [command]).failure).toBeUndefined();
+
+    // The same command against degrees. 10 there is about 1,100 km.
+    const refused = replayEdits(squares(3, GEOGRAPHIC), [command]);
+    expect(refused.failure?.what).toContain('cannot run on a geographic CRS');
+    expect(refused.failure?.why).toContain('1,100 km');
+    expect(refused.applied).toBe(0);
+  });
+
+  it('refuses a distance operation when the dataset declares no CRS at all', () => {
+    const refused = replayEdits(squares(3, null), [
+      { kind: 'geometry', layer: 'Plots', operation: 'buffer', options: { distance: 10 } },
+    ]);
+    expect(refused.failure?.why).toContain('declares no CRS');
+  });
+
+  it('refuses on a protected layer, like every other command', () => {
+    const refused = replayEdits(
+      squares(3, PROJECTED),
+      [{ kind: 'geometry', layer: 'Plots', operation: 'centroid', options: {} }],
+      { protectedLayers: ['Plots'] }
+    );
+    expect(refused.failure?.what).toContain('protected');
+  });
+
+  it('dissolves by a field, merging only what shares its value', () => {
+    const result = replayEdits(squares(5, PROJECTED), [
+      { kind: 'geometry', layer: 'Plots', operation: 'dissolve', options: { field: 'block' } },
+    ]);
+    // Three "north" squares and two "south" ones: two features, not one and not five.
+    expect(result.dataset.layers[0].features).toHaveLength(2);
+  });
+
+  it('reports what it did in the replay log', () => {
+    const result = replayEdits(squares(6, PROJECTED), [
+      { kind: 'geometry', layer: 'Plots', operation: 'convex-hull', options: { outputLayer: 'Extent' } },
+    ]);
+    expect(result.log[0]).toContain('Convex hull');
+    expect(result.log[0]).toContain('6 feature(s) → 1');
+  });
+
+  it('describes itself in one line, naming the distance and the destination', () => {
+    expect(
+      describeCommand({ kind: 'geometry', layer: 'Plots', operation: 'buffer', options: { distance: 7.5, outputLayer: 'Setback' } })
+    ).toBe('Buffer "Plots" by 7.5 → "Setback"');
+    expect(describeCommand({ kind: 'geometry', layer: 'Plots', operation: 'centroid', options: {} })).toBe('Centroid "Plots"');
+  });
+
+  it('counts as a whole-layer edit only when it is not scoped to named features', () => {
+    expect(isWholeLayer({ kind: 'geometry', layer: 'L', operation: 'centroid', options: {} })).toBe(true);
+    expect(isWholeLayer({ kind: 'geometry', layer: 'L', operation: 'centroid', options: { scope: [0, 1] } })).toBe(false);
   });
 });
