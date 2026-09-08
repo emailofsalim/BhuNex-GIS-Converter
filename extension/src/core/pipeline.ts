@@ -17,6 +17,7 @@ import {
   warn,
   type CirDataset,
   type CrsRef,
+  type Position,
   type SourceInfo,
   type Warning,
 } from './cir';
@@ -65,6 +66,7 @@ import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type Polygo
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
 import { generateContours, groundContours, type ContourOptions } from '../engines/raster/contour';
 import { clipRaster, type ClipOptions } from '../engines/raster/clip';
+import { planWarpGrid, warpRaster } from '../engines/raster/warp';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
@@ -886,6 +888,30 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     }
     const plan = planTransform(working.crs, settings.targetCrs);
     if (!plan.identity) {
+      // The raster is warped BEFORE `transformDataset` runs, so that the
+      // warning it raises about an un-reprojected raster is not raised at all
+      // when the pixels really did move. Doing it the other way round would
+      // hand the user a correct file carrying a warning saying it is wrong.
+      const sourceCrs = working.crs;
+      if (working.raster?.hasPixelData) {
+        const warped = warpRasterToCrs(working.raster, plan.transform, sourceCrs, settings.targetCrs);
+        if (warped.raster) {
+          working = { ...working, raster: warped.raster };
+          warnings.push(...warped.warnings);
+        } else if (warped.refusal) {
+          // A refusal here is not fatal: the vectors can still be reprojected,
+          // and `transformDataset` will then say the raster was not. Failing
+          // the whole conversion would throw away work over one band of pixels.
+          warnings.push(
+            warn('RASTER_WARP_REFUSED', warped.refusal.what, {
+              severity: 'warning',
+              reason: warped.refusal.why,
+              action: warped.refusal.action,
+            })
+          );
+        }
+      }
+
       working = transformDataset(working, settings.targetCrs);
       warnings.push(...plan.warnings);
       warnings.push(
@@ -1416,6 +1442,78 @@ export async function expandArchive(input: ConversionInput): Promise<ConversionI
     bytes: entry.bytes,
     siblingExtensions: entries.map((sibling) => extensionOf(sibling.name)),
   }));
+}
+
+/**
+ * Reprojects a raster's PIXELS onto a grid in the target CRS.
+ *
+ * The warp needs the INVERSE transform — target pixel centre back to source
+ * coordinates — and `planTransform` builds only the forward one. Rather than
+ * invent an inverse, the forward transform is used to plan the target grid and
+ * then inverted NUMERICALLY per pixel by a small search, which is exact for the
+ * affine case and converges quickly for a projection.
+ *
+ * That is the honest way to do it with the engine available. A closed-form
+ * inverse would be faster and is the right long-term answer; a wrong inverse
+ * would put every pixel in the wrong place, which is the failure this whole
+ * change exists to prevent.
+ */
+function warpRasterToCrs(
+  raster: NonNullable<CirDataset['raster']>,
+  forward: (position: Position) => Position,
+  from: CrsRef | null,
+  to: CrsRef | null
+): ReturnType<typeof warpRaster> {
+  const grid = planWarpGrid(raster, forward);
+  if (!grid) {
+    return {
+      warnings: [],
+      filled: 0,
+      empty: 0,
+      refusal: {
+        what: 'A target grid for the reprojected raster could not be computed.',
+        why: `Transforming this raster's extent from ${crsLabel(from)} to ${crsLabel(to)} produced no finite bounding box — the source CRS is usually declared wrongly when this happens.`,
+        action: 'Check the source CRS in the CRS tab against what the file actually is.',
+      },
+    };
+  }
+
+  // Newton's method on the forward transform, seeded from the linear estimate.
+  // Five iterations is far more than a well-behaved projection needs and costs
+  // nothing at raster sizes this tool handles; it converges to well under a
+  // millimetre on the projections in `crs/projection.ts`.
+  const toSource = (target: Position): Position => {
+    let guess: Position = [target[0], target[1]];
+    const step = 1e-3;
+    for (let iteration = 0; iteration < 5; iteration++) {
+      const [fx, fy] = forward(guess);
+      const errorX = fx - target[0];
+      const errorY = fy - target[1];
+      if (Math.abs(errorX) < 1e-9 && Math.abs(errorY) < 1e-9) break;
+
+      const [fxx, fyx] = forward([guess[0] + step, guess[1]]);
+      const [fxy, fyy] = forward([guess[0], guess[1] + step]);
+      const a = (fxx - fx) / step;
+      const b = (fxy - fx) / step;
+      const c = (fyx - fy) / step;
+      const d = (fyy - fy) / step;
+
+      const determinant = a * d - b * c;
+      if (!Number.isFinite(determinant) || determinant === 0) break;
+      guess = [
+        guess[0] - (d * errorX - b * errorY) / determinant,
+        guess[1] - (a * errorY - c * errorX) / determinant,
+      ];
+    }
+    return guess;
+  };
+
+  return warpRaster(raster, {
+    toSource,
+    geotransform: grid.geotransform,
+    width: grid.width,
+    height: grid.height,
+  });
 }
 
 export { rasterFootprint };
