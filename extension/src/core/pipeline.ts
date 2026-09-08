@@ -39,6 +39,7 @@ import { buildOutputName, extensionOf, type NamingOptions } from './naming';
 import { SURVEY_DEFAULT_PRECISION, type PrecisionPolicy } from './precision';
 import { getFormat, type FormatDef } from './registry';
 import { readDwg } from '../adapters/native-messaging/client';
+import type { DatumShift } from '../crs/datum';
 import { crsFromEpsg } from '../crs/epsg';
 import { crsLabel, planTransform, resolveSourceCrs, sameCrs, suggestCrs, transformDataset } from '../crs/transform';
 import { readZip, writeZip, type ZipInput } from '../engines/archives/zip';
@@ -118,6 +119,11 @@ export interface ConversionSettings {
   /** Source CRS the user selected, used only when the file declares none. */
   sourceCrs?: CrsRef | null;
   targetCrs?: CrsRef | null;
+  /**
+   * Helmert parameters, when the conversion crosses a datum this tool bundles
+   * none for. Absent means the crossing is refused rather than approximated.
+   */
+  datumShift?: DatumShift | null;
   preserveZ: boolean;
   naming: NamingOptions;
   repair: RepairOptions;
@@ -1031,7 +1037,7 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
         action: 'Choose the source CRS in the CRS panel. The extension will not guess it — the same easting is valid in every UTM zone.',
       });
     }
-    const plan = planTransform(working.crs, targetCrs);
+    const plan = planTransform(working.crs, targetCrs, settings.datumShift);
     if (!plan.identity) {
       // The raster is warped BEFORE `transformDataset` runs, so that the
       // warning it raises about an un-reprojected raster is not raised at all
@@ -1057,7 +1063,7 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
         }
       }
 
-      working = transformDataset(working, targetCrs);
+      working = transformDataset(working, targetCrs, settings.datumShift);
       warnings.push(...plan.warnings);
       warnings.push(
         warn('CRS_TRANSFORMED', `Coordinates were transformed from ${crsLabel(plan.from)} to ${crsLabel(plan.to)}.`, {

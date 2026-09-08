@@ -9,6 +9,7 @@
 
 import type { DetectionResult } from '../core/detect';
 import type { CrsRef, Warning } from '../core/cir';
+import type { DatumShift } from '../crs/datum';
 import type { FidelityReport } from '../qa/fidelity';
 import type { NamingPattern } from '../core/naming';
 import type { ConversionPhase } from '../core/pipeline';
@@ -167,6 +168,15 @@ export interface AppSettings {
   /** Used when `basemapProviderId` is 'custom'. */
   basemapCustomUrl: string;
   basemapOpacity: number;
+
+  /**
+   * Helmert parameters for a datum this tool does not bundle any for.
+   *
+   * Null until the user enters a set. There is no default and no table of
+   * plausible values, deliberately — see `crs/datum.ts` for why a wrong set is
+   * worse than a refusal.
+   */
+  datumShift: DatumShift | null;
   decimationMode: 'none' | 'nth' | 'grid' | 'voxel';
   decimationFactor: number;
   decimationCell: number;
@@ -274,6 +284,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   basemapProviderId: 'osm',
   basemapCustomUrl: '',
   basemapOpacity: 0.7,
+  datumShift: null,
   decimationMode: 'none',
   decimationFactor: 10,
   decimationCell: 1,

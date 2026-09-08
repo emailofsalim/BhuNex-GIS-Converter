@@ -2,11 +2,12 @@
 
 import { CONFIRM_THRESHOLD } from '../../core/detect';
 import { FORMATS } from '../../core/registry';
+import { validateShift, type DatumShift } from '../../crs/datum';
 import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../../crs/epsg';
-import { crsLabel } from '../../crs/transform';
+import { crsLabel, isWgs84Family } from '../../crs/transform';
 import { type QueueItem, store } from '../../state/store';
 import { inspectItem } from '../conversion';
-import { element, formatBytes, keyValues, messageBlock } from '../dom';
+import { element, formatBytes, keyValues, messageBlock, numberField, textField } from '../dom';
 import { host } from '../host';
 import { assignSourceCrs } from './history';
 
@@ -187,8 +188,123 @@ export function crsTab(item: QueueItem): HTMLElement[] {
     })
   );
   nodes.push(targetSection);
+  nodes.push(datumSection(dataset));
 
   return nodes;
+}
+
+/**
+ * Where the user supplies Helmert parameters for a datum nothing is bundled for.
+ *
+ * Shown only when it is relevant — a datum outside the WGS 84 family — because
+ * seven empty numeric fields on every file would invite someone to fill them in
+ * for a conversion that does not need them, and a shift applied where none is
+ * required moves the data by the size of the translation.
+ */
+function datumSection(dataset: QueueItem['dataset']): HTMLElement {
+  const section = element('div', { class: 'section' });
+  const state = store.get();
+  const datum: string = dataset?.crs?.datum ?? '';
+  const needsShift = datum !== '' && !isWgs84Family(dataset?.crs ?? null);
+
+  if (!needsShift) {
+    section.append(element('h3', { class: 'section__title', text: 'Datum' }));
+    section.append(
+      element('p', {
+        class: 'small faint',
+        text: datum
+          ? `${datum} is in the WGS 84 family, so no datum shift is needed — reprojection between these is exact.`
+          : 'No datum is declared, so no shift can be assessed.',
+      })
+    );
+    return section;
+  }
+
+  section.append(element('h3', { class: 'section__title', text: `Datum shift for ${datum}` }));
+  section.append(
+    messageBlock(
+      'warn',
+      `${datum} is not in the WGS 84 family, so transforming out of it needs seven Helmert parameters.`,
+      'None are bundled for it, deliberately: published values for a datum differ by tens of metres between adjustments and regions, and a wrong set does not fail — it produces coordinates that look entirely reasonable and put a boundary somewhere it is not.',
+      'Enter the set your survey authority publishes. It is recorded with every conversion, along with the accuracy you state for it.'
+    )
+  );
+
+  const shift = state.settings.datumShift;
+  const field = (label: string, key: keyof DatumShift, value: number) =>
+    numberField(label, value, 0.000001, (next) => {
+      const base: DatumShift = shift ?? {
+        name: `${datum} → WGS 84`,
+        tx: 0,
+        ty: 0,
+        tz: 0,
+        rxArcsec: 0,
+        ryArcsec: 0,
+        rzArcsec: 0,
+        scalePpm: 0,
+        accuracyMetres: null,
+        source: '',
+        convention: 'position-vector',
+      };
+      void store.patchSettings({ datumShift: { ...base, [key]: next } as DatumShift });
+      host.render();
+    });
+
+  section.append(field('Translation X (metres)', 'tx', shift?.tx ?? 0));
+  section.append(field('Translation Y (metres)', 'ty', shift?.ty ?? 0));
+  section.append(field('Translation Z (metres)', 'tz', shift?.tz ?? 0));
+  // Units are in every label because these are the two errors that produce a
+  // confident wrong answer: arcseconds read as radians, ppm read as a ratio.
+  section.append(field('Rotation X (arcseconds)', 'rxArcsec', shift?.rxArcsec ?? 0));
+  section.append(field('Rotation Y (arcseconds)', 'ryArcsec', shift?.ryArcsec ?? 0));
+  section.append(field('Rotation Z (arcseconds)', 'rzArcsec', shift?.rzArcsec ?? 0));
+  section.append(field('Scale (parts per million)', 'scalePpm', shift?.scalePpm ?? 0));
+  section.append(
+    field('Stated accuracy (metres, 0 if unknown)', 'accuracyMetres', shift?.accuracyMetres ?? 0)
+  );
+
+  const conventionField = element('div', { class: 'field' });
+  conventionField.append(element('label', { class: 'field__label', text: 'Rotation convention' }));
+  const conventionSelect = element('select', { class: 'select' }) as HTMLSelectElement;
+  conventionSelect.append(element('option', { value: 'position-vector', text: 'Position vector (EPSG 1033 / 9606)' }));
+  conventionSelect.append(element('option', { value: 'coordinate-frame', text: 'Coordinate frame (EPSG 1032 / 9607)' }));
+  conventionSelect.value = shift?.convention ?? 'position-vector';
+  conventionSelect.addEventListener('change', () => {
+    if (!shift) return;
+    void store.patchSettings({ datumShift: { ...shift, convention: conventionSelect.value as DatumShift['convention'] } });
+    host.render();
+  });
+  conventionField.append(conventionSelect);
+  conventionField.append(
+    element('p', {
+      class: 'small faint',
+      text: 'The two differ only in the sign of the rotations, and getting it wrong displaces the result by a few metres — which reads as ordinary datum noise rather than as a mistake. Any published set states which it is.',
+    })
+  );
+  section.append(conventionField);
+
+  section.append(
+    textField('Source of these parameters', shift?.source ?? '', (value) => {
+      if (!shift) return;
+      void store.patchSettings({ datumShift: { ...shift, source: value } });
+    })
+  );
+
+  if (shift) {
+    const check = validateShift(shift);
+    if (!check.ok) section.append(messageBlock('error', 'These parameters cannot be used.', check.problem));
+    else if (!shift.source.trim()) {
+      section.append(
+        messageBlock(
+          'warn',
+          'Record where these parameters came from.',
+          'It is written into the conversion manifest, and it is what lets someone reading the delivery in two years judge whether the coordinates can be trusted.'
+        )
+      );
+    }
+  }
+
+  return section;
 }
 
 /** Plain-language names for `CrsOrigin`, which is otherwise a bare enum word. */

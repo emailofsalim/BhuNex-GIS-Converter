@@ -2,16 +2,19 @@
  * CRS transformation with the safety rules the product depends on.
  *
  * The engine will refuse a transform it cannot actually perform rather than
- * approximate one (rule R4). Concretely: datum shifts outside the WGS 84 family
- * are refused, because doing them properly needs Helmert parameters or grid
- * files that are not bundled, and silently treating Everest 1830 coordinates as
- * WGS 84 puts a boundary hundreds of metres from where it belongs.
+ * approximate one (rule R4). Concretely: a datum shift outside the WGS 84
+ * family is refused UNLESS the caller supplies the Helmert parameters for it,
+ * because silently treating Everest 1830 coordinates as WGS 84 puts a boundary
+ * hundreds of metres from where it belongs — and so does a plausible-looking
+ * set of parameters that happens to be the wrong one. See `datum.ts` for why
+ * no parameter table is bundled and the numbers come from the user instead.
  */
 
 import type { CirDataset, CirFeature, CrsRef, Position } from '../core/cir';
 import { warn, type Warning } from '../core/cir';
 import { ConversionError } from '../core/errors';
 import { mapPositions } from '../core/geometry';
+import { datumShiftWarning, shiftDatum, type DatumShift } from './datum';
 import { epsgEntry, WGS84_CRS } from './epsg';
 import {
   forwardLambertConformalConic,
@@ -93,6 +96,40 @@ function fromGeographic(point: GeographicPoint, crs: CrsRef): { x: number; y: nu
 }
 
 /**
+ * Moves a geographic coordinate between two datums.
+ *
+ * Height matters here even for a 2D dataset. A Helmert works on geocentric
+ * XYZ, so the height is part of the position going in, and using zero for a
+ * site at 400 m introduces a horizontal error of its own. Where the data
+ * carries a Z it is used; where it does not, zero is the only available
+ * assumption and the resulting horizontal error is under a millimetre for any
+ * terrestrial height — the sensitivity of latitude to height at these
+ * magnitudes is tiny, unlike the sensitivity to the parameters themselves.
+ */
+function shiftGeographic(
+  point: GeographicPoint,
+  height: number | undefined,
+  from: CrsRef,
+  to: CrsRef,
+  shift: DatumShift
+): GeographicPoint {
+  // The parameters are quoted towards WGS 84, so going the other way uses them
+  // in reverse. When neither side is WGS 84 the shift is applied in the
+  // direction its own definition names, which is what the user entered it for.
+  const direction = isWgs84Family(to) ? 'forward' : 'inverse';
+  const moved = shiftDatum(
+    point.lon,
+    point.lat,
+    typeof height === 'number' && Number.isFinite(height) ? height : 0,
+    ellipsoidOf(from),
+    ellipsoidOf(to),
+    shift,
+    direction
+  );
+  return { lon: moved.lon, lat: moved.lat };
+}
+
+/**
  * Why a projected CRS could not be used.
  *
  * A Lambert CRS with no parameters is a different failure from a projection
@@ -125,20 +162,22 @@ export interface TransformPlan {
  * the correct behaviour: an approximate answer in a cadastral or mine-survey
  * context is worse than no answer.
  */
-export function planTransform(from: CrsRef | null, to: CrsRef | null): TransformPlan {
+export function planTransform(from: CrsRef | null, to: CrsRef | null, shift?: DatumShift | null): TransformPlan {
   const warnings: Warning[] = [];
 
   if (!to || !from || sameCrs(from, to)) {
     return { transform: (position) => position, identity: true, warnings, from, to };
   }
 
-  if (!isWgs84Family(from) || !isWgs84Family(to)) {
+  const crossesDatum = !isWgs84Family(from) || !isWgs84Family(to);
+  if (crossesDatum && !shift) {
     const foreign = !isWgs84Family(from) ? from : to;
     throw new ConversionError({
       code: 'CRS_DATUM_SHIFT_UNAVAILABLE',
       what: `A datum shift involving ${crsLabel(foreign)} was requested.`,
-      why: `${foreign.datum} is not in the WGS 84 family, and no Helmert parameters or NTv2 grid for it are bundled. Treating the coordinates as WGS 84 would displace them by hundreds of metres.`,
-      action: 'Transform the datum in QGIS, GDAL or your survey software first, then convert here; or keep the source CRS and only change format.',
+      why: `${foreign.datum} is not in the WGS 84 family, and no Helmert parameters for it are bundled — deliberately, because a wrong set produces coordinates that look entirely reasonable and put a boundary somewhere it is not. Treating the coordinates as WGS 84 unchanged would displace them by hundreds of metres.`,
+      action:
+        'Enter the seven Helmert parameters your survey authority publishes for this datum in the CRS panel, and they will be used and recorded. Or transform the datum in QGIS or GDAL first; or keep the source CRS and only change format.',
     });
   }
 
@@ -155,9 +194,22 @@ export function planTransform(from: CrsRef | null, to: CrsRef | null): Transform
     );
   }
 
+  if (crossesDatum && shift) {
+    // Loud by construction: the one operation whose output looks exactly like
+    // its input while being wrong by however much the parameters are wrong by.
+    warnings.push(datumShiftWarning(shift, from.datum, to.datum));
+  }
+
   const transform: CoordinateTransform = (position) => {
     const geographic = toGeographic(position[0], position[1], from);
-    const projected = fromGeographic(geographic, to);
+    // The datum shift happens in geographic space, between unprojecting and
+    // reprojecting — which is the only place it can, since a Helmert operates
+    // on geocentric XYZ and both projections are defined on their own datum.
+    const shifted =
+      crossesDatum && shift
+        ? shiftGeographic(geographic, position[2], from, to, shift)
+        : geographic;
+    const projected = fromGeographic(shifted, to);
     const out: Position = [projected.x, projected.y];
     // Z passes through untouched: a horizontal transform says nothing about
     // heights, and inventing a vertical shift here would violate rule R4.
@@ -177,8 +229,12 @@ export function transformFeatures(features: CirFeature[], plan: TransformPlan): 
   }));
 }
 
-export function transformDataset(dataset: CirDataset, target: CrsRef | null): CirDataset {
-  const plan = planTransform(dataset.crs, target);
+export function transformDataset(dataset: CirDataset, target: CrsRef | null, shift?: DatumShift | null): CirDataset {
+  // The shift has to be threaded through here too. Building the plan without
+  // it would refuse the very datum crossing the caller just supplied
+  // parameters for — the pipeline would report a successful transform and the
+  // dataset would come back untouched.
+  const plan = planTransform(dataset.crs, target, shift);
   if (plan.identity) return dataset;
 
   const warnings = [...dataset.warnings, ...plan.warnings];
