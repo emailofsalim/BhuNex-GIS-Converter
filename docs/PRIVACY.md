@@ -80,8 +80,39 @@ that way.
 The complete source is public at
 <https://github.com/emailofsalim/Universal-Converter>. The build pipeline runs a
 check (`scripts/assert-offline.mjs`) that **fails the build** if any remote
-script, stylesheet, font or network call appears in the packaged extension. No
-release can be produced that contacts a server.
+script, stylesheet, font or network call appears in the packaged extension —
+including a map tile URL from a service that has not been reviewed.
+
+---
+
+## The one thing that can make a network request: the map basemap
+
+There is exactly one optional feature that contacts a server, and it is **off
+until you turn it on**.
+
+If you enable **Settings → Map basemap**, the workspace draws map tiles
+underneath your data so you can see where it sits. To do that it asks a tile
+server (OpenStreetMap by default) for the map squares covering the area on
+screen.
+
+| | |
+|---|---|
+| **What is sent** | Tile coordinates — a zoom level and a grid reference, the same request any web map makes. |
+| **What is never sent** | File bytes. File names. Attribute values. Coordinates from your data. Anything identifying you beyond the ordinary IP address of any web request. |
+| **What the server can infer** | Roughly which area of the world you are looking at. If the *location* of your survey is itself confidential, leave this off. |
+| **Effect on conversion** | None. No conversion, QA check, measurement or exported file is affected by the basemap in any way, and turning it on cannot change a single byte of any output. |
+| **With no network** | Nothing is drawn, and everything else behaves exactly as it always does. |
+
+Tiles are drawn from an `<img>` element, which is why the extension still
+declares **no host permissions**: it cannot read a response, only display an
+image. You can revoke the whole capability at any time by switching the setting
+off, and it stays off across restarts.
+
+Google, Bing and Esri imagery are **not** offered as built-in options, because
+their tile endpoints are not licensed for direct use outside their own APIs.
+Wiring one in would work and would put you in breach of terms you never agreed
+to. If you hold a key or a licence for one, there is a custom URL field where
+you can use it under the terms you actually hold.
 
 ---
 

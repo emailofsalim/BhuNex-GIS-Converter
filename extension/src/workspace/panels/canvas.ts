@@ -1,9 +1,12 @@
 /** Drawing: the single-dataset canvas, the dual canvas and the overlay legend. */
 
-import { crsLabel } from '../../crs/transform';
+import type { CrsRef } from '../../core/cir';
+import { WGS84_CRS } from '../../crs/epsg';
+import { crsLabel, planTransform } from '../../crs/transform';
 import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-overlay';
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
+import { Basemap, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
 import { geometryPlanOverlay } from './geometry-ops';
@@ -50,8 +53,94 @@ export function renderPreview(item: QueueItem): void {
   ui.previewCanvas.onOverlay =
     store.get().inspectorTab === 'geometry-ops' ? geometryPlanOverlay(item) : undefined;
 
+  attachBasemap(ui.previewCanvas, dataset);
+
   $('previewOnlyBadge').classList.toggle('hidden', !data.truncated);
   ui.previewCanvas.setData(data);
+}
+
+/**
+ * Puts map tiles under a canvas, or takes them away.
+ *
+ * Everything about whether this is possible is decided here rather than inside
+ * `Basemap`: the tile code knows how to place an image given two closures, and
+ * knows nothing about CRS, datums or datasets. If a transform to WGS 84 cannot
+ * be built — an undeclared CRS, a local site grid, a datum with no bundled
+ * shift — the closures are null and the basemap draws nothing at all.
+ *
+ * That refusal is the important part. Guessing a placement would put imagery
+ * under a survey at the wrong position, and imagery is persuasive: a parcel
+ * that does not line up with a convincing-looking basemap reads as a bad
+ * survey, not as a bad basemap.
+ */
+function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
+  const settings = store.get().settings;
+  if (!settings.basemapEnabled) {
+    ui.basemap = undefined;
+    canvas.onUnderlay = undefined;
+    return;
+  }
+
+  const provider = resolveProvider(settings);
+  const crs: CrsRef | null = dataset?.crs ?? null;
+
+  let toLonLat: ((x: number, y: number) => { lon: number; lat: number }) | null = null;
+  let fromLonLat: ((lon: number, lat: number) => { x: number; y: number }) | null = null;
+  try {
+    // Built once per render rather than per tile: planTransform validates the
+    // datum path and throws, and doing that inside the draw loop would turn a
+    // refusal into an exception sixty-four times a frame.
+    const out = planTransform(crs, WGS84_CRS);
+    const back = planTransform(WGS84_CRS, crs);
+    toLonLat = (x, y) => {
+      const [lon, lat] = out.transform([x, y]);
+      return { lon, lat };
+    };
+    fromLonLat = (lon, lat) => {
+      const [x, y] = back.transform([lon, lat]);
+      return { x, y };
+    };
+  } catch {
+    // A CRS the bundled engine cannot move. Nothing is drawn and nothing is
+    // thrown; the panel says why, next to the control that turned this on.
+    toLonLat = null;
+    fromLonLat = null;
+  }
+
+  if (!ui.basemap) {
+    ui.basemap = new Basemap({
+      provider,
+      toLonLat,
+      fromLonLat,
+      opacity: settings.basemapOpacity,
+      // A tile arriving is the only thing that can change the picture without
+      // the user doing anything, so it is the only thing that redraws.
+      onTileLoaded: () => ui.previewCanvas?.render(),
+    });
+  } else {
+    ui.basemap.update({ provider, toLonLat, fromLonLat, opacity: settings.basemapOpacity });
+  }
+
+  const basemap = ui.basemap;
+  canvas.onUnderlay = basemap.usable
+    ? (context, project, unproject, size) => basemap.draw(context, size.width, size.height, project, unproject)
+    : undefined;
+}
+
+/** The chosen provider, or a custom template the user entered. */
+function resolveProvider(settings: { basemapProviderId: string; basemapCustomUrl: string }): TileProvider {
+  if (settings.basemapProviderId === 'custom') {
+    return {
+      id: 'custom',
+      name: 'Custom tile service',
+      url: settings.basemapCustomUrl,
+      // The user is responsible for the terms of a service they supplied, and
+      // for the credit it requires; this says so rather than inventing one.
+      attribution: 'Custom tile service — check its attribution requirements',
+      maxZoom: 22,
+    };
+  }
+  return TILE_PROVIDERS.find((entry) => entry.id === settings.basemapProviderId) ?? TILE_PROVIDERS[0];
 }
 
 /** Builds the drawable form of a worker-summarised dataset. */

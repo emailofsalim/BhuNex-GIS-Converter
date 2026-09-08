@@ -16,6 +16,7 @@ import {
   PRIORITY_LABEL,
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
+import { TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
 import { boundaryRings, describeBoundary } from '../conversion';
@@ -117,7 +118,7 @@ export function renderSettingsPanel(): void {
     body.append(element('p', { class: 'small faint', text: 'Curved entities have no GIS equivalent. A smaller tolerance follows the true curve more closely at the cost of more vertices.' }));
   }
   if (target.id === 'kml' || target.id === 'kmz') {
-    body.append(element('p', { class: 'small faint', text: 'KML is written in WGS 84 longitude/latitude. Set the target CRS to EPSG:4326 so projected data is transformed rather than mis-placed.' }));
+    body.append(element('p', { class: 'small faint', text: 'KML is written in WGS 84 longitude/latitude, and the format has no field for anything else — so projected data is reprojected into it automatically and the transform is recorded. You only need to set a target CRS here if you want something other than EPSG:4326, which this format cannot store.' }));
 
     const templateField = element('div', { class: 'field' });
     templateField.append(element('label', { class: 'field__label', text: 'Balloon template' }));
@@ -524,11 +525,27 @@ export function openSettingsDialog(): void {
   body.append(
     messageBlock(
       'info',
-      'Local-only mode is on and cannot be switched off.',
-      'No file byte ever leaves this machine. There is no network code in any conversion path, no telemetry, and host_permissions is empty.',
+      'Conversion is local-only, and that cannot be switched off.',
+      'No file byte ever leaves this machine. There is no network code in any conversion, QA, measurement or export path, and no telemetry anywhere.',
       'The only local process ever contacted is the optional DWG helper you install yourself.'
     )
   );
+  // Said here rather than only next to the control, because this is the
+  // section someone reads when they want to know what this tool does with
+  // their data — and a claim of "nothing" with an exception elsewhere in the
+  // dialog is the kind of half-truth this project exists not to tell.
+  if (state.settings.basemapEnabled) {
+    body.append(
+      messageBlock(
+        'warn',
+        'The map basemap is on, so this workspace does make network requests.',
+        'It asks a tile server for the map squares covering the area on screen. Those requests carry tile coordinates only — no file bytes, no file names, no attribute values — but they do tell that server roughly where you are looking.',
+        'Turn it off below if the location of this survey is itself confidential.'
+      )
+    );
+  }
+
+  body.append(basemapSection(state));
 
   body.append(element('h3', { class: 'section__title', text: 'Native engine' }));
   body.append(
@@ -648,6 +665,91 @@ export function openHelpDialog(): void {
 
   dialog.append(head, body, foot);
   dialog.showModal();
+}
+
+/**
+ * The basemap controls.
+ *
+ * Off by default, and the control that turns it on states the cost in the same
+ * breath. This is the only feature in the tool that touches the network, so it
+ * is the only one where the user needs to make a judgement rather than just a
+ * preference — a survey whose LOCATION is confidential is a real situation, and
+ * only the person holding it can weigh that.
+ */
+function basemapSection(state: { settings: AppSettings }): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Map basemap (optional, off by default)' }));
+
+  section.append(
+    checkbox('Show map tiles behind the canvas', state.settings.basemapEnabled, (value) => {
+      void store.patchSettings({ basemapEnabled: value });
+      host.render();
+    })
+  );
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text: 'Tiles are drawn under your data for context only. Nothing about the basemap affects a conversion, a measurement or an exported file, and with it off — or with no network — the tool behaves exactly as it always has.',
+    })
+  );
+
+  if (!state.settings.basemapEnabled) return section;
+
+  const providers = element('select', { class: 'select' }) as HTMLSelectElement;
+  for (const provider of TILE_PROVIDERS) {
+    providers.append(element('option', { value: provider.id, text: provider.name }));
+  }
+  providers.append(element('option', { value: 'custom', text: 'Custom tile service…' }));
+  providers.value = state.settings.basemapProviderId;
+  providers.addEventListener('change', () => {
+    void store.patchSettings({ basemapProviderId: providers.value });
+    host.render();
+  });
+  section.append(providers);
+
+  if (state.settings.basemapProviderId === 'custom') {
+    section.append(
+      textField('Tile URL template', state.settings.basemapCustomUrl, (value) => {
+        void store.patchSettings({ basemapCustomUrl: value });
+        host.render();
+      })
+    );
+    const check = validateTemplate(state.settings.basemapCustomUrl);
+    if (!check.ok && state.settings.basemapCustomUrl.trim()) {
+      section.append(messageBlock('error', 'This template cannot be used.', check.problem));
+    }
+    section.append(
+      messageBlock(
+        'info',
+        'Use {z}, {x} and {y} — for example https://your-server/tiles/{z}/{x}/{y}.png',
+        // The honest reason Google is not in the list above. Wiring their tile
+        // endpoints in directly is what most examples do, and it would put the
+        // user in breach of terms they never agreed to.
+        'Google, Bing and Esri imagery are not offered as built-in choices because their tile endpoints are not licensed for direct use outside their own APIs. If you hold a key or a licence for one — a Google Maps Tile API endpoint, an organisational WMTS, a departmental imagery service — paste it here and it will be used under whatever terms you actually hold.',
+        'You are responsible for the terms and the attribution of a service you supply.'
+      )
+    );
+  }
+
+  section.append(
+    numberField('Opacity (0.1 – 1)', state.settings.basemapOpacity, 0.1, (value) => {
+      // Clamped rather than trusted: 0 renders an invisible basemap that still
+      // fetches every tile, which looks broken and costs the same.
+      void store.patchSettings({ basemapOpacity: Math.min(1, Math.max(0.1, value)) });
+      host.render();
+    })
+  );
+
+  section.append(
+    messageBlock(
+      'info',
+      'The basemap needs a coordinate system it can place.',
+      'Tiles are positioned by transforming each one into your data’s CRS, so a file with no declared CRS, a local site grid, or a datum with no bundled shift will show no basemap at all rather than one in the wrong place.',
+      'Imagery is persuasive: a parcel that does not line up with a convincing basemap reads as a bad survey rather than a bad basemap, so this refuses instead of guessing.'
+    )
+  );
+
+  return section;
 }
 
 /** Author, licence and where to send feedback. */

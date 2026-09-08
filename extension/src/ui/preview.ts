@@ -259,6 +259,22 @@ export class PreviewCanvas {
    */
   onOverlay?: (context: CanvasRenderingContext2D, project: (x: number, y: number) => { x: number; y: number }) => void;
 
+  /**
+   * Called before anything else is drawn, for a layer that goes underneath.
+   *
+   * The mirror of `onOverlay`, and it exists so the basemap can draw without
+   * PreviewCanvas knowing tiles exist. It is handed the same `project` the
+   * geometry is drawn through, plus `unproject` — a tile layer has to ask what
+   * ground the canvas is showing before it can know which tiles to fetch,
+   * which is the one thing an overlay never needs.
+   */
+  onUnderlay?: (
+    context: CanvasRenderingContext2D,
+    project: (x: number, y: number) => { x: number; y: number },
+    unproject: (screenX: number, screenY: number) => { x: number; y: number },
+    size: { width: number; height: number }
+  ) => void;
+
   /** World to screen, for an interaction layer drawing on top. */
   project(x: number, y: number): { x: number; y: number } {
     return this.toScreen(x, y);
@@ -292,6 +308,10 @@ export class PreviewCanvas {
     const height = rect.height;
     const context = this.context;
     context.clearRect(0, 0, width, height);
+
+    // Under everything, including the grid: the grid is a reading aid for the
+    // data and belongs on top of the ground, not beneath it.
+    this.onUnderlay?.(context, (x, y) => this.toScreen(x, y), (sx, sy) => this.toWorld(sx, sy), { width, height });
 
     if (this.showGrid) this.drawGrid(width, height);
 
