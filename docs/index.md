@@ -12,11 +12,20 @@ Nothing is uploaded.
 
 ## Install
 
-Download the latest package from
-**[Releases](https://github.com/emailofsalim/Universal-Converter/releases)**,
-extract it to a plain local folder such as `C:\Extensions\` — **not** OneDrive —
-then load it at `edge://extensions` or `chrome://extensions` with Developer mode
-on.
+**No Node, no npm, no build step.** The built extension is committed to the
+repository, so downloading it gives you something the browser can load directly.
+
+1. **[Download the repository](https://github.com/emailofsalim/Universal-Converter/archive/refs/heads/main.zip)**
+   (or a packaged archive from
+   **[Releases](https://github.com/emailofsalim/Universal-Converter/releases)**).
+2. Extract it to a plain local folder such as `C:\Extensions\` — **not**
+   OneDrive, Desktop, Documents or Downloads.
+3. `edge://extensions` or `chrome://extensions` → turn on **Developer mode**.
+4. **Load unpacked** → select the **`dist`** folder.
+
+Select `dist/`, not the folder above it and not `extension/` — those have no
+`manifest.json` and produce *"Manifest file is missing or unreadable"*. From a
+release archive there is no `dist/`: select the extracted folder itself.
 
 Store listings are in preparation; once published, installing will be one click
 with no folder to keep.
