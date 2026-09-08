@@ -95,7 +95,7 @@ The specification's §2 tree is illustrative. This project's equivalent:
 | 19 No silent precision loss | **Met** | `core/precision.ts` carries an explicit policy; a coordinate is never rounded without the policy saying so. |
 | 20 Explicit tolerances | **Met** | Every tolerance is a named parameter — `arcTolerance`, `snapTolerance`, `SLIVER_AREA`, buffer `tolerance`. |
 | 21 Validate inputs | **Met** | Every reader treats its input as untrusted; every editing engine refuses rather than guesses. |
-| 29/30 Numerical and edge-case tests | **Met** | 747 tests. The boolean suite is weighted deliberately towards degeneracies — shared edges, vertex-coincident intersections, point contact — because those are the normal case in cadastral work. |
+| 29/30 Numerical and edge-case tests | **Met** | 799 tests. The boolean suite is weighted deliberately towards degeneracies — shared edges, vertex-coincident intersections, point contact — because those are the normal case in cadastral work. |
 
 **The CRS gate** is this project's largest numerical-correctness measure and has
 no counterpart in the specification: a distance operation on a geographic CRS is
@@ -123,7 +123,7 @@ would be a plausible-looking polygon wrong by five orders of magnitude.
 | 24 Centralised storage | **Met** | `src/state/store.ts` is the only writer. Large structured data stays in memory by design: writing a 400 MB point cloud to IndexedDB to read it straight back would be slower and would persist survey data the user did not ask to keep. |
 | 25 Do not duplicate large datasets | **Met** | Worker payloads are transferred; the preview is capped at 5,000 features per layer. |
 | 34 No manual edits to build output | **Met** | `dist/` is gitignored and produced only by `npm run build`. |
-| 35 Do not break existing functionality | **Met** | Every change lands with tests, and CI runs all 747 on every push. |
+| 35 Do not break existing functionality | **Met** | Every change lands with tests, and CI runs all 799 on every push. |
 | 36 No rewrite without technical reason | **Met** | This document exists to comply with it. |
 | 37 Document architectural changes | **Met** | `docs/BUILD_STATE.md` records every session's decisions and the reasoning. |
 
