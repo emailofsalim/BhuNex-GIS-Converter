@@ -1,13 +1,17 @@
 name: Release
 
-# Builds the extension and attaches it to a GitHub Release, so it can be
-# installed WITHOUT Node, npm or a build step.
+# Builds the extension and attaches it to a GitHub Release.
 #
-# This workflow exists because of a real failure: the repository ships
-# TypeScript, `dist/` is gitignored, and someone who downloads the source ZIP
-# and points "Load unpacked" at the folder gets "Manifest file is missing or
-# unreadable". A downloadable, already-built package is the fix — telling
-# people to install a toolchain first is not.
+# This workflow exists because of a real failure: `dist/` was gitignored, so
+# someone who downloaded the source and pointed "Load unpacked" at it got
+# "Manifest file is missing or unreadable". A downloadable, already-built
+# package was the fix — telling people to install a toolchain first was not.
+#
+# `dist/` and the root manifest are COMMITTED now, so the repository download is
+# loadable on its own and this archive is no longer the only way in. It is still
+# worth publishing: it is a tenth of the size, it carries INSTALL-FIRST.txt at
+# its root, and a release is what a person links to when telling a colleague
+# where to get the tool.
 on:
   push:
     tags: ['v*']
@@ -95,9 +99,17 @@ jobs:
               the download. Move the folder to `C:\Extensions\` and load again.
             - **The wrong folder is selected.** Pick the folder that has
               `manifest.json` directly in it, not the folder containing it.
-            - **It is the source code, not this package.** The green **Code**
-              button gives you TypeScript that has to be built first. This ZIP
-              is that build.
+            - **You selected the `extension` folder.** That is TypeScript
+              source, not a built extension. From this ZIP there is no such
+              folder — select the folder you extracted.
+
+            ### You do not have to use this ZIP
+
+            The repository itself is loadable. **Code → Download ZIP**, extract
+            it outside OneDrive, and select the extracted folder: it carries a
+            `manifest.json` at its top level, and the built extension is
+            committed under `dist/`. Either works; this archive is simply the
+            smaller download.
 
             Everything runs locally. No file leaves the machine, and the
             packaged build is checked to contain no remote script, style or
