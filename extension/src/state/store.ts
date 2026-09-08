@@ -9,6 +9,7 @@
 
 import type { DetectionResult } from '../core/detect';
 import type { CrsRef, Warning } from '../core/cir';
+import type { DatumShift } from '../crs/datum';
 import type { FidelityReport } from '../qa/fidelity';
 import type { NamingPattern } from '../core/naming';
 import type { ConversionPhase } from '../core/pipeline';
@@ -153,6 +154,29 @@ export interface AppSettings {
   recentFormats: string[];
   parallelJobs: number;
   maxArchiveMb: number;
+
+  /**
+   * Map tiles behind the canvas.
+   *
+   * OFF by default and stored off, so a fresh install makes no network request
+   * of any kind (rules R8 and R15). Turning it on is a disclosure the user
+   * makes deliberately: tile requests tell the tile server which area is being
+   * looked at. No file bytes, names or attributes are ever sent.
+   */
+  basemapEnabled: boolean;
+  basemapProviderId: string;
+  /** Used when `basemapProviderId` is 'custom'. */
+  basemapCustomUrl: string;
+  basemapOpacity: number;
+
+  /**
+   * Helmert parameters for a datum this tool does not bundle any for.
+   *
+   * Null until the user enters a set. There is no default and no table of
+   * plausible values, deliberately — see `crs/datum.ts` for why a wrong set is
+   * worse than a refusal.
+   */
+  datumShift: DatumShift | null;
   decimationMode: 'none' | 'nth' | 'grid' | 'voxel';
   decimationFactor: number;
   decimationCell: number;
@@ -256,6 +280,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recentFormats: [],
   parallelJobs: Math.min(4, navigator.hardwareConcurrency || 4),
   maxArchiveMb: 1024,
+  basemapEnabled: false,
+  basemapProviderId: 'osm',
+  basemapCustomUrl: '',
+  basemapOpacity: 0.7,
+  datumShift: null,
   decimationMode: 'none',
   decimationFactor: 10,
   decimationCell: 1,

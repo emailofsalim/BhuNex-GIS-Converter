@@ -192,6 +192,7 @@ export function buildSettings(): Partial<ConversionSettings> {
     precision: settings.precisionMode === 'full' ? FULL_PRECISION : fixedPrecision(settings.precisionDecimals),
     sourceCrs,
     targetCrs,
+    datumShift: settings.datumShift,
     preserveZ: settings.preserveZ,
     naming: { pattern: settings.naming },
     layout: settings.outputLayout,

@@ -29,6 +29,7 @@
  * that the value is not local.
  */
 
+import type { Basemap } from '../ui/basemap';
 import type { CommandPalette } from '../ui/command-palette';
 import type { DualCanvas } from '../ui/dual-canvas';
 import type { EditCanvas, EditTarget } from '../ui/edit-canvas';
@@ -55,7 +56,20 @@ export interface UiState {
   editTarget: EditTarget | null;
   /** Ctrl/Cmd+K. Created once at boot. */
   palette: CommandPalette | null;
+  /**
+   * The tile layer under the preview canvas, when the user has turned it on.
+   *
+   * Held here rather than inside PreviewCanvas so the canvas stays unaware that
+   * tiles exist, and so switching provider clears one cache rather than leaving
+   * a stale one on whichever canvas happens to hold it.
+   */
+  basemap?: Basemap;
 }
+
+// The tile layer under the preview canvas, when the user has turned it on.
+// Held here rather than inside PreviewCanvas so the canvas stays unaware that
+// tiles exist, and so switching provider can clear one cache rather than hunt
+// for every canvas that might hold one.
 
 export const ui: UiState = {
   layerSearch: '',
@@ -67,4 +81,5 @@ export const ui: UiState = {
   editSelection: [],
   editTarget: null,
   palette: null,
+  basemap: undefined,
 };

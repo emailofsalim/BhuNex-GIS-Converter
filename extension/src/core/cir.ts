@@ -230,7 +230,19 @@ export interface Bounds3 extends Bounds {
   maxZ: number;
 }
 
-export type CrsOrigin = 'declared' | 'sidecar' | 'user' | 'inferred' | 'unknown';
+/**
+ * Where a dataset's CRS came from, in descending order of how much it should be
+ * trusted against a contradicting user selection.
+ *
+ * `assumed` is the one that needed adding. A GeoJSON with no `crs` member is
+ * WGS 84 *by the standard*, and the reader is right to fill it in — but a file
+ * exported from QGIS in UTM has no `crs` member either, because RFC 7946
+ * removed it. Recording that as `declared` made the assumption indistinguishable
+ * from a statement, and the CRS panel could not override it: the user picked
+ * their UTM zone, the tool kept 4326, and the export wrote eastings where a
+ * reader expected longitude.
+ */
+export type CrsOrigin = 'declared' | 'sidecar' | 'assumed' | 'user' | 'inferred' | 'unknown';
 
 export interface CrsRef {
   /** EPSG code where known, e.g. 32645. */
@@ -246,6 +258,39 @@ export interface CrsRef {
   wkt?: string;
   proj4?: string;
   utm?: { zone: number; south: boolean };
+  /**
+   * Lambert Conformal Conic parameters, in degrees and metres.
+   *
+   * A projected CRS is not identified by its name. Two files can both say
+   * "Lambert_Conformal_Conic" and sit two thousand kilometres apart, because
+   * everything that positions the grid lives in the parameters. Carrying only
+   * the projection's NAME is what made the bundled Lambert maths unreachable:
+   * `transform.ts` could see that a CRS was Lambert and still had nothing to
+   * project with, so every Lambert file was refused by a tool that contained a
+   * working implementation of exactly that projection.
+   *
+   * `lat1 === lat2` is the tangent (1SP) case; the engine collapses it.
+   */
+  lcc?: {
+    lat1: number;
+    lat2: number;
+    lat0: number;
+    lon0: number;
+    falseEasting: number;
+    falseNorthing: number;
+    /** Scale factor at the natural origin (EPSG 9801). 1 when absent. */
+    k0?: number;
+  };
+  /**
+   * The ellipsoid the projection is computed on.
+   *
+   * Structural rather than an imported `Ellipsoid`, to keep `core/` from
+   * depending on `crs/`; the shapes are identical and assign both ways. It has
+   * to travel with the CRS because a projection on Everest 1830 and the same
+   * projection on WGS 84 disagree by hundreds of metres — the Indian grids
+   * this tool exists for are exactly that case.
+   */
+  ellipsoid?: { name: string; a: number; invF: number };
 }
 
 export type VerticalKind = 'unknown' | 'ellipsoidal' | 'orthometric' | 'local';

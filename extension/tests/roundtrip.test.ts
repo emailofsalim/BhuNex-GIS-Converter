@@ -437,12 +437,36 @@ describe('DXF', () => {
     expect(Math.abs(parsed.features[0].geometry.coordinates[0])).toBeLessThan(180);
   });
 
-  it('blocks a KML export that would write projected metres as degrees', async () => {
+  it('reprojects a projected source to KML without being asked to', async () => {
+    // This used to refuse, telling the user to go and set a target CRS of
+    // EPSG:4326 — a value KML itself already determines. The registry knows
+    // that KML mandates WGS 84 and has no field for anything else, so the
+    // pipeline reads the requirement off the format rather than the user.
+    const result = await convert({
+      input: input('site.dxf', DXF_SOURCE),
+      targetFormatId: 'kml',
+      settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N },
+    });
+
+    const kmlText = decoder.decode(result.outputs[0].bytes);
+    // Jharkhand, as in the explicit-target case above: the numbers have to be
+    // degrees in the right place, not metres relabelled.
+    expect(kmlText).toMatch(/8[4-8]\.\d+,2[23]\.\d+/);
+
+    // And it says so, rather than reprojecting silently.
+    const transformed = result.warnings.find((entry) => entry.code === 'CRS_TRANSFORMED');
+    expect(transformed?.reason).toContain('no field in which to record a different one');
+  });
+
+  it('still refuses when the target CRS the user set cannot be stored', async () => {
+    // Asking for KML in UTM is not a gap to fill in — it is a contradiction,
+    // and writing eastings where a reader expects longitude would put the site
+    // in the Gulf of Guinea.
     await expect(
       convert({
         input: input('site.dxf', DXF_SOURCE),
         targetFormatId: 'kml',
-        settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N },
+        settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N, targetCrs: UTM45N },
       })
     ).rejects.toThrow(ConversionError);
   });
@@ -1368,5 +1392,176 @@ describe('edits reach the exported file', () => {
     const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
     expect(written.features[0].properties.surveyed_by).toBe('MSA');
     expect(result.qa).toBeDefined();
+  });
+});
+
+/**
+ * The whole pre-export loop, in one pass: look at it, change it, write it.
+ *
+ * The three capabilities are individually tested elsewhere — the canvas draws,
+ * the vertex editor plans, the writers write — and that is exactly the shape of
+ * failure this guards against. Each piece can be correct while the sequence a
+ * user actually performs is broken, and the way it breaks is silent: the canvas
+ * shows the edit, the conversion succeeds, and the file on disk has the
+ * original coordinate in it because the edit lived only in the preview.
+ */
+describe('see it, edit it, then export it', () => {
+  const LAYER = 'boundary.geojson';
+  const BOUNDARY = JSON.stringify({
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: { plot: 'A-1' },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[77.1, 23.2], [77.2, 23.2], [77.2, 23.3], [77.1, 23.3], [77.1, 23.2]]],
+        },
+      },
+    ],
+  });
+
+  it('carries a moved vertex all the way into the written file', async () => {
+    // The strongest form of "the user can edit before taking output": a
+    // coordinate the user dragged has to be the coordinate in the bytes.
+    const moved = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 1 },
+                  from: [77.2, 23.2],
+                  to: [77.25, 23.21],
+                  distance: 0.05,
+                  description: 'moved 1 vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+
+    const written = JSON.parse(decoder.decode(moved.outputs[0].bytes));
+    const ring = written.features[0].geometry.coordinates[0];
+    expect(ring[1][0]).toBeCloseTo(77.25, 9);
+    expect(ring[1][1]).toBeCloseTo(23.21, 9);
+    // Everything the user did NOT touch has to be untouched.
+    expect(ring[0]).toEqual([77.1, 23.2]);
+    expect(ring[3]).toEqual([77.1, 23.3]);
+  });
+
+  it('keeps the ring closed when the moved vertex is the shared endpoint', async () => {
+    // A polygon's first and last vertex are the same point. Moving one and not
+    // the other opens the ring and produces a file that parses and is not a
+    // polygon — the defect the topology checker would then report on the
+    // user's own edit.
+    const moved = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 0 },
+                  from: [77.1, 23.2],
+                  to: [77.05, 23.15],
+                  distance: 0.05,
+                  description: 'moved the closing vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+
+    const ring = JSON.parse(decoder.decode(moved.outputs[0].bytes)).features[0].geometry.coordinates[0];
+    expect(ring[0]).toEqual(ring[ring.length - 1]);
+    expect(ring[0][0]).toBeCloseTo(77.05, 9);
+  });
+
+  it('reports the edit in the warnings, so the log shows what was changed', async () => {
+    const moved = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 1 },
+                  from: [77.2, 23.2],
+                  to: [77.25, 23.21],
+                  distance: 0.05,
+                  description: 'moved 1 vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+    // An edit that reached the file and left no trace in the record would be
+    // an undocumented change to survey data.
+    expect(moved.warnings.some((entry) => /edit/i.test(entry.code) || /edit/i.test(entry.message))).toBe(true);
+  });
+
+  it('survives the edit through a format change as well as a straight copy', async () => {
+    // The edit is replayed against the full dataset at conversion time, so it
+    // has to hold when the target is not the source format.
+    const toKml = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'kml',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 1 },
+                  from: [77.2, 23.2],
+                  to: [77.25, 23.21],
+                  distance: 0.05,
+                  description: 'moved 1 vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+    expect(decoder.decode(toKml.outputs[0].bytes)).toContain('77.25');
   });
 });

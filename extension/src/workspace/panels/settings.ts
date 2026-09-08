@@ -16,6 +16,7 @@ import {
   PRIORITY_LABEL,
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
+import { TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
 import { boundaryRings, describeBoundary } from '../conversion';
@@ -117,7 +118,7 @@ export function renderSettingsPanel(): void {
     body.append(element('p', { class: 'small faint', text: 'Curved entities have no GIS equivalent. A smaller tolerance follows the true curve more closely at the cost of more vertices.' }));
   }
   if (target.id === 'kml' || target.id === 'kmz') {
-    body.append(element('p', { class: 'small faint', text: 'KML is written in WGS 84 longitude/latitude. Set the target CRS to EPSG:4326 so projected data is transformed rather than mis-placed.' }));
+    body.append(element('p', { class: 'small faint', text: 'KML is written in WGS 84 longitude/latitude, and the format has no field for anything else — so projected data is reprojected into it automatically and the transform is recorded. You only need to set a target CRS here if you want something other than EPSG:4326, which this format cannot store.' }));
 
     const templateField = element('div', { class: 'field' });
     templateField.append(element('label', { class: 'field__label', text: 'Balloon template' }));
@@ -524,11 +525,27 @@ export function openSettingsDialog(): void {
   body.append(
     messageBlock(
       'info',
-      'Local-only mode is on and cannot be switched off.',
-      'No file byte ever leaves this machine. There is no network code in any conversion path, no telemetry, and host_permissions is empty.',
+      'Conversion is local-only, and that cannot be switched off.',
+      'No file byte ever leaves this machine. There is no network code in any conversion, QA, measurement or export path, and no telemetry anywhere.',
       'The only local process ever contacted is the optional DWG helper you install yourself.'
     )
   );
+  // Said here rather than only next to the control, because this is the
+  // section someone reads when they want to know what this tool does with
+  // their data — and a claim of "nothing" with an exception elsewhere in the
+  // dialog is the kind of half-truth this project exists not to tell.
+  if (state.settings.basemapEnabled) {
+    body.append(
+      messageBlock(
+        'warn',
+        'The map basemap is on, so this workspace does make network requests.',
+        'It asks a tile server for the map squares covering the area on screen. Those requests carry tile coordinates only — no file bytes, no file names, no attribute values — but they do tell that server roughly where you are looking.',
+        'Turn it off below if the location of this survey is itself confidential.'
+      )
+    );
+  }
+
+  body.append(basemapSection(state));
 
   body.append(element('h3', { class: 'section__title', text: 'Native engine' }));
   body.append(
@@ -623,14 +640,23 @@ export function openHelpDialog(): void {
   const rules: [string, string][] = [
     ['Nothing is uploaded', 'Every conversion runs in this browser. The only exception is the optional DWG helper, which is a program on your own machine.'],
     ['A CRS is never invented', 'If a file declares no coordinate system and the numbers are ambiguous, the conversion stops and asks. The same easting is valid in all 60 UTM zones.'],
+    [
+      'A CRS the format requires is applied for you',
+      'KML, KMZ, GPX, OSM and GeoJSON text sequences store WGS 84 and have no field for anything else, so a projected survey is reprojected into it automatically and the transform is recorded. You are only asked for what the tool cannot work out.',
+    ],
+    [
+      'Your CRS selection outranks the file',
+      'A file can be wrong about itself — a stale .prj, or a projected GeoJSON that RFC 7946 leaves no way to label. Choosing a source CRS overrides what the file says, and the disagreement is reported rather than hidden.',
+    ],
     ['Nothing is dropped silently', 'Unsupported CAD entities, lost attributes, dropped Z values and segmentized curves are all counted by name and reported.'],
     ['Curves are segmentized with a stated tolerance', 'An arc has no GIS equivalent. It is densified against a sagitta tolerance you control, never replaced by its chord.'],
     ['LAZ is refused, not guessed', 'No LAZ decoder is bundled, so compressed point data is reported honestly instead of being read as raw LAS coordinates.'],
-    ['GeoTIFF is metadata-only', 'Georeference, dimensions and CRS are read; pixels are not decoded, so raster output from a GeoTIFF source is disabled.'],
     ['QA means re-import', 'A green PASS means the output was read back and compared with the source — not merely that bytes were written.'],
     ['Repair is off', 'Geometry repair edits your data, so it stays off until you turn it on, and reports every change it makes.'],
   ];
   for (const [title, text] of rules) body.append(messageBlock('info', title, text));
+
+  body.append(aboutSection());
 
   const foot = element('div', { class: 'dialog__foot' });
   const done = element('button', { class: 'btn btn--primary', text: 'Close' });
@@ -639,4 +665,137 @@ export function openHelpDialog(): void {
 
   dialog.append(head, body, foot);
   dialog.showModal();
+}
+
+/**
+ * The basemap controls.
+ *
+ * Off by default, and the control that turns it on states the cost in the same
+ * breath. This is the only feature in the tool that touches the network, so it
+ * is the only one where the user needs to make a judgement rather than just a
+ * preference — a survey whose LOCATION is confidential is a real situation, and
+ * only the person holding it can weigh that.
+ */
+function basemapSection(state: { settings: AppSettings }): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Map basemap (optional, off by default)' }));
+
+  section.append(
+    checkbox('Show map tiles behind the canvas', state.settings.basemapEnabled, (value) => {
+      void store.patchSettings({ basemapEnabled: value });
+      host.render();
+    })
+  );
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text: 'Tiles are drawn under your data for context only. Nothing about the basemap affects a conversion, a measurement or an exported file, and with it off — or with no network — the tool behaves exactly as it always has.',
+    })
+  );
+
+  if (!state.settings.basemapEnabled) return section;
+
+  const providers = element('select', { class: 'select' }) as HTMLSelectElement;
+  for (const provider of TILE_PROVIDERS) {
+    providers.append(element('option', { value: provider.id, text: provider.name }));
+  }
+  providers.append(element('option', { value: 'custom', text: 'Custom tile service…' }));
+  providers.value = state.settings.basemapProviderId;
+  providers.addEventListener('change', () => {
+    void store.patchSettings({ basemapProviderId: providers.value });
+    host.render();
+  });
+  section.append(providers);
+
+  if (state.settings.basemapProviderId === 'custom') {
+    section.append(
+      textField('Tile URL template', state.settings.basemapCustomUrl, (value) => {
+        void store.patchSettings({ basemapCustomUrl: value });
+        host.render();
+      })
+    );
+    const check = validateTemplate(state.settings.basemapCustomUrl);
+    if (!check.ok && state.settings.basemapCustomUrl.trim()) {
+      section.append(messageBlock('error', 'This template cannot be used.', check.problem));
+    }
+    section.append(
+      messageBlock(
+        'info',
+        'Use {z}, {x} and {y} — for example https://your-server/tiles/{z}/{x}/{y}.png',
+        // The honest reason Google is not in the list above. Wiring their tile
+        // endpoints in directly is what most examples do, and it would put the
+        // user in breach of terms they never agreed to.
+        'Google, Bing and Esri imagery are not offered as built-in choices because their tile endpoints are not licensed for direct use outside their own APIs. If you hold a key or a licence for one — a Google Maps Tile API endpoint, an organisational WMTS, a departmental imagery service — paste it here and it will be used under whatever terms you actually hold.',
+        'You are responsible for the terms and the attribution of a service you supply.'
+      )
+    );
+  }
+
+  section.append(
+    numberField('Opacity (0.1 – 1)', state.settings.basemapOpacity, 0.1, (value) => {
+      // Clamped rather than trusted: 0 renders an invisible basemap that still
+      // fetches every tile, which looks broken and costs the same.
+      void store.patchSettings({ basemapOpacity: Math.min(1, Math.max(0.1, value)) });
+      host.render();
+    })
+  );
+
+  section.append(
+    messageBlock(
+      'info',
+      'The basemap needs a coordinate system it can place.',
+      'Tiles are positioned by transforming each one into your data’s CRS, so a file with no declared CRS, a local site grid, or a datum with no bundled shift will show no basemap at all rather than one in the wrong place.',
+      'Imagery is persuasive: a parcel that does not line up with a convincing basemap reads as a bad survey rather than a bad basemap, so this refuses instead of guessing.'
+    )
+  );
+
+  return section;
+}
+
+/** Author, licence and where to send feedback. */
+export const AUTHOR = 'Md Salim Ansari';
+export const FEEDBACK_EMAIL = 'emailofsalim@gmail.com';
+
+/**
+ * The About block: who wrote this, under what licence, and how to reach them.
+ *
+ * The MIT licence requires the copyright notice to travel with the software.
+ * Shipping it only as a LICENSE file in the repository satisfies that for
+ * anyone who reads the repository and nobody who installs the extension, which
+ * is most people — so it is stated here, where the software actually is.
+ */
+function aboutSection(): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'About' }));
+
+  const version = chrome.runtime?.getManifest?.()?.version ?? '';
+  section.append(
+    keyValues([
+      ['Universal BhuNex Converter', version ? `Version ${version}` : '—'],
+      ['Author', AUTHOR],
+      ['Licence', `MIT — Copyright © ${AUTHOR}`],
+    ])
+  );
+
+  const feedback = element('p', { class: 'small', style: 'margin:10px 0 0' });
+  feedback.append(document.createTextNode('Found something wrong, or need a format that is not here? Write to '));
+  const link = element('a', {
+    href: `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent('Universal BhuNex Converter feedback')}`,
+    text: FEEDBACK_EMAIL,
+  }) as HTMLAnchorElement;
+  // A conversion that went wrong is worth more as a bug report than as a
+  // workaround, so the address is a live mailto rather than text to retype.
+  feedback.append(link);
+  feedback.append(document.createTextNode('.'));
+  section.append(feedback);
+
+  section.append(
+    element('p', {
+      class: 'small faint',
+      style: 'margin:8px 0 0',
+      text: 'The MIT licence permits commercial and private use, modification and redistribution, provided this notice travels with the software. It carries no warranty — check every delivery against your own survey record before it leaves your desk.',
+    })
+  );
+
+  return section;
 }

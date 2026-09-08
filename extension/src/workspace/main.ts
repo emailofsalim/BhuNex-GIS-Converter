@@ -377,6 +377,9 @@ function wire(): void {
 
   $('settingsBtn').addEventListener('click', openSettingsDialog);
   $('helpBtn').addEventListener('click', openHelpDialog);
+  // The credit in the top bar is also the way to the licence text and the
+  // feedback address, so it opens the same dialog rather than being inert.
+  $('aboutBtn').addEventListener('click', openHelpDialog);
   $('themeBtn').addEventListener('click', () => {
     const order: AppSettings['theme'][] = ['system', 'dark', 'light'];
     const next = order[(order.indexOf(store.get().settings.theme) + 1) % order.length];

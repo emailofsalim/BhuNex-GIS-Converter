@@ -583,14 +583,31 @@ function predictCrs(profile: DatasetProfile, format: FormatDef, options: Predict
     });
   }
 
-  if (mandated && sourceEpsg && sourceEpsg !== mandated) {
+  // A mandate the format cannot record is the one it enforces. Where the file
+  // has a field for a different CRS — GeoJSON's `crs` member — the mandate is a
+  // convention, the source CRS is kept, and saying "will be reprojected" here
+  // would describe a transform the pipeline does not perform.
+  const enforced = mandated !== undefined && !format.supportsCRS;
+
+  if (enforced && sourceEpsg && sourceEpsg !== mandated) {
     findings.push({
       axis: 'crs',
       grade: 'yellow',
       code: 'CRS_REPROJECTION_REQUIRED',
       statement: `${format.name} is defined in EPSG:${mandated}, so coordinates will be reprojected from EPSG:${sourceEpsg}.`,
-      remedy: 'Expected for this format. Reprojection is recorded in the conversion report.',
+      remedy: 'Expected for this format. Reprojection is automatic and is recorded in the conversion report.',
       detail: { from: sourceEpsg, to: mandated },
+    });
+  }
+
+  if (!enforced && mandated !== undefined && sourceEpsg && sourceEpsg !== mandated) {
+    findings.push({
+      axis: 'crs',
+      grade: 'yellow',
+      code: 'CRS_NON_STANDARD_KEPT',
+      statement: `${format.name} specifies EPSG:${mandated}, but it can record another CRS, so EPSG:${sourceEpsg} is kept rather than reprojected.`,
+      remedy: `The file states its own CRS and is readable, but some strict readers assume EPSG:${mandated}. Set the target CRS if you need the standard one.`,
+      detail: { from: sourceEpsg, standard: mandated },
     });
   }
 

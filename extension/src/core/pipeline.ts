@@ -39,7 +39,9 @@ import { buildOutputName, extensionOf, type NamingOptions } from './naming';
 import { SURVEY_DEFAULT_PRECISION, type PrecisionPolicy } from './precision';
 import { getFormat, type FormatDef } from './registry';
 import { readDwg } from '../adapters/native-messaging/client';
-import { crsLabel, planTransform, resolveSourceCrs, suggestCrs, transformDataset } from '../crs/transform';
+import type { DatumShift } from '../crs/datum';
+import { crsFromEpsg } from '../crs/epsg';
+import { crsLabel, planTransform, resolveSourceCrs, sameCrs, suggestCrs, transformDataset } from '../crs/transform';
 import { readZip, writeZip, type ZipInput } from '../engines/archives/zip';
 import { readDxf, type ReadDxfOptions } from '../engines/cad/dxf-read';
 import { DEFAULT_DXF_OPTIONS, writeDxf, type WriteDxfOptions } from '../engines/cad/dxf-write';
@@ -117,6 +119,11 @@ export interface ConversionSettings {
   /** Source CRS the user selected, used only when the file declares none. */
   sourceCrs?: CrsRef | null;
   targetCrs?: CrsRef | null;
+  /**
+   * Helmert parameters, when the conversion crosses a datum this tool bundles
+   * none for. Absent means the crossing is refused rather than approximated.
+   */
+  datumShift?: DatumShift | null;
   preserveZ: boolean;
   naming: NamingOptions;
   repair: RepairOptions;
@@ -711,6 +718,45 @@ async function writeTarget(dataset: CirDataset, targetId: string, baseName: stri
 // -------------------------------------------------------------------- convert
 
 /**
+ * The CRS a target format IMPOSES on whatever is written into it, or null.
+ *
+ * Two registry facts have to hold together, and the difference between them is
+ * the difference between a file that is unconventional and a file that is
+ * wrong:
+ *
+ *   `limits.mandatesCrsEpsg` — the specification names one CRS.
+ *   `supportsCRS === false`  — the file has nowhere to name a different one.
+ *
+ * GeoJSON satisfies the first and not the second: RFC 7946 says WGS 84, but the
+ * format can carry a `crs` member, so projected coordinates in a GeoJSON are
+ * non-standard and self-describing. Nothing is lost by leaving them alone, and
+ * reprojecting a survey the user did not ask to reproject would be worse.
+ *
+ * KML, KMZ, GPX, OSM and GeoJSON text sequences satisfy both. A projected
+ * easting written into one of those is read back as a longitude, which puts the
+ * geometry a continent away — and there is no field anywhere in the file that
+ * would let a reader notice. That is the case worth reprojecting for.
+ */
+/**
+ * Whether every coordinate could be a longitude/latitude pair.
+ *
+ * Empty or non-finite bounds answer `true`: a file with no coordinates cannot
+ * contradict anything, and treating "no evidence" as "evidence against" would
+ * make an empty layer look like a CRS error.
+ */
+function withinGeographicRange(bounds: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
+  const values = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY];
+  if (!values.every(Number.isFinite)) return true;
+  return Math.abs(bounds.minX) <= 180 && Math.abs(bounds.maxX) <= 180 && Math.abs(bounds.minY) <= 90 && Math.abs(bounds.maxY) <= 90;
+}
+
+function formatImposedCrs(format: FormatDef): CrsRef | null {
+  const epsg = format.limits?.mandatesCrsEpsg;
+  if (!epsg || format.supportsCRS) return null;
+  return crsFromEpsg(epsg);
+}
+
+/**
  * Prepares a source dataset for a target: resolves the CRS, applies decimation
  * and repair, and turns a coordinate table into geometry when the target needs
  * it. Extracted so QA's re-import path can reuse it exactly.
@@ -899,30 +945,99 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     warnings.push(...repaired.warnings);
   }
 
+  // The CRS the target format imposes, when it imposes one. This is what makes
+  // a UTM survey convert to KML without the user having to know that KML is
+  // defined in WGS 84: the format already knows, so the pipeline asks it.
+  const imposed = formatImposedCrs(target);
+
   // CRS gate. An unknown source CRS blocks a transform rather than guessing one
   // (rule R4); a conversion that keeps the source CRS is allowed to proceed.
-  if (settings.targetCrs) {
-    const suggestion = working.crs ? undefined : suggestCrs(featuresBounds(working.layers.flatMap((layer) => layer.features)));
-    const resolved = resolveSourceCrs({ declared: working.crs, user: settings.sourceCrs, suggestion });
-    if (resolved.blocked) {
-      throw new ConversionError({
-        code: 'CRS_REQUIRED',
-        what: `A transform to ${crsLabel(settings.targetCrs)} was requested, but the source CRS is unknown.`,
-        why: resolved.message ?? 'The file declares no CRS and the coordinates are ambiguous.',
-        action: 'Choose the source CRS in the CRS panel. The extension will not guess it — the same easting is valid in every UTM zone.',
-      });
-    }
-    if (resolved.origin === 'user' || resolved.origin === 'inferred') {
-      working = { ...working, crs: resolved.crs, crsOrigin: resolved.origin };
+  //
+  // The target is whichever the user set, and otherwise whatever the format
+  // requires. Until this read the format, converting a projected file to KML,
+  // KMZ or GPX failed with an instruction to go and set a target CRS that the
+  // format had already determined — an error message asking the user to supply
+  // an answer the tool was holding.
+  const requestedCrs = settings.targetCrs ?? null;
+  const targetCrs = requestedCrs ?? imposed;
+  const automatic = !requestedCrs && targetCrs !== null;
+
+  // The source CRS is resolved unconditionally, before anything asks whether a
+  // transform is needed. It used to be resolved only inside the branch below,
+  // so choosing a source CRS for a file that carried an assumed one did nothing
+  // at all unless a target transform happened to be configured as well.
+  const bounds = featuresBounds(working.layers.flatMap((layer) => layer.features));
+
+  // An assumption the coordinates themselves contradict is not an assumption
+  // worth keeping. RFC 7946 says an undeclared GeoJSON is WGS 84; a file whose
+  // eastings are 412,345 is telling a different story, and believing the
+  // standard over the data would write metres into a degrees field with nothing
+  // anywhere to warn a reader. A CRS the file actually STATED is left alone
+  // here — arguing with a statement is the user's call, not the pipeline's.
+  const assumedCrs = working.crsOrigin === 'assumed' ? working.crs : null;
+  const assumptionContradicted =
+    assumedCrs !== null && assumedCrs.kind === 'geographic' && !withinGeographicRange(bounds);
+
+  const suggestion = !working.crs || assumptionContradicted ? suggestCrs(bounds) : undefined;
+  const resolved = resolveSourceCrs({
+    declared: working.crs && working.crsOrigin !== 'assumed' ? working.crs : null,
+    assumed: assumptionContradicted ? null : assumedCrs,
+    user: settings.sourceCrs,
+    suggestion,
+  });
+
+  if (assumptionContradicted && resolved.origin !== 'user') {
+    warnings.push(
+      warn('CRS_ASSUMPTION_CONTRADICTED', `The file declares no CRS, so ${crsLabel(assumedCrs)} was assumed — but the coordinates are outside ±180° / ±90°.`, {
+        severity: 'warning',
+        reason: 'GeoJSON has no way to record a projected CRS since RFC 7946 removed the crs member, so a projected export from QGIS looks identical to a WGS 84 one until the numbers are read.',
+        action: 'Select the source CRS in the CRS panel. Everything that depends on the CRS — reprojection, area, length — is wrong until you do.',
+        detail: { minX: bounds.minX, minY: bounds.minY, maxX: bounds.maxX, maxY: bounds.maxY },
+      })
+    );
+  }
+
+  if (resolved.crs && !sameCrs(resolved.crs, working.crs)) {
+    const previous = working.crs;
+    working = { ...working, crs: resolved.crs, crsOrigin: resolved.origin };
+
+    if (resolved.overrode) {
+      // Disagreeing with a file that stated its own CRS is a legitimate thing
+      // to do — a wrong .prj is common — but it must never happen quietly.
       warnings.push(
-        warn('CRS_SELECTED', `Source CRS was not declared by the file; ${crsLabel(resolved.crs)} was used (${resolved.origin}).`, {
+        warn('CRS_OVERRIDDEN', `The file states ${crsLabel(resolved.overrode)}, but ${crsLabel(resolved.crs)} was used instead.`, {
+          severity: 'warning',
+          reason: 'You selected a source CRS in the CRS panel, and an explicit selection outranks the file.',
+          action: 'Clear the source CRS selection to use what the file states. If the file is right, everything downstream of here is displaced.',
+          detail: { stated: resolved.overrode.epsg, used: resolved.crs.epsg },
+        })
+      );
+    } else {
+      warnings.push(
+        warn('CRS_SELECTED', `Source CRS was ${previous ? 'assumed by the format' : 'not declared by the file'}; ${crsLabel(resolved.crs)} was used (${resolved.origin}).`, {
           severity: 'info',
-          reason: resolved.origin === 'user' ? 'You selected this CRS in the conversion settings.' : 'It was inferred from the coordinate ranges.',
+          reason:
+            resolved.origin === 'user'
+              ? 'You selected this CRS in the conversion settings.'
+              : 'It was inferred from the coordinate ranges.',
           action: 'This selection is recorded in the conversion manifest.',
         })
       );
     }
-    const plan = planTransform(working.crs, settings.targetCrs);
+  }
+
+  if (targetCrs) {
+    if (resolved.blocked) {
+      throw new ConversionError({
+        code: 'CRS_REQUIRED',
+        what: automatic
+          ? `${target.name} stores coordinates in ${crsLabel(targetCrs)}, but the source CRS is unknown, so they cannot be converted into it.`
+          : `A transform to ${crsLabel(targetCrs)} was requested, but the source CRS is unknown.`,
+        why: resolved.message ?? 'The file declares no CRS and the coordinates are ambiguous.',
+        action: 'Choose the source CRS in the CRS panel. The extension will not guess it — the same easting is valid in every UTM zone.',
+      });
+    }
+    const plan = planTransform(working.crs, targetCrs, settings.datumShift);
     if (!plan.identity) {
       // The raster is warped BEFORE `transformDataset` runs, so that the
       // warning it raises about an un-reprojected raster is not raised at all
@@ -930,7 +1045,7 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
       // hand the user a correct file carrying a warning saying it is wrong.
       const sourceCrs = working.crs;
       if (working.raster?.hasPixelData) {
-        const warped = warpRasterToCrs(working.raster, plan.transform, sourceCrs, settings.targetCrs);
+        const warped = warpRasterToCrs(working.raster, plan.transform, sourceCrs, targetCrs);
         if (warped.raster) {
           working = { ...working, raster: warped.raster };
           warnings.push(...warped.warnings);
@@ -948,27 +1063,37 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
         }
       }
 
-      working = transformDataset(working, settings.targetCrs);
+      working = transformDataset(working, targetCrs, settings.datumShift);
       warnings.push(...plan.warnings);
       warnings.push(
         warn('CRS_TRANSFORMED', `Coordinates were transformed from ${crsLabel(plan.from)} to ${crsLabel(plan.to)}.`, {
           severity: 'info',
-          reason: 'A target CRS was set in the conversion settings.',
+          reason: automatic
+            ? `${target.name} stores its coordinates in ${crsLabel(targetCrs)} and has no field in which to record a different one, so the transform is part of writing the format at all.`
+            : 'A target CRS was set in the conversion settings.',
+          action: automatic
+            ? 'Set a target CRS explicitly in the CRS panel if you need a different one — though this format will not be able to record it.'
+            : undefined,
         })
       );
     }
-  } else if (settings.sourceCrs && !working.crs) {
-    working = { ...working, crs: settings.sourceCrs, crsOrigin: 'user' };
   }
 
-  // KML and GPX are WGS 84 by definition; converting to them without a target
-  // CRS would write projected metres into a lat/lon container.
-  if ((target.id === 'kml' || target.id === 'kmz' || target.id === 'gpx') && working.crs && working.crs.kind !== 'geographic') {
+  // Last line of defence, after every transform has had its turn. Reaching here
+  // still holding the wrong CRS means either the user set a target the format
+  // cannot store, or the source CRS was never established — and in both cases
+  // the coordinates would be read back as degrees and land in the wrong
+  // hemisphere. Refusing beats writing a file that opens and draws.
+  if (imposed && working.crs && !sameCrs(working.crs, imposed)) {
     throw new ConversionError({
-      code: 'TARGET_REQUIRES_WGS84',
-      what: `${target.name} stores WGS 84 longitude and latitude, but the data is in ${crsLabel(working.crs)}.`,
-      why: 'Writing projected coordinates into a geographic container would place the geometry in the wrong part of the world.',
-      action: 'Set the target CRS to WGS 84 (EPSG:4326) in the CRS panel, then convert again.',
+      code: 'TARGET_CRS_NOT_STORABLE',
+      what: `${target.name} stores coordinates in ${crsLabel(imposed)}, but the data is in ${crsLabel(working.crs)}.`,
+      why: requestedCrs
+        ? `${crsLabel(requestedCrs)} was set as the target CRS, and ${target.name} has no field in which to record it. A reader would take these numbers for longitude and latitude.`
+        : 'The coordinates could not be transformed, so writing them would place the geometry in the wrong part of the world.',
+      action: requestedCrs
+        ? `Clear the target CRS to let ${target.name} use ${crsLabel(imposed)}, or choose a format that carries its own CRS, such as GeoPackage or Shapefile.`
+        : 'Check the source CRS in the CRS panel, then convert again.',
     });
   }
 

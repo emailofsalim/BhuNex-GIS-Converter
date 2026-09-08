@@ -2,23 +2,31 @@
  * CRS transformation with the safety rules the product depends on.
  *
  * The engine will refuse a transform it cannot actually perform rather than
- * approximate one (rule R4). Concretely: datum shifts outside the WGS 84 family
- * are refused, because doing them properly needs Helmert parameters or grid
- * files that are not bundled, and silently treating Everest 1830 coordinates as
- * WGS 84 puts a boundary hundreds of metres from where it belongs.
+ * approximate one (rule R4). Concretely: a datum shift outside the WGS 84
+ * family is refused UNLESS the caller supplies the Helmert parameters for it,
+ * because silently treating Everest 1830 coordinates as WGS 84 puts a boundary
+ * hundreds of metres from where it belongs — and so does a plausible-looking
+ * set of parameters that happens to be the wrong one. See `datum.ts` for why
+ * no parameter table is bundled and the numbers come from the user instead.
  */
 
 import type { CirDataset, CirFeature, CrsRef, Position } from '../core/cir';
 import { warn, type Warning } from '../core/cir';
 import { ConversionError } from '../core/errors';
 import { mapPositions } from '../core/geometry';
+import { datumShiftWarning, shiftDatum, type DatumShift } from './datum';
 import { epsgEntry, WGS84_CRS } from './epsg';
 import {
+  forwardLambertConformalConic,
   geographicToUtm,
   geographicToWebMercator,
+  inverseLambertConformalConic,
   utmToGeographic,
   webMercatorToGeographic,
+  WGS84,
+  type Ellipsoid,
   type GeographicPoint,
+  type LambertConformalConicParams,
 } from './projection';
 
 /** Datums the bundled engine can move between without a shift (they coincide within ~1 m). */
@@ -42,15 +50,33 @@ export function sameCrs(a: CrsRef | null, b: CrsRef | null): boolean {
   return a.name === b.name && a.datum === b.datum && a.projection === b.projection;
 }
 
+/**
+ * The ellipsoid a CRS is computed on.
+ *
+ * Falls back to WGS 84 only when the CRS carries none. That fallback is safe
+ * here and nowhere else: `planTransform` has already refused anything outside
+ * the WGS 84 datum family by the time a projection function runs, so a CRS
+ * reaching this point without a stated ellipsoid is one whose datum is already
+ * known to coincide with WGS 84.
+ */
+function ellipsoidOf(crs: CrsRef): Ellipsoid {
+  return crs.ellipsoid ?? WGS84;
+}
+
+function lccParams(crs: CrsRef, lcc: NonNullable<CrsRef['lcc']>): LambertConformalConicParams {
+  return { ...lcc, ellipsoid: ellipsoidOf(crs) };
+}
+
 /** Converts a coordinate in `crs` to WGS 84 longitude/latitude. */
 function toGeographic(x: number, y: number, crs: CrsRef): GeographicPoint {
   if (crs.kind === 'geographic') return { lon: x, lat: y };
   if (crs.epsg === 3857) return webMercatorToGeographic({ x, y });
-  if (crs.utm) return utmToGeographic({ x, y }, crs.utm.zone, crs.utm.south);
+  if (crs.utm) return utmToGeographic({ x, y }, crs.utm.zone, crs.utm.south, ellipsoidOf(crs));
+  if (crs.lcc) return inverseLambertConformalConic({ x, y }, lccParams(crs, crs.lcc));
   throw new ConversionError({
     code: 'CRS_UNSUPPORTED_SOURCE',
     what: `Coordinates cannot be transformed out of ${crsLabel(crs)}.`,
-    why: 'The bundled projection engine supports geographic CRS, Web Mercator and Transverse Mercator / UTM. This CRS uses a projection that is not implemented.',
+    why: unsupportedReason(crs),
     action: 'Reproject the file in QGIS or GDAL first, or choose a target that keeps the source CRS unchanged.',
   });
 }
@@ -59,13 +85,63 @@ function toGeographic(x: number, y: number, crs: CrsRef): GeographicPoint {
 function fromGeographic(point: GeographicPoint, crs: CrsRef): { x: number; y: number } {
   if (crs.kind === 'geographic') return { x: point.lon, y: point.lat };
   if (crs.epsg === 3857) return geographicToWebMercator(point);
-  if (crs.utm) return geographicToUtm(point, crs.utm.zone, crs.utm.south);
+  if (crs.utm) return geographicToUtm(point, crs.utm.zone, crs.utm.south, ellipsoidOf(crs));
+  if (crs.lcc) return forwardLambertConformalConic(point, lccParams(crs, crs.lcc));
   throw new ConversionError({
     code: 'CRS_UNSUPPORTED_TARGET',
     what: `Coordinates cannot be transformed into ${crsLabel(crs)}.`,
-    why: 'The bundled projection engine supports geographic CRS, Web Mercator and Transverse Mercator / UTM as targets.',
+    why: unsupportedReason(crs),
     action: 'Pick a UTM zone, WGS 84 or Web Mercator, or export in the source CRS and reproject downstream.',
   });
+}
+
+/**
+ * Moves a geographic coordinate between two datums.
+ *
+ * Height matters here even for a 2D dataset. A Helmert works on geocentric
+ * XYZ, so the height is part of the position going in, and using zero for a
+ * site at 400 m introduces a horizontal error of its own. Where the data
+ * carries a Z it is used; where it does not, zero is the only available
+ * assumption and the resulting horizontal error is under a millimetre for any
+ * terrestrial height — the sensitivity of latitude to height at these
+ * magnitudes is tiny, unlike the sensitivity to the parameters themselves.
+ */
+function shiftGeographic(
+  point: GeographicPoint,
+  height: number | undefined,
+  from: CrsRef,
+  to: CrsRef,
+  shift: DatumShift
+): GeographicPoint {
+  // The parameters are quoted towards WGS 84, so going the other way uses them
+  // in reverse. When neither side is WGS 84 the shift is applied in the
+  // direction its own definition names, which is what the user entered it for.
+  const direction = isWgs84Family(to) ? 'forward' : 'inverse';
+  const moved = shiftDatum(
+    point.lon,
+    point.lat,
+    typeof height === 'number' && Number.isFinite(height) ? height : 0,
+    ellipsoidOf(from),
+    ellipsoidOf(to),
+    shift,
+    direction
+  );
+  return { lon: moved.lon, lat: moved.lat };
+}
+
+/**
+ * Why a projected CRS could not be used.
+ *
+ * A Lambert CRS with no parameters is a different failure from a projection
+ * that is not implemented at all, and saying "not implemented" for it would
+ * send the user looking for a missing feature instead of a missing .prj. The
+ * engine is there; what is absent is the numbers that position the grid.
+ */
+function unsupportedReason(crs: CrsRef): string {
+  if (/lambert/i.test(crs.projection)) {
+    return 'This CRS names Lambert Conformal Conic but carries no standard parallels, origin or false easting/northing. The projection is implemented; without those parameters there is nothing to position the grid with, and every one of them shifts the result by kilometres.';
+  }
+  return 'The bundled projection engine supports geographic CRS, Web Mercator, Transverse Mercator / UTM and Lambert Conformal Conic. This CRS uses a projection that is not implemented.';
 }
 
 export type CoordinateTransform = (position: Position) => Position;
@@ -86,20 +162,22 @@ export interface TransformPlan {
  * the correct behaviour: an approximate answer in a cadastral or mine-survey
  * context is worse than no answer.
  */
-export function planTransform(from: CrsRef | null, to: CrsRef | null): TransformPlan {
+export function planTransform(from: CrsRef | null, to: CrsRef | null, shift?: DatumShift | null): TransformPlan {
   const warnings: Warning[] = [];
 
   if (!to || !from || sameCrs(from, to)) {
     return { transform: (position) => position, identity: true, warnings, from, to };
   }
 
-  if (!isWgs84Family(from) || !isWgs84Family(to)) {
+  const crossesDatum = !isWgs84Family(from) || !isWgs84Family(to);
+  if (crossesDatum && !shift) {
     const foreign = !isWgs84Family(from) ? from : to;
     throw new ConversionError({
       code: 'CRS_DATUM_SHIFT_UNAVAILABLE',
       what: `A datum shift involving ${crsLabel(foreign)} was requested.`,
-      why: `${foreign.datum} is not in the WGS 84 family, and no Helmert parameters or NTv2 grid for it are bundled. Treating the coordinates as WGS 84 would displace them by hundreds of metres.`,
-      action: 'Transform the datum in QGIS, GDAL or your survey software first, then convert here; or keep the source CRS and only change format.',
+      why: `${foreign.datum} is not in the WGS 84 family, and no Helmert parameters for it are bundled — deliberately, because a wrong set produces coordinates that look entirely reasonable and put a boundary somewhere it is not. Treating the coordinates as WGS 84 unchanged would displace them by hundreds of metres.`,
+      action:
+        'Enter the seven Helmert parameters your survey authority publishes for this datum in the CRS panel, and they will be used and recorded. Or transform the datum in QGIS or GDAL first; or keep the source CRS and only change format.',
     });
   }
 
@@ -116,9 +194,22 @@ export function planTransform(from: CrsRef | null, to: CrsRef | null): Transform
     );
   }
 
+  if (crossesDatum && shift) {
+    // Loud by construction: the one operation whose output looks exactly like
+    // its input while being wrong by however much the parameters are wrong by.
+    warnings.push(datumShiftWarning(shift, from.datum, to.datum));
+  }
+
   const transform: CoordinateTransform = (position) => {
     const geographic = toGeographic(position[0], position[1], from);
-    const projected = fromGeographic(geographic, to);
+    // The datum shift happens in geographic space, between unprojecting and
+    // reprojecting — which is the only place it can, since a Helmert operates
+    // on geocentric XYZ and both projections are defined on their own datum.
+    const shifted =
+      crossesDatum && shift
+        ? shiftGeographic(geographic, position[2], from, to, shift)
+        : geographic;
+    const projected = fromGeographic(shifted, to);
     const out: Position = [projected.x, projected.y];
     // Z passes through untouched: a horizontal transform says nothing about
     // heights, and inventing a vertical shift here would violate rule R4.
@@ -138,8 +229,12 @@ export function transformFeatures(features: CirFeature[], plan: TransformPlan): 
   }));
 }
 
-export function transformDataset(dataset: CirDataset, target: CrsRef | null): CirDataset {
-  const plan = planTransform(dataset.crs, target);
+export function transformDataset(dataset: CirDataset, target: CrsRef | null, shift?: DatumShift | null): CirDataset {
+  // The shift has to be threaded through here too. Building the plan without
+  // it would refuse the very datum crossing the caller just supplied
+  // parameters for — the pipeline would report a successful transform and the
+  // dataset would come back untouched.
+  const plan = planTransform(dataset.crs, target, shift);
   if (plan.identity) return dataset;
 
   const warnings = [...dataset.warnings, ...plan.warnings];
@@ -245,19 +340,38 @@ export function suggestCrs(bounds: { minX: number; minY: number; maxX: number; m
 }
 
 /**
- * Applies the CRS resolution order from instruction §6.3: a declared CRS beats a
- * sidecar, which beats a user selection, which beats a suggestion. The result
- * records where the answer came from so the manifest can show it.
+ * Picks the source CRS from everything that has an opinion about it.
+ *
+ * A deliberate selection in the CRS panel outranks the file. That is a change
+ * from ranking `declared` first, and it is the difference between a control
+ * that works and one that is decoration: the person choosing has the survey
+ * record in front of them, and a wrong .prj or an assumed WGS 84 is exactly the
+ * situation the control exists for. Overriding something the file actually
+ * STATED is reported back through `overrode` so the pipeline can say so loudly
+ * — silently disagreeing with the file would be its own kind of dishonesty.
  */
 export function resolveSourceCrs(candidates: {
   declared?: CrsRef | null;
   sidecar?: CrsRef | null;
+  assumed?: CrsRef | null;
   user?: CrsRef | null;
   suggestion?: CrsSuggestion;
-}): { crs: CrsRef | null; origin: CirDataset['crsOrigin']; blocked: boolean; message?: string } {
+}): {
+  crs: CrsRef | null;
+  origin: CirDataset['crsOrigin'];
+  blocked: boolean;
+  message?: string;
+  /** The CRS the file stated, when the user's selection replaced it. */
+  overrode?: CrsRef | null;
+} {
+  const stated = candidates.declared ?? candidates.sidecar ?? null;
+  if (candidates.user) {
+    const conflicting = stated && !sameCrs(stated, candidates.user) ? stated : null;
+    return { crs: candidates.user, origin: 'user', blocked: false, overrode: conflicting };
+  }
   if (candidates.declared) return { crs: candidates.declared, origin: 'declared', blocked: false };
   if (candidates.sidecar) return { crs: candidates.sidecar, origin: 'sidecar', blocked: false };
-  if (candidates.user) return { crs: candidates.user, origin: 'user', blocked: false };
+  if (candidates.assumed) return { crs: candidates.assumed, origin: 'assumed', blocked: false };
   const suggestion = candidates.suggestion;
   if (suggestion && suggestion.crs && !suggestion.ambiguous) {
     return { crs: suggestion.crs, origin: 'inferred', blocked: false };

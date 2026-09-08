@@ -37,6 +37,11 @@ const LOAD_PATTERNS = [
   { name: 'importScripts', pattern: new RegExp(String.raw`\bimportScripts\s*\(\s*["'\`]${REMOTE}`, 'gi') },
   { name: 'new Worker', pattern: new RegExp(String.raw`new\s+(?:Shared)?Worker\s*\(\s*["'\`]${REMOTE}`, 'gi') },
   { name: 'WebSocket', pattern: new RegExp(String.raw`new\s+WebSocket\s*\(\s*["'\`]wss?://`, 'gi') },
+  // A tile template. Unambiguous — a URL carrying {z}/{x}/{y} is a slippy-map
+  // endpoint and nothing else — so this catches a new remote tile source
+  // without the false positives that flagging every https literal would bring
+  // on the XML namespaces this converter is obliged to write.
+  { name: 'map tile template', pattern: /https?:\/\/[^\s"']*\{[zxy]\}[^\s"']*/gi },
 ];
 
 /** Hosts that only ever appear in a bundle because something is being loaded. */
@@ -64,13 +69,42 @@ function walk(dir) {
   return out;
 }
 
+/**
+ * The one deliberate exception: the optional map basemap.
+ *
+ * R15 says the packaged extension must WORK with the network interface
+ * disabled. It does: the basemap is off by default, it is a view-time layer
+ * only, no conversion, QA, measurement or export path touches it, and a tile
+ * that fails to load leaves the canvas exactly as it would otherwise be. That
+ * is the rule kept, not bent.
+ *
+ * These templates are listed by their exact text rather than by host pattern,
+ * so adding a new remote URL still fails this check even if it points at a tile
+ * server. An allowlist that matched `*.tile.*` would quietly permit the next
+ * one nobody reviewed.
+ */
+const ALLOWED_TEMPLATES = [
+  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+  // Shown to the user as an example of the shape a custom template takes.
+  // Never fetched — `your-server` does not resolve, which is the point of it.
+  'https://your-server/tiles/{z}/{x}/{y}.png',
+];
+
+/** Strips the allowed templates before scanning, so they cannot mask anything else. */
+function withoutAllowed(text) {
+  let out = text;
+  for (const template of ALLOWED_TEMPLATES) out = out.split(template).join('«basemap-template»');
+  return out;
+}
+
 const findings = [];
 for (const file of walk(distDir)) {
   // Source maps embed the original source and its comments, so scanning them
   // would report prose in a doc comment as a network reference.
   if (file.endsWith('.map')) continue;
   if (!TEXT_EXTENSIONS.has(extname(file))) continue;
-  const text = readFileSync(file, 'utf8');
+  const text = withoutAllowed(readFileSync(file, 'utf8'));
   const where = relative(root, file);
 
   for (const { name, pattern } of LOAD_PATTERNS) {

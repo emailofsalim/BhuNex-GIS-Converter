@@ -106,6 +106,71 @@ function nodeName(node: WktNode | null): string {
   return typeof first === 'string' ? first : '';
 }
 
+/**
+ * Reads SPHEROID["name", a, 1/f].
+ *
+ * The ellipsoid is not decoration on a projected CRS: the same Lambert grid
+ * computed on Everest 1830 rather than WGS 84 lands hundreds of metres away,
+ * and Everest is what India's legacy sheets are on.
+ */
+function spheroidOf(root: WktNode): { name: string; a: number; invF: number } | null {
+  const node = findNode(root, 'SPHEROID') ?? findNode(root, 'ELLIPSOID');
+  if (!node) return null;
+  const [label, a, invF] = node.values;
+  if (typeof a !== 'number' || typeof invF !== 'number' || a <= 0) return null;
+  // A sphere is written with inverse flattening 0, which would divide by zero
+  // in every projection formula. Treat it as the sphere it is.
+  return { name: typeof label === 'string' ? label : 'Unknown', a, invF: invF === 0 ? Infinity : invF };
+}
+
+/**
+ * Reads the parameters that position a Lambert Conformal Conic grid.
+ *
+ * Both the 2SP form (two standard parallels) and the 1SP form (one, tangent)
+ * appear in the wild, and ESRI, OGC and GDAL each spell the parameters
+ * differently — `Standard_Parallel_1`, `Latitude_Of_Origin`,
+ * `latitude_of_center`, `Central_Meridian`, `longitude_of_center`. Missing the
+ * spelling does not produce a wrong answer, it produces a refusal, so the
+ * lookup tries every name each parameter is known by.
+ *
+ * Returns null unless the grid is actually positioned: without a central
+ * meridian and a latitude of origin there is nothing to project onto, and
+ * defaulting either to zero would place the site on the Greenwich meridian.
+ */
+function lambertParameters(root: WktNode): NonNullable<CrsRef['lcc']> | null {
+  const first = (...names: string[]): number | null => {
+    for (const name of names) {
+      const value = parameterValue(root, name);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+
+  const lon0 = first('central_meridian', 'longitude_of_center', 'longitude_of_origin');
+  const lat0 = first('latitude_of_origin', 'latitude_of_center', 'latitude_of_false_origin');
+  if (lon0 === null || lat0 === null) return null;
+
+  // 1SP states one standard parallel, or none at all — in which case the
+  // tangent parallel is the latitude of origin, which is what 1SP means.
+  const lat1 = first('standard_parallel_1', 'standard_parallel', 'latitude_of_standard_parallel') ?? lat0;
+  const lat2 = first('standard_parallel_2') ?? lat1;
+
+  // A 1SP Lambert states a scale factor at the natural origin; 2SP has none,
+  // because its two standard parallels already fix the scale. India's zones
+  // all carry 0.99878641, and dropping it costs 1.21 m per kilometre.
+  const k0 = first('scale_factor', 'scale_factor_at_natural_origin');
+
+  return {
+    lat1,
+    lat2,
+    lat0,
+    lon0,
+    falseEasting: first('false_easting', 'easting_at_false_origin') ?? 0,
+    falseNorthing: first('false_northing', 'northing_at_false_origin') ?? 0,
+    ...(k0 !== null && k0 > 0 ? { k0 } : {}),
+  };
+}
+
 function parameterValue(root: WktNode, name: string): number | null {
   const target = name.toLowerCase().replace(/[\s_]/g, '');
   for (const parameter of findAllNodes(root, 'PARAMETER')) {
@@ -217,9 +282,21 @@ export function parsePrj(text: string | null | undefined): ParsedPrj {
     // for projected data and for the geographic data written by GIS tools.
     axisOrder: 'xy',
     wkt: source,
+    ellipsoid: spheroidOf(root) ?? undefined,
   };
 
-  const supported = isProjected ? /transverse[_\s]?mercator|mercator|lambert/i.test(projectionName) : true;
+  if (isProjected && /lambert/i.test(projectionName)) {
+    const lcc = lambertParameters(root);
+    if (lcc) crs.lcc = lcc;
+    // A Lambert CRS whose parameters did not parse is NOT supported, whatever
+    // its name says. Reporting it as supported here is what used to let a file
+    // through the reader and into a transform that could only throw.
+    return lcc
+      ? { crs, wkt: source }
+      : { crs, wkt: source, unsupportedProjection: `${projectionName} (no usable parameters)` };
+  }
+
+  const supported = isProjected ? /transverse[_\s]?mercator|mercator/i.test(projectionName) : true;
   return supported ? { crs, wkt: source } : { crs, wkt: source, unsupportedProjection: projectionName };
 }
 
@@ -259,6 +336,37 @@ export function buildPrj(crs: CrsRef | null): string {
       `PARAMETER["False_Easting",500000.0],PARAMETER["False_Northing",${south ? '10000000.0' : '0.0'}],` +
       `PARAMETER["Central_Meridian",${utmCentralMeridian(zone).toFixed(1)}],PARAMETER["Scale_Factor",0.9996],` +
       `PARAMETER["Latitude_Of_Origin",0.0],UNIT["Meter",1.0]]`
+    );
+  }
+
+  if (crs.lcc) {
+    // Without this, a Lambert CRS that came from the bundled EPSG table rather
+    // than from a parsed .prj fell through to the empty return below, and a
+    // shapefile export lost the coordinate system entirely — every parameter
+    // needed to write it was sitting on the CrsRef.
+    const { lat1, lat2, lat0, lon0, falseEasting, falseNorthing, k0 } = crs.lcc;
+    const ellipsoid = crs.ellipsoid ?? { name: 'WGS_1984', a: 6378137.0, invF: 298.257223563 };
+    const datumName = crs.datum.startsWith('D_') ? crs.datum : `D_${crs.datum.replace(/\s+/g, '_')}`;
+    const geographic = geogcs(
+      `GCS_${crs.datum.replace(/\s+/g, '_')}`,
+      datumName,
+      ellipsoid.name.replace(/\s+/g, '_'),
+      ellipsoid.a,
+      // A sphere is carried as Infinity internally and written back as the 0
+      // that WKT uses for it; writing "Infinity" would produce an unparseable
+      // .prj that every reader rejects.
+      Number.isFinite(ellipsoid.invF) ? ellipsoid.invF : 0
+    );
+    // Both standard parallels are always written, even for the 1SP case where
+    // they are equal: readers accept it, and a definition that states its
+    // parallels cannot be mistaken for one that omitted them.
+    return (
+      `PROJCS["${crs.name.replace(/"/g, '')}",${geographic},PROJECTION["Lambert_Conformal_Conic"],` +
+      `PARAMETER["False_Easting",${falseEasting}],PARAMETER["False_Northing",${falseNorthing}],` +
+      `PARAMETER["Central_Meridian",${lon0}],PARAMETER["Standard_Parallel_1",${lat1}],` +
+      `PARAMETER["Standard_Parallel_2",${lat2}],` +
+      (k0 !== undefined ? `PARAMETER["Scale_Factor",${k0}],` : '') +
+      `PARAMETER["Latitude_Of_Origin",${lat0}],UNIT["Meter",1.0]]`
     );
   }
 

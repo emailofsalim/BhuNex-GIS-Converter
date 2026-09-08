@@ -22,6 +22,14 @@
   --border: #29313d;
   --border-strong: #3a4553;
 
+  /* Scrollbars. Chrome's own dark scrollbar sits on a track LIGHTER than this
+     app's background, so the thumb reads as part of the panel and the bar
+     looks absent — the reported "scroll bars are hidden". These are explicit
+     so the thumb stays visible against --surface in both themes. */
+  --scroll-track: #10161f;
+  --scroll-thumb: #3d4859;
+  --scroll-thumb-hover: #566274;
+
   /* Text. */
   --text: #e6edf3;
   --text-muted: #9aa7b6;
@@ -55,6 +63,9 @@
   --surface-raised: #ffffff;
   --surface-sunken: #eaeef4;
   --border: #d6dce5;
+  --scroll-track: #e9edf3;
+  --scroll-thumb: #b3bdcb;
+  --scroll-thumb-hover: #93a0b2;
   --border-strong: #b9c2ce;
   --text: #16202c;
   --text-muted: #56637a;
@@ -79,6 +90,9 @@
     --surface-raised: #ffffff;
     --surface-sunken: #eaeef4;
     --border: #d6dce5;
+  --scroll-track: #e9edf3;
+  --scroll-thumb: #b3bdcb;
+  --scroll-thumb-hover: #93a0b2;
     --border-strong: #b9c2ce;
     --text: #16202c;
     --text-muted: #56637a;
@@ -115,6 +129,62 @@ body {
   overflow: hidden;
 }
 
+/* ------------------------------------------------------------- scrollbars */
+
+/* Every scrollable region in this workspace is an inner pane, never the page:
+   `body` is `overflow: hidden` and the panels scroll inside a grid. That makes
+   the scrollbar the ONLY indication that a panel has more content below the
+   fold — there is no page scrollbar to fall back on, and nothing else on
+   screen says "there is more here". A bar that blends into the panel is
+   therefore not a cosmetic problem: it hides content.
+
+   Chrome draws its own dark scrollbar on a track around #2b2b2b, which is
+   LIGHTER than this app's #0d1117 background, so the thumb reads as part of
+   the furniture. These rules give it a deliberate contrast instead.
+
+   Only the WebKit pseudo-elements are used, and that is deliberate rather than
+   lazy: from Chrome 121, setting `scrollbar-width` or `scrollbar-color` to
+   anything but `auto` makes the engine IGNORE `::-webkit-scrollbar` entirely.
+   Specifying both does not belt-and-brace it — the standard properties win and
+   the width, radius and padding below are silently dropped. This extension
+   targets Chrome and Edge (manifest `minimum_chrome_version: 116`), where the
+   pseudo-elements are always available, so they are the ones kept. */
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  /* The border is what makes a 12px bar read as an 8px thumb with padding,
+     rather than a slab filling the gutter. */
+  border: 3px solid var(--scroll-track);
+  border-radius: 8px;
+  min-height: 32px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--scroll-track);
+}
+
+/* Reserve the gutter on the panels that scroll, so content does not reflow —
+   and, in a narrow pane, get clipped — at the moment a scrollbar appears. */
+.pane__body,
+.dialog__body,
+.log,
+.palette__list {
+  scrollbar-gutter: stable;
+}
+
 /* Focus is always visible: the whole workspace is keyboard-operable. */
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -136,7 +206,11 @@ textarea {
 .app {
   display: grid;
   grid-template-rows: auto 1fr auto;
+  /* dvh follows the browser UI as it hides and shows; vh does not, and on a
+     phone that difference is a bottom dock permanently under the URL bar.
+     The vh line is the fallback for anything without dvh. */
   height: 100vh;
+  height: 100dvh;
 }
 
 .topbar {
@@ -172,6 +246,28 @@ textarea {
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* The licence credit sits with the other top-bar buttons but should not
+   compete with them: it is an attribution first and a control second. */
+.credit {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.credit:hover {
+  color: var(--text-muted);
+}
+
+/* Links appear only in the About block and in reports. Underlined rather than
+   colour-only, so they are distinguishable without relying on hue. */
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--text);
 }
 
 .topbar__spacer {
@@ -228,14 +324,135 @@ textarea {
 }
 
 /* Below a laptop width the three columns stack rather than crush. */
+/* ------------------------------------------------------------- responsive
+   This workspace is opened in four quite different frames: a desktop tab, a
+   laptop tab, a tablet, and the browser's own side panel — which on a phone,
+   and often on a laptop, is narrower than 400px. The three-column layout is
+   right for exactly one of them.
+
+   The columns give way in order of what can be deferred. The settings column
+   goes first: it is consulted before a run and then left alone. The queue goes
+   second: it is a list, and a list reads perfectly well above the work rather
+   than beside it. The centre — preview, edit canvas, format choice — is the
+   thing being looked at, so it is the last to lose room and never loses it
+   entirely. */
+
+/* Laptop: keep three columns, take the width back from the sides. */
+@media (max-width: 1400px) {
+  .main {
+    grid-template-columns: minmax(240px, 20%) 1fr minmax(260px, 24%);
+  }
+}
+
+/* Tablet, narrow laptop, and the browser side panel: one column, full width,
+   in reading order.
+
+   An intermediate two-column step was tried and removed. Three columns of
+   controls do not fit in 800px however the fractions are written: the panes
+   stop shrinking at their content's own minimum, the grid overflows sideways,
+   and the user gets a horizontal scrollbar across the whole application — the
+   one thing a responsive layout exists to prevent. Stacking is not a
+   compromise here, it is the layout that fits.
+
+   Nothing is hidden. A control the user cannot reach is worse on a small
+   screen than a long scroll, because there is no second way to it. */
 @media (max-width: 1100px) {
   .main {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr auto;
-    overflow: auto;
+    /* Each pane keeps its own scroll; this is the scroll BETWEEN them. */
+    overflow-y: auto;
+    overflow-x: hidden;
   }
   .pane {
-    max-height: 60vh;
+    /* Tall enough to work in, short enough that the next pane is discoverable
+       without the user having to guess that scrolling reveals one. */
+    max-height: 70vh;
+    border-bottom: 1px solid var(--border);
+  }
+  .pane--settings {
+    max-height: none;
+  }
+
+  /* The top bar carries a brand, two badges and four buttons. Below about
+     1100px they stop fitting on one 48px line, and a fixed height turns that
+     into buttons sliced off at the right edge rather than a second row. */
+  .topbar {
+    height: auto;
+    min-height: 48px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 8px 12px;
+  }
+  /* A flex spacer inside a wrapping row eats a whole line to itself. */
+  .topbar__spacer {
+    display: none;
+  }
+}
+
+/* Phone. */
+@media (max-width: 720px) {
+  /* The bottom dock takes half the screen rather than a third: QA findings and
+     the conversion log are unreadable in 34vh of a 640px-tall screen. */
+  .bottom {
+    max-height: 50vh;
+  }
+  .brand__sub {
+    display: none;
+  }
+  .pane {
+    max-height: none;
+  }
+}
+
+/* Very narrow — the side panel docked on a laptop is routinely 360px. Two
+   columns of buttons is better than one column of clipped ones. */
+@media (max-width: 420px) {
+  .pane__head {
+    flex-wrap: wrap;
+  }
+  .dialog {
+    width: 100vw;
+    max-width: 100vw;
+    border-radius: 0;
+  }
+}
+
+/* Touch. Not a width question: a tablet at 1200px still has fingers, and a
+   28px control that is comfortable with a mouse is a mis-tap with a thumb.
+   44px is the figure both Apple's and Google's guidance settle on. */
+@media (pointer: coarse) {
+  .btn,
+  .tab,
+  .select,
+  .input {
+    min-height: 44px;
+  }
+  .btn {
+    padding: 10px 14px;
+  }
+  .tab {
+    padding: 12px 14px;
+  }
+  /* Checkboxes are the smallest targets in the settings column by some way. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 20px;
+    height: 20px;
+  }
+  /* An overlay scrollbar cannot be grabbed reliably with a finger, and a
+     touch device scrolls by dragging the content anyway. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+}
+
+/* Respect a reduced-motion preference: the only transitions here are hover
+   affordances, and none of them carries meaning. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }
 
@@ -650,7 +867,12 @@ textarea {
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  overflow-x: auto;
+  /* Wrap rather than scroll. The inspector has enough tabs to overflow a
+     narrow pane, and a horizontal scrollbar inside a 37px strip is either
+     invisible or eats a third of it — either way the later tabs stop being
+     reachable by mouse. Two short rows of tabs costs a line of height and
+     keeps every one of them clickable. */
+  flex-wrap: wrap;
 }
 
 .tab {

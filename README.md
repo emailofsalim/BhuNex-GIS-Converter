@@ -173,7 +173,17 @@ download anything.
 
 ## Beyond converting
 
-Six things the tool does that a format converter normally does not.
+Seven things the tool does that a format converter normally does not.
+
+**It works out the coordinate system you did not have to state.** KML, KMZ,
+GPX, OSM and GeoJSON text sequences are all defined in WGS 84 and have nowhere
+in the file to record anything else, so a projected survey converted to one of
+them is reprojected automatically and the transform recorded — you are asked
+only for what the tool cannot work out for itself. Where a format *can* record
+its own CRS, like GeoJSON, your coordinates are left alone. And because a file
+can be wrong about itself — RFC 7946 leaves a projected GeoJSON no way to say
+so, and a stale `.prj` is a fact of life — a source CRS you choose outranks
+what the file claims, with the disagreement reported rather than hidden.
 
 **It tells you the cost before you pay it.** Every output format is graded
 against *your* data across eleven axes — geometry, attributes, CRS, Z, style,
@@ -320,15 +330,24 @@ specification is
    refused, never read as uncompressed LAS.
 3. **DGN, E57, GeoPackage, FlatGeobuf, GeoParquet, File Geodatabase and vendor
    mining formats** are adapter contracts only.
-4. **Datum shifts outside the WGS 84 family** and **geoid conversions** are
-   refused rather than approximated — there is no engine for them, so there is no
-   UI offering them.
-5. **Gap detection finds gaps along adjacent boundaries**, not a whole missing
-   parcel inside a coverage; that needs a boolean union this build does not have,
-   and the violation text says so.
-6. **The second canvas is not built.** The source-versus-output comparison is
-   measured and reported in the Compare tab; the side-by-side geometry overlay
-   that would render it is still to come.
+4. **No datum shift parameters are bundled.** The seven-parameter Helmert
+   transformation itself is implemented and tested, and the CRS panel accepts a
+   parameter set — but nothing ships with values for Kalianpur 1975, Everest
+   1830 or any other datum, and that is deliberate rather than unfinished.
+   Published values differ by tens of metres between adjustments and regions,
+   and a wrong set does not fail: it produces coordinates that look entirely
+   reasonable and put a boundary somewhere it is not. Enter the set your survey
+   authority publishes, with the accuracy it is quoted at, and every conversion
+   records both.
+5. **Geoid conversions** are refused rather than approximated. Ellipsoidal and
+   orthometric heights differ by tens of metres and no geoid model is bundled.
+6. **Gap detection finds gaps along adjacent boundaries**, not a whole missing
+   parcel inside a coverage. The boolean union that would find one now exists in
+   `core/polygon-boolean.ts`; wiring it into the coverage check is outstanding,
+   and the violation text says what is and is not being checked.
+7. **The basemap needs a CRS it can place.** A file with no declared coordinate
+   system, a local site grid, or a datum with no supplied shift shows no tiles
+   at all rather than tiles in the wrong place.
 
 ## Licence
 

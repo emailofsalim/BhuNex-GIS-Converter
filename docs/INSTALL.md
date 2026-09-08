@@ -146,9 +146,11 @@ npm ci
 npm run build          # a DEVELOPER build, with source maps, over dist/
 ```
 
-Then load **`dist/`** with Load unpacked — not the repository root, and not
-`extension/`. The repository root has no manifest, and `extension/` holds the
-TypeScript sources that `npm run build` compiles.
+Then load **`dist/`** with Load unpacked. The repository root works too — it
+carries a generated `manifest.json` that points into `dist/` — but during
+development `dist/` is the folder actually being rebuilt, so loading it directly
+keeps what the browser holds and what Vite just wrote in the same place. Never
+load `extension/`: that is the TypeScript source `npm run build` compiles.
 
 Note that `npm run build` overwrites the committed `dist/` with a build that
 carries source maps, so `git status` will show a diff. That is expected while
