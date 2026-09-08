@@ -623,14 +623,23 @@ export function openHelpDialog(): void {
   const rules: [string, string][] = [
     ['Nothing is uploaded', 'Every conversion runs in this browser. The only exception is the optional DWG helper, which is a program on your own machine.'],
     ['A CRS is never invented', 'If a file declares no coordinate system and the numbers are ambiguous, the conversion stops and asks. The same easting is valid in all 60 UTM zones.'],
+    [
+      'A CRS the format requires is applied for you',
+      'KML, KMZ, GPX, OSM and GeoJSON text sequences store WGS 84 and have no field for anything else, so a projected survey is reprojected into it automatically and the transform is recorded. You are only asked for what the tool cannot work out.',
+    ],
+    [
+      'Your CRS selection outranks the file',
+      'A file can be wrong about itself — a stale .prj, or a projected GeoJSON that RFC 7946 leaves no way to label. Choosing a source CRS overrides what the file says, and the disagreement is reported rather than hidden.',
+    ],
     ['Nothing is dropped silently', 'Unsupported CAD entities, lost attributes, dropped Z values and segmentized curves are all counted by name and reported.'],
     ['Curves are segmentized with a stated tolerance', 'An arc has no GIS equivalent. It is densified against a sagitta tolerance you control, never replaced by its chord.'],
     ['LAZ is refused, not guessed', 'No LAZ decoder is bundled, so compressed point data is reported honestly instead of being read as raw LAS coordinates.'],
-    ['GeoTIFF is metadata-only', 'Georeference, dimensions and CRS are read; pixels are not decoded, so raster output from a GeoTIFF source is disabled.'],
     ['QA means re-import', 'A green PASS means the output was read back and compared with the source — not merely that bytes were written.'],
     ['Repair is off', 'Geometry repair edits your data, so it stays off until you turn it on, and reports every change it makes.'],
   ];
   for (const [title, text] of rules) body.append(messageBlock('info', title, text));
+
+  body.append(aboutSection());
 
   const foot = element('div', { class: 'dialog__foot' });
   const done = element('button', { class: 'btn btn--primary', text: 'Close' });
@@ -639,4 +648,52 @@ export function openHelpDialog(): void {
 
   dialog.append(head, body, foot);
   dialog.showModal();
+}
+
+/** Author, licence and where to send feedback. */
+export const AUTHOR = 'Md Salim Ansari';
+export const FEEDBACK_EMAIL = 'emailofsalim@gmail.com';
+
+/**
+ * The About block: who wrote this, under what licence, and how to reach them.
+ *
+ * The MIT licence requires the copyright notice to travel with the software.
+ * Shipping it only as a LICENSE file in the repository satisfies that for
+ * anyone who reads the repository and nobody who installs the extension, which
+ * is most people — so it is stated here, where the software actually is.
+ */
+function aboutSection(): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'About' }));
+
+  const version = chrome.runtime?.getManifest?.()?.version ?? '';
+  section.append(
+    keyValues([
+      ['Universal BhuNex Converter', version ? `Version ${version}` : '—'],
+      ['Author', AUTHOR],
+      ['Licence', `MIT — Copyright © ${AUTHOR}`],
+    ])
+  );
+
+  const feedback = element('p', { class: 'small', style: 'margin:10px 0 0' });
+  feedback.append(document.createTextNode('Found something wrong, or need a format that is not here? Write to '));
+  const link = element('a', {
+    href: `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent('Universal BhuNex Converter feedback')}`,
+    text: FEEDBACK_EMAIL,
+  }) as HTMLAnchorElement;
+  // A conversion that went wrong is worth more as a bug report than as a
+  // workaround, so the address is a live mailto rather than text to retype.
+  feedback.append(link);
+  feedback.append(document.createTextNode('.'));
+  section.append(feedback);
+
+  section.append(
+    element('p', {
+      class: 'small faint',
+      style: 'margin:8px 0 0',
+      text: 'The MIT licence permits commercial and private use, modification and redistribution, provided this notice travels with the software. It carries no warranty — check every delivery against your own survey record before it leaves your desk.',
+    })
+  );
+
+  return section;
 }

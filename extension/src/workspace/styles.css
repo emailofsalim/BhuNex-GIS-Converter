@@ -22,6 +22,14 @@
   --border: #29313d;
   --border-strong: #3a4553;
 
+  /* Scrollbars. Chrome's own dark scrollbar sits on a track LIGHTER than this
+     app's background, so the thumb reads as part of the panel and the bar
+     looks absent — the reported "scroll bars are hidden". These are explicit
+     so the thumb stays visible against --surface in both themes. */
+  --scroll-track: #10161f;
+  --scroll-thumb: #3d4859;
+  --scroll-thumb-hover: #566274;
+
   /* Text. */
   --text: #e6edf3;
   --text-muted: #9aa7b6;
@@ -55,6 +63,9 @@
   --surface-raised: #ffffff;
   --surface-sunken: #eaeef4;
   --border: #d6dce5;
+  --scroll-track: #e9edf3;
+  --scroll-thumb: #b3bdcb;
+  --scroll-thumb-hover: #93a0b2;
   --border-strong: #b9c2ce;
   --text: #16202c;
   --text-muted: #56637a;
@@ -79,6 +90,9 @@
     --surface-raised: #ffffff;
     --surface-sunken: #eaeef4;
     --border: #d6dce5;
+  --scroll-track: #e9edf3;
+  --scroll-thumb: #b3bdcb;
+  --scroll-thumb-hover: #93a0b2;
     --border-strong: #b9c2ce;
     --text: #16202c;
     --text-muted: #56637a;
@@ -113,6 +127,62 @@ body {
   /* Coordinates line up in columns only with tabular figures. */
   font-variant-numeric: tabular-nums;
   overflow: hidden;
+}
+
+/* ------------------------------------------------------------- scrollbars */
+
+/* Every scrollable region in this workspace is an inner pane, never the page:
+   `body` is `overflow: hidden` and the panels scroll inside a grid. That makes
+   the scrollbar the ONLY indication that a panel has more content below the
+   fold — there is no page scrollbar to fall back on, and nothing else on
+   screen says "there is more here". A bar that blends into the panel is
+   therefore not a cosmetic problem: it hides content.
+
+   Chrome draws its own dark scrollbar on a track around #2b2b2b, which is
+   LIGHTER than this app's #0d1117 background, so the thumb reads as part of
+   the furniture. These rules give it a deliberate contrast instead.
+
+   Only the WebKit pseudo-elements are used, and that is deliberate rather than
+   lazy: from Chrome 121, setting `scrollbar-width` or `scrollbar-color` to
+   anything but `auto` makes the engine IGNORE `::-webkit-scrollbar` entirely.
+   Specifying both does not belt-and-brace it — the standard properties win and
+   the width, radius and padding below are silently dropped. This extension
+   targets Chrome and Edge (manifest `minimum_chrome_version: 116`), where the
+   pseudo-elements are always available, so they are the ones kept. */
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  /* The border is what makes a 12px bar read as an 8px thumb with padding,
+     rather than a slab filling the gutter. */
+  border: 3px solid var(--scroll-track);
+  border-radius: 8px;
+  min-height: 32px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--scroll-track);
+}
+
+/* Reserve the gutter on the panels that scroll, so content does not reflow —
+   and, in a narrow pane, get clipped — at the moment a scrollbar appears. */
+.pane__body,
+.dialog__body,
+.log,
+.palette__list {
+  scrollbar-gutter: stable;
 }
 
 /* Focus is always visible: the whole workspace is keyboard-operable. */
@@ -172,6 +242,28 @@ textarea {
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* The licence credit sits with the other top-bar buttons but should not
+   compete with them: it is an attribution first and a control second. */
+.credit {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.credit:hover {
+  color: var(--text-muted);
+}
+
+/* Links appear only in the About block and in reports. Underlined rather than
+   colour-only, so they are distinguishable without relying on hue. */
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--text);
 }
 
 .topbar__spacer {
@@ -650,7 +742,12 @@ textarea {
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  overflow-x: auto;
+  /* Wrap rather than scroll. The inspector has enough tabs to overflow a
+     narrow pane, and a horizontal scrollbar inside a 37px strip is either
+     invisible or eats a third of it — either way the later tabs stop being
+     reachable by mouse. Two short rows of tabs costs a line of height and
+     keeps every one of them clickable. */
+  flex-wrap: wrap;
 }
 
 .tab {
