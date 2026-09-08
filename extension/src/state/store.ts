@@ -194,6 +194,10 @@ export interface AppSettings {
   clipTouched: boolean;
   /** Shrink the output grid to the boundary's extent. */
   clipCrop: boolean;
+  /** Turn a classified raster into polygons. Off by default. */
+  vectorizeEnabled: boolean;
+  /** Field the cell value is written to on each polygon. */
+  vectorizeField: string;
   /** Attach text found inside polygons to those polygons. */
   burnInEnabled: boolean;
   /** Layer holding the polygons that receive the text. */
@@ -267,6 +271,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   clipBoundaryItemId: '',
   clipTouched: false,
   clipCrop: true,
+  vectorizeEnabled: false,
+  vectorizeField: 'value',
   burnInEnabled: false,
   burnInTargetLayer: '',
   burnInField: 'label',

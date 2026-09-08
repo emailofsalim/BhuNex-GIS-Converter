@@ -235,6 +235,9 @@ export function buildSettings(): Partial<ConversionSettings> {
       if (polygons.length === 0) return undefined;
       return { polygons, touched: settings.clipTouched, crop: settings.clipCrop };
     })(),
+    vectorize: settings.vectorizeEnabled
+      ? ({ enabled: true, fieldName: settings.vectorizeField || 'value' } as const)
+      : undefined,
     // A zero interval is how "do not contour" is expressed, so the whole
     // option is absent rather than present-and-zero: the pipeline treats an
     // interval of 0 as a refusal, and it should never see one.
