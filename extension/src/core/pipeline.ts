@@ -12,6 +12,7 @@
 
 import {
   collapseWarnings,
+  createLayer,
   originFromPath,
   warn,
   type CirDataset,
@@ -62,6 +63,7 @@ import { buildReport, reportFiles, type ConversionReport } from './report';
 import { burnIn, describeBurnIn, DEFAULT_BURN_IN_OPTIONS, type BurnInOptions } from '../qa/burn-in';
 import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type PolygonizeOptions } from '../qa/polygonize';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
+import { generateContours, groundContours, type ContourOptions } from '../engines/raster/contour';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
@@ -141,6 +143,17 @@ export interface ConversionSettings {
    * the plot number drawn beside the boundary becomes an attribute on it.
    */
   burnIn?: Partial<BurnInOptions>;
+  /**
+   * Trace contour lines from an elevation raster (spec §16).
+   *
+   * Off unless an interval is given, because there is no interval that is right
+   * for every survey: 0.5 m on a building plot and 10 m on a catchment are both
+   * correct, and a default would be wrong for one of them without saying so.
+   *
+   * The contours are added as a vector layer beside the raster, so a DEM can be
+   * converted straight to DXF or KML as line work.
+   */
+  contours?: Partial<ContourOptions> & { interval: number };
   /** Attach a provenance record to the output package. */
   embedMetadata?: boolean;
   /**
@@ -725,6 +738,55 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
           count: entry.sourceIds.length,
           reason: entry.reason,
           action: 'Raise the tolerance only if the gap is a digitising error. A genuinely open boundary must not be forced shut.',
+        })
+      );
+    }
+  }
+
+  // Contours (spec §16). Before the burn-in stage, so text can be attached to
+  // the contours a DEM produced in the same run if anyone asks for that.
+  if (settings.contours?.interval && working.raster) {
+    const traced = groundContours(
+      generateContours(working.raster, settings.contours as ContourOptions),
+      working.raster.geotransform
+    );
+
+    if (traced.refusal) {
+      // A refusal here fails the conversion rather than quietly producing the
+      // raster without contours. The user asked for contours; a file that
+      // silently lacks them is the wrong file, and R18 forbids the silence.
+      throw new ConversionError({
+        code: 'CONTOUR_REFUSED',
+        what: traced.refusal.what,
+        why: traced.refusal.why,
+        action: traced.refusal.action,
+      });
+    }
+
+    warnings.push(...traced.warnings);
+
+    if (traced.features.length > 0) {
+      const name = `${working.name} contours`;
+      working = {
+        ...working,
+        layers: [
+          ...working.layers,
+          createLayer(name, traced.features, [
+            { name: 'elevation', type: 'number' },
+            { name: 'index', type: 'boolean' },
+            { name: 'length', type: 'number' },
+            { name: 'closed', type: 'boolean' },
+          ]),
+        ],
+      };
+
+      warnings.push(
+        warn('CONTOURS_TRACED', `${traced.features.length.toLocaleString()} contour line(s) traced at ${settings.contours.interval} unit intervals.`, {
+          severity: 'info',
+          count: traced.features.length,
+          reason: `Levels ${traced.levels[0]} to ${traced.levels[traced.levels.length - 1]} were crossed by the surface.`,
+          action: 'Each line carries its elevation, its length, whether it closes, and whether it is an index contour — so a CAD or GIS target can style and label them without a second pass.',
+          detail: { levels: traced.levels.length, interval: settings.contours.interval },
         })
       );
     }
