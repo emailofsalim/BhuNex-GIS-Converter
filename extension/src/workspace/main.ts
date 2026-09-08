@@ -63,6 +63,39 @@ import {
   type VertexRef,
 } from '../core/vertex-edit';
 import { planVertexSnap } from '../qa/snap';
+import {
+  buildTable,
+  describeAttributePlan,
+  planAddField,
+  planCalculate,
+  planDeleteField,
+  planRenameField,
+  planRetypeField,
+  planSetValue,
+  summariseField,
+  type AttributePlan,
+  type FieldType,
+} from '../core/attributes';
+import { checkExpression, FUNCTION_NAMES } from '../core/expression';
+import {
+  describeLayerPlan,
+  EMPTY_VIEW,
+  layerTree,
+  listLayers,
+  lockedLayers,
+  opacityOf,
+  planDeleteLayer,
+  planMergeLayers,
+  planRenameLayer,
+  planSplitLayer,
+  setAllHidden,
+  setView as setLayerView,
+  toggleIsolate,
+  type LayerPlan,
+  type LayerTreeNode,
+  type LayerViewState,
+} from '../core/layers';
+import { describeCommand, isWholeLayer, replayEdits, type EditCommand } from '../core/edits';
 import { DIFF_AXIS_LABEL } from '../qa/diff';
 import { OVERLAY_ROLE_LABEL, type GeometryOverlay } from '../qa/geometry-overlay';
 import {
@@ -107,6 +140,7 @@ import {
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../ui/preview';
 import {
   DEFAULT_SETTINGS,
+  EMPTY_TABLE,
   loadSettings,
   nextId,
   rememberCrs,
@@ -114,6 +148,7 @@ import {
   store,
   type AppSettings,
   type QueueItem,
+  type TableState,
 } from '../state/store';
 import { expand, inspect, preflight, runConversion } from '../workers/client';
 
@@ -135,6 +170,12 @@ function element<K extends keyof HTMLElementTagNameMap>(
   for (const child of children) node.append(child);
   return node;
 }
+
+/** Layer-list search text. UI-local: it is not worth a store round trip. */
+let layerSearch = '';
+
+/** Layers ticked in the layer list, for merge, split, delete and export. */
+let layerSelection: string[] = [];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -419,7 +460,16 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
   const startedAt = performance.now();
 
   try {
-    const settings = { ...buildSettings(), runQa: withQa && store.get().settings.runQa };
+    // `edits` is what carries the attribute table, the layer manager and the
+    // vertex editor into the output. They are descriptions, re-planned against
+    // the full file in the worker — the workspace only ever held a preview, so
+    // sending the changes it computed would edit a fraction of a large layer.
+    const settings = {
+      ...buildSettings(),
+      runQa: withQa && store.get().settings.runQa,
+      edits: item.edits,
+      protectedLayers: protectedFor(item),
+    };
     const result = await runConversion(
       {
         fileName: item.fileName,
@@ -893,6 +943,9 @@ function renderInspector(): void {
     case 'attributes':
       body.append(...attributesTab(item));
       break;
+    case 'layers':
+      body.append(...layersTab(item));
+      break;
     case 'preview':
       renderPreview(item);
       break;
@@ -1123,27 +1176,6 @@ function crsSelect(current: number | null, onChange: (epsg: number | null) => vo
   return wrap;
 }
 
-function attributesTab(item: QueueItem): HTMLElement[] {
-  const dataset = item.dataset;
-  if (dataset?.table) return [columnMappingPanel(item)];
-  const fields = (dataset?.layers ?? []).flatMap((layer: any) => layer.fields);
-  if (fields.length === 0) return [element('p', { class: 'muted', style: 'padding:16px', text: 'This dataset has no attribute fields.' })];
-  const table = element('table', { class: 'table' });
-  table.append(element('thead', {}, [element('tr', {}, [element('th', { text: 'Field' }), element('th', { text: 'Type' }), element('th', { text: 'Width' })])]));
-  const body = element('tbody');
-  for (const field of fields) {
-    body.append(
-      element('tr', {}, [
-        element('td', { class: 'mono', text: field.name }),
-        element('td', { text: field.type }),
-        element('td', { class: 'num', text: String(field.width ?? '—') }),
-      ])
-    );
-  }
-  table.append(body);
-  return [element('div', { class: 'scroll-x' }, [table])];
-}
-
 /** Column mapping with a preview table, as instruction §E requires. */
 function columnMappingPanel(item: QueueItem): HTMLElement {
   const table = item.dataset.table;
@@ -1187,6 +1219,1131 @@ function columnMappingPanel(item: QueueItem): HTMLElement {
   wrap.append(element('p', { class: 'small faint', style: 'padding:0 12px 12px', text: `${table.rowCount.toLocaleString()} rows total; first ${Math.min(12, table.previewRows.length)} shown.` }));
   return wrap;
 }
+
+// =========================================================================
+// Layer manager (spec §25.4)
+// =========================================================================
+
+/**
+ * The dataset the layer and attribute tools work against.
+ *
+ * `layer.preview` is at most 5,000 features per layer, and that limit is the
+ * whole reason `core/edits.ts` exists: everything here is planned against the
+ * preview so the user sees a result immediately, and then REPLANNED against the
+ * full file at conversion time. Nothing computed in this file is exported.
+ */
+function datasetForTools(item: QueueItem): any {
+  return {
+    ...item.dataset,
+    layers: (item.dataset?.layers ?? []).map((layer: any) => ({
+      name: layer.name,
+      path: layer.path ?? [layer.name],
+      features: layer.preview ?? [],
+      fields: layer.fields ?? [],
+      geometryTypes: layer.geometryTypes ?? [],
+      style: layer.style,
+    })),
+    warnings: item.dataset?.warnings ?? [],
+  };
+}
+
+function viewOf(item: QueueItem): LayerViewState {
+  return item.layerView ?? EMPTY_VIEW;
+}
+
+function tableStateOf(item: QueueItem): TableState {
+  return item.table ?? EMPTY_TABLE;
+}
+
+/** The layers no edit may touch: the settings list plus every padlocked layer. */
+function protectedFor(item: QueueItem): string[] {
+  return [...new Set([...(store.get().settings.protectedLayers ?? []), ...lockedLayers(viewOf(item))])];
+}
+
+/**
+ * Whether a layer holds more features than the workspace loaded.
+ *
+ * Every panel that can write has to say this, because the number on screen is
+ * not the number that will be edited — and the edit is right while the number
+ * is misleading.
+ */
+function truncationOf(item: QueueItem, layerName: string): { shown: number; total: number } | null {
+  const layer = (item.dataset?.layers ?? []).find((candidate: any) => candidate.name === layerName);
+  if (!layer || !layer.previewTruncated) return null;
+  return { shown: (layer.preview ?? []).length, total: layer.featureCount ?? (layer.preview ?? []).length };
+}
+
+function layersTab(item: QueueItem): HTMLElement[] {
+  const data = datasetForTools(item);
+  if (data.layers.length === 0) {
+    return [element('p', { class: 'muted', style: 'padding:16px', text: 'This file has no layers.' })];
+  }
+
+  const view = viewOf(item);
+  const nodes: HTMLElement[] = [];
+  const search = layerSearch;
+
+  // Toolbar -------------------------------------------------------------
+  const bar = element('div', { class: 'lm__bar' });
+  const searchBox = element('input', {
+    class: 'input',
+    type: 'search',
+    placeholder: 'Search layers and folders…',
+    value: search,
+    'aria-label': 'Search layers',
+  }) as HTMLInputElement;
+  searchBox.addEventListener('input', () => {
+    layerSearch = searchBox.value;
+    renderInspector();
+  });
+  bar.append(searchBox);
+
+  bar.append(
+    ghostButton('Show all', () => {
+      const names = data.layers.map((layer: any) => layer.name);
+      store.updateItem(item.id, { layerView: setAllHidden(view, names, false) });
+      render();
+    })
+  );
+  bar.append(
+    ghostButton('Hide all', () => {
+      const names = data.layers.map((layer: any) => layer.name);
+      store.updateItem(item.id, { layerView: setAllHidden(view, names, true) });
+      render();
+    })
+  );
+  nodes.push(bar);
+
+  // The single most important sentence on this panel.
+  nodes.push(
+    messageBlock(
+      'info',
+      'Visibility is a view setting. It does not change what is exported.',
+      'Hiding a layer here only removes it from the canvas. Every layer is still written to the output file.',
+      'To export a subset, tick the layers you want and use "Export selected" below.'
+    )
+  );
+
+  const items = listLayers(data, view, search);
+  if (items.length === 0) {
+    nodes.push(element('p', { class: 'muted', style: 'padding:16px', text: `No layer matches "${search}".` }));
+    return nodes;
+  }
+
+  const list = element('div', { class: 'lm' });
+  for (const node of layerTree(items)) renderLayerNode(node, list, item, 0);
+  nodes.push(list);
+
+  // Operations ----------------------------------------------------------
+  const selected = layerSelection.filter((name) => data.layers.some((layer: any) => layer.name === name));
+  const ops = element('div', { class: 'lm__ops' });
+  ops.append(element('div', { class: 'lm__opsTitle', text: `${selected.length} selected` }));
+
+  ops.append(
+    ghostButton('Export selected…', () => exportSelectedLayers(item, selected), selected.length === 0),
+    ghostButton('Merge…', () => promptMergeLayers(item, selected), selected.length < 2),
+    ghostButton('Rename…', () => promptRenameLayer(item, selected[0]), selected.length !== 1),
+    ghostButton('Split…', () => promptSplitLayer(item, selected[0]), selected.length !== 1),
+    ghostButton('Delete', () => promptDeleteLayer(item, selected[0]), selected.length !== 1)
+  );
+  nodes.push(ops);
+
+  const pending = (item.edits ?? []).filter((command) => command.kind.startsWith('layer-'));
+  if (pending.length > 0) nodes.push(pendingEditsPanel(item, pending));
+
+  return nodes;
+}
+
+function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: QueueItem, depth: number): void {
+  const view = viewOf(item);
+
+  if (!node.layer) {
+    // A folder with no layer of its own — a KML folder level.
+    into.append(
+      element('div', { class: 'lm__folder', style: `padding-left:${depth * 16 + 8}px` }, [
+        element('span', { class: 'lm__folderIcon', text: '▾' }),
+        element('span', { text: node.name }),
+      ])
+    );
+    for (const child of node.children) renderLayerNode(child, into, item, depth + 1);
+    return;
+  }
+
+  const entry = node.layer;
+  const row = element('div', {
+    class: `lm__row${layerSelection.includes(entry.name) ? ' lm__row--on' : ''}`,
+    style: `padding-left:${depth * 16 + 8}px`,
+  });
+
+  const tick = element('input', { type: 'checkbox', 'aria-label': `Select ${entry.name}` }) as HTMLInputElement;
+  tick.checked = layerSelection.includes(entry.name);
+  tick.addEventListener('change', () => {
+    layerSelection = tick.checked
+      ? [...layerSelection, entry.name]
+      : layerSelection.filter((name) => name !== entry.name);
+    renderInspector();
+  });
+  row.append(tick);
+
+  // Visibility ----------------------------------------------------------
+  const eye = element('button', {
+    class: `lm__icon${entry.visible ? ' lm__icon--on' : ''}`,
+    title: entry.visible ? 'Hide on the canvas (does not affect the export)' : 'Show on the canvas',
+    'aria-label': `${entry.visible ? 'Hide' : 'Show'} ${entry.name}`,
+    text: entry.visible ? '👁' : '⌀',
+  });
+  eye.addEventListener('click', () => {
+    store.updateItem(item.id, { layerView: setLayerView(view, entry.name, { hidden: entry.visible }) });
+    render();
+  });
+  row.append(eye);
+
+  // Lock ----------------------------------------------------------------
+  const lock = element('button', {
+    class: `lm__icon${entry.locked ? ' lm__icon--on' : ''}`,
+    title: entry.locked ? 'Locked — every edit refuses on this layer' : 'Lock this layer against edits',
+    'aria-label': `${entry.locked ? 'Unlock' : 'Lock'} ${entry.name}`,
+    text: entry.locked ? '🔒' : '🔓',
+  });
+  lock.addEventListener('click', () => {
+    store.updateItem(item.id, { layerView: setLayerView(view, entry.name, { locked: !entry.locked }) });
+    render();
+  });
+  row.append(lock);
+
+  // Isolate -------------------------------------------------------------
+  const isolate = element('button', {
+    class: `lm__icon${view.isolated === entry.name ? ' lm__icon--on' : ''}`,
+    title: 'Show only this layer, without losing what is hidden',
+    'aria-label': `Isolate ${entry.name}`,
+    text: '◎',
+  });
+  isolate.addEventListener('click', () => {
+    store.updateItem(item.id, { layerView: toggleIsolate(view, entry.name) });
+    render();
+  });
+  row.append(isolate);
+
+  const label = element('button', { class: 'lm__name', title: 'Show this layer in the attribute table' });
+  label.append(element('span', { class: 'lm__nameText', text: entry.name }));
+  label.append(
+    element('span', {
+      class: 'lm__meta',
+      text: `${(truncationOf(item, entry.name)?.total ?? entry.featureCount).toLocaleString()} · ${entry.geometryTypes.join(', ') || 'no geometry'} · ${entry.fieldCount} field${entry.fieldCount === 1 ? '' : 's'}`,
+    })
+  );
+  label.addEventListener('click', () => {
+    store.updateItem(item.id, { table: { ...tableStateOf(item), layer: entry.name, selection: [] } });
+    store.set({ inspectorTab: 'attributes' });
+    render();
+  });
+  row.append(label);
+
+  // Opacity -------------------------------------------------------------
+  const opacity = element('input', {
+    class: 'lm__opacity',
+    type: 'range',
+    min: '0',
+    max: '100',
+    value: String(Math.round(opacityOf(view, entry.name) * 100)),
+    title: 'Opacity on the canvas',
+    'aria-label': `Opacity of ${entry.name}`,
+  }) as HTMLInputElement;
+  opacity.addEventListener('input', () => {
+    store.updateItem(item.id, {
+      layerView: setLayerView(view, entry.name, { opacity: Number(opacity.value) / 100 }),
+    });
+    render();
+  });
+  row.append(opacity);
+
+  into.append(row);
+  for (const child of node.children) renderLayerNode(child, into, item, depth + 1);
+}
+
+function ghostButton(text: string, onClick: () => void, disabled = false): HTMLButtonElement {
+  const button = element('button', { class: 'btn btn--ghost', text }) as HTMLButtonElement;
+  button.disabled = disabled;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+// =========================================================================
+// Attribute table (spec §25.5)
+// =========================================================================
+
+function attributesTab(item: QueueItem): HTMLElement[] {
+  const dataset = item.dataset;
+  if (dataset?.table) return [columnMappingPanel(item)];
+
+  const data = datasetForTools(item);
+  if (data.layers.length === 0) {
+    return [element('p', { class: 'muted', style: 'padding:16px', text: 'This dataset has no attribute fields.' })];
+  }
+
+  const state = tableStateOf(item);
+  const layerName = state.layer && data.layers.some((layer: any) => layer.name === state.layer) ? state.layer : data.layers[0].name;
+  const layer = data.layers.find((candidate: any) => candidate.name === layerName);
+  const nodes: HTMLElement[] = [];
+
+  const patch = (change: Partial<TableState>): void => {
+    store.updateItem(item.id, { table: { ...state, layer: layerName, ...change } });
+    render();
+  };
+
+  // Toolbar -------------------------------------------------------------
+  const bar = element('div', { class: 'at__bar' });
+
+  const picker = element('select', { class: 'select', 'aria-label': 'Layer' }) as HTMLSelectElement;
+  for (const candidate of data.layers) {
+    const option = element('option', { value: candidate.name, text: `${candidate.name} (${candidate.features.length})` });
+    if (candidate.name === layerName) option.setAttribute('selected', 'selected');
+    picker.append(option);
+  }
+  picker.addEventListener('change', () => patch({ layer: picker.value, selection: [] }));
+  bar.append(picker);
+
+  const searchBox = element('input', {
+    class: 'input',
+    type: 'search',
+    placeholder: 'Search every column…',
+    value: state.search,
+    'aria-label': 'Search the table',
+  }) as HTMLInputElement;
+  searchBox.addEventListener('change', () => patch({ search: searchBox.value }));
+  bar.append(searchBox);
+
+  const filterBox = element('input', {
+    class: 'input at__filter',
+    type: 'text',
+    placeholder: 'Filter, e.g. area > 1000 and owner = \'Rao\'',
+    value: state.filter,
+    'aria-label': 'Filter expression',
+  }) as HTMLInputElement;
+
+  // The filter is validated as it is typed, because a filter that matches
+  // nothing and a filter that does not parse look identical in the result.
+  const filterNote = element('span', { class: 'at__filterNote' });
+  const validate = (): void => {
+    const text = filterBox.value.trim();
+    if (text === '') {
+      filterNote.textContent = '';
+      filterBox.classList.remove('input--bad');
+      return;
+    }
+    const error = checkExpression(text, (layer?.fields ?? []).map((field: any) => field.name));
+    filterBox.classList.toggle('input--bad', error !== null);
+    filterNote.textContent = error ? `${error.message} (at character ${error.position + 1})` : '';
+  };
+  filterBox.addEventListener('input', validate);
+  filterBox.addEventListener('change', () => patch({ filter: filterBox.value }));
+  bar.append(filterBox);
+  nodes.push(bar, filterNote);
+  validate();
+
+  if (!layer) return nodes;
+
+  // What is loaded versus what exists ------------------------------------
+  const truncated = truncationOf(item, layerName);
+  if (truncated) {
+    nodes.push(
+      messageBlock(
+        'info',
+        `Showing the first ${truncated.shown.toLocaleString()} of ${truncated.total.toLocaleString()} features.`,
+        'The workspace loads a preview so a large file opens quickly. A bulk edit made here is still applied to every feature: it is stored as an instruction and re-run against the whole file when you convert.',
+        'A row selection, however, can only cover the rows loaded.'
+      )
+    );
+  }
+
+  const view = buildTable(layer, {
+    sortBy: state.sortBy,
+    sortDirection: state.sortDirection,
+    search: state.search,
+    filter: state.filter,
+    limit: 500,
+  });
+
+  const count = element('div', { class: 'at__count' });
+  const matched = state.filter || state.search ? `${view.rows.length.toLocaleString()} of ${view.totalRows.toLocaleString()} rows` : `${view.totalRows.toLocaleString()} rows`;
+  count.append(element('span', { text: matched }));
+  if (view.truncated) count.append(element('span', { class: 'muted', text: ' · first 500 rendered' }));
+  if (state.selection.length > 0) count.append(element('span', { class: 'at__selCount', text: ` · ${state.selection.length} selected` }));
+  nodes.push(count);
+
+  // The table -----------------------------------------------------------
+  const table = element('table', { class: 'table at__table' });
+  const headRow = element('tr');
+  headRow.append(element('th', { class: 'at__tick' }));
+
+  for (const field of layer.fields) {
+    const on = state.sortBy === field.name;
+    const head = element('th', { class: `at__th${on ? ' at__th--on' : ''}` });
+    const sort = element('button', {
+      class: 'at__sort',
+      title: `Sort by ${field.name}. Empty cells stay at the bottom in both directions.`,
+    });
+    sort.append(element('span', { text: field.name }));
+    sort.append(element('span', { class: 'at__type', text: field.type }));
+    if (on) sort.append(element('span', { class: 'at__arrow', text: state.sortDirection === 'asc' ? '▲' : '▼' }));
+    sort.addEventListener('click', () =>
+      patch({ sortBy: field.name, sortDirection: on && state.sortDirection === 'asc' ? 'desc' : 'asc' })
+    );
+    head.append(sort);
+
+    const menu = element('button', { class: 'at__fieldMenu', text: '⋯', title: `Operations on "${field.name}"` });
+    menu.addEventListener('click', () => openFieldMenu(item, layerName, field.name));
+    head.append(menu);
+    headRow.append(head);
+  }
+  table.append(element('thead', {}, [headRow]));
+
+  const body = element('tbody');
+  for (const row of view.rows) {
+    const tr = element('tr', { class: state.selection.includes(row.index) ? 'at__row--on' : '' });
+
+    const tick = element('input', { type: 'checkbox', 'aria-label': `Select row ${row.index + 1}` }) as HTMLInputElement;
+    tick.checked = state.selection.includes(row.index);
+    tick.addEventListener('change', () =>
+      patch({
+        selection: tick.checked
+          ? [...state.selection, row.index]
+          : state.selection.filter((index) => index !== row.index),
+      })
+    );
+    tr.append(element('td', { class: 'at__tick' }, [tick]));
+
+    for (const field of layer.fields) {
+      const value = row.values[field.name];
+      const cell = element('td', { class: 'mono at__cell' });
+
+      // An empty cell and a missing one are different facts, so they look
+      // different: "" renders as nothing, null renders as a dimmed marker.
+      if (value === null || value === undefined) {
+        cell.append(element('span', { class: 'at__null', text: '∅', title: 'No value recorded — this is not zero and not an empty string' }));
+      } else {
+        cell.textContent = String(value);
+      }
+
+      cell.title = 'Double-click to edit this cell';
+      cell.addEventListener('dblclick', () => editCell(item, layerName, row.index, field.name, value));
+      tr.append(cell);
+    }
+    body.append(tr);
+  }
+  table.append(body);
+  nodes.push(element('div', { class: 'scroll-x' }, [table]));
+
+  // Operations ----------------------------------------------------------
+  const ops = element('div', { class: 'at__ops' });
+  ops.append(
+    ghostButton(state.selection.length > 0 ? `Set value on ${state.selection.length} selected…` : 'Set value on every row…', () =>
+      promptSetValue(item, layerName, state.selection)
+    ),
+    ghostButton('Calculate field…', () => promptCalculate(item, layerName, state.selection)),
+    ghostButton('Add field…', () => promptAddField(item, layerName)),
+    ghostButton('Clear selection', () => patch({ selection: [] }), state.selection.length === 0),
+    ghostButton('Column statistics…', () => showFieldStatistics(item, layerName))
+  );
+  nodes.push(ops);
+
+  const pending = (item.edits ?? []).filter((command) => !command.kind.startsWith('layer-') && command.kind !== 'vertices');
+  if (pending.length > 0) nodes.push(pendingEditsPanel(item, pending));
+
+  return nodes;
+}
+
+// =========================================================================
+// Queuing an edit
+// =========================================================================
+
+/**
+ * Records an edit and shows its effect immediately.
+ *
+ * Two things happen, and the difference between them is the whole design:
+ *
+ *   THE COMMAND is appended to `item.edits`. That is what conversion replays
+ *     against the full file, and it is the only thing that reaches the output.
+ *
+ *   THE PREVIEW is updated by applying the plan to the loaded features, so the
+ *     canvas and the table show the result now rather than after a conversion.
+ *
+ * The preview can therefore cover fewer rows than the command will. That is
+ * stated on screen rather than hidden, because the alternative — showing only
+ * what the preview can do — would under-report a correct edit.
+ */
+function queueEdit(item: QueueItem, command: EditCommand, plan: AttributePlan | LayerPlan, label: string): void {
+  if (plan.refusal) {
+    store.log('warn', `${plan.refusal.what} ${plan.refusal.why} ${plan.refusal.action}`);
+    render();
+    return;
+  }
+
+  const before = item.dataset;
+  const preview = applyToPreview(item, command);
+
+  store.updateItem(item.id, {
+    dataset: preview,
+    edits: [...(item.edits ?? []), command],
+    history: recordOperation(historyOf(item), before, preview, { kind: 'edit', label }),
+  });
+
+  const truncated = truncationOf(item, layerOfCommand(command) ?? '');
+  if (truncated && isWholeLayer(command)) {
+    store.log(
+      'ok',
+      `${label} — applied to all ${truncated.total.toLocaleString()} features on conversion; ${truncated.shown.toLocaleString()} shown here.`
+    );
+  } else {
+    store.log('ok', label);
+  }
+  render();
+}
+
+function layerOfCommand(command: EditCommand): string | null {
+  if (command.kind === 'layer-merge') return command.layers[0];
+  if (command.kind === 'vertices') return null;
+  return command.layer;
+}
+
+/** Re-runs one command against the loaded preview, so the UI shows its effect. */
+function applyToPreview(item: QueueItem, command: EditCommand): any {
+  const source = datasetForTools(item);
+  const replayed = replayEdits(source, [command], { protectedLayers: protectedFor(item) });
+  if (replayed.failure) return item.dataset;
+
+  // Fold the result back into the UI's own layer shape, which carries
+  // `preview`, `featureCount` and `previewTruncated` alongside the features.
+  const originals = new Map<string, any>((item.dataset?.layers ?? []).map((layer: any) => [layer.name, layer]));
+  const layers = replayed.dataset.layers.map((layer: any) => {
+    const original = originals.get(layer.name);
+    return {
+      ...(original ?? {}),
+      name: layer.name,
+      path: layer.path,
+      fields: layer.fields,
+      geometryTypes: layer.geometryTypes,
+      style: layer.style,
+      preview: layer.features,
+      // A layer's true count only changes when features move between layers.
+      featureCount: original && original.name === layer.name ? original.featureCount : layer.features.length,
+      previewTruncated: original?.previewTruncated ?? false,
+    };
+  });
+
+  return { ...item.dataset, layers };
+}
+
+/** The edits queued for this file, with a way to take the last one back. */
+function pendingEditsPanel(item: QueueItem, commands: EditCommand[]): HTMLElement {
+  const panel = element('div', { class: 'edits' });
+  panel.append(
+    element('div', { class: 'edits__head' }, [
+      element('span', { class: 'edits__title', text: `${commands.length} edit${commands.length === 1 ? '' : 's'} will be applied on conversion` }),
+    ])
+  );
+
+  const list = element('ol', { class: 'edits__list' });
+  for (const command of commands) {
+    const entry = element('li');
+    entry.append(element('span', { text: describeCommand(command) }));
+    if (isWholeLayer(command)) {
+      const layerName = layerOfCommand(command);
+      const truncated = layerName ? truncationOf(item, layerName) : null;
+      if (truncated) {
+        entry.append(
+          element('span', {
+            class: 'edits__scope',
+            text: ` — all ${truncated.total.toLocaleString()} features`,
+            title: `The table shows ${truncated.shown.toLocaleString()}; this edit is re-run against every feature when you convert.`,
+          })
+        );
+      }
+    }
+    list.append(entry);
+  }
+  panel.append(list);
+
+  const foot = element('div', { class: 'edits__foot' });
+  foot.append(
+    ghostButton('Undo the last edit', () => {
+      const all = item.edits ?? [];
+      if (all.length === 0) return;
+      // The preview is rebuilt from the remaining commands rather than reversed
+      // in place: replaying N-1 commands cannot drift from replaying N.
+      const remaining = all.slice(0, -1);
+      rebuildPreviewFrom(item, remaining);
+    })
+  );
+  foot.append(
+    ghostButton('Discard every edit', () => rebuildPreviewFrom(item, []))
+  );
+  panel.append(foot);
+  return panel;
+}
+
+/**
+ * Rebuilds the preview from a command list.
+ *
+ * Undo re-runs what remains rather than reversing what was removed: an inverse
+ * that drifts from the forward operation is the classic source of an undo that
+ * leaves the data subtly different from where it started.
+ */
+function rebuildPreviewFrom(item: QueueItem, commands: EditCommand[]): void {
+  const pristine = item.pristineDataset ?? item.dataset;
+  let dataset = pristine;
+
+  for (const command of commands) {
+    dataset = applyToPreview({ ...item, dataset }, command);
+  }
+
+  store.updateItem(item.id, { dataset, edits: commands, pristineDataset: pristine });
+  store.log('ok', commands.length === 0 ? 'All edits discarded.' : `${commands.length} edit(s) remain.`);
+  render();
+}
+
+// =========================================================================
+// Dialogs
+// =========================================================================
+
+interface PromptField {
+  key: string;
+  label: string;
+  kind?: 'text' | 'select' | 'checkbox' | 'expression';
+  value?: string;
+  options?: { value: string; label: string }[];
+  hint?: string;
+}
+
+/**
+ * One dialog shape for every edit, with a live preview of the plan.
+ *
+ * The preview is the point. Every one of these operations can affect thousands
+ * of rows, and "what will this do" has to be answerable BEFORE it happens —
+ * which is the same contract `describeAttributePlan` and `describeLayerPlan`
+ * were written for.
+ */
+function editDialog(
+  title: string,
+  fields: PromptField[],
+  describe: (values: Record<string, string>) => { text: string; blocked: boolean },
+  onConfirm: (values: Record<string, string>) => void,
+  confirmLabel = 'Apply'
+): void {
+  const dialog = $('settingsDialog') as HTMLDialogElement;
+  dialog.replaceChildren();
+
+  const head = element('div', { class: 'dialog__head' });
+  head.append(element('span', { class: 'dialog__title', text: title }));
+  const close = element('button', { class: 'btn btn--ghost', text: 'Close' });
+  close.addEventListener('click', () => dialog.close());
+  head.append(element('span', { class: 'topbar__spacer' }), close);
+
+  const body = element('div', { class: 'dialog__body stack' });
+  const inputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
+  const summary = element('div', { class: 'msg msg--info' });
+  const summaryText = element('div', { class: 'msg__body' });
+  summary.append(element('span', { class: 'msg__icon', text: 'i' }), summaryText);
+
+  const confirm = element('button', { class: 'btn btn--primary', text: confirmLabel }) as HTMLButtonElement;
+
+  const refresh = (): void => {
+    const values: Record<string, string> = {};
+    for (const [key, input] of inputs) {
+      values[key] = input instanceof HTMLInputElement && input.type === 'checkbox' ? String(input.checked) : input.value;
+    }
+    const outcome = describe(values);
+    summaryText.textContent = outcome.text;
+    summary.className = `msg msg--${outcome.blocked ? 'warn' : 'info'}`;
+    confirm.disabled = outcome.blocked;
+  };
+
+  for (const field of fields) {
+    const row = element('label', { class: 'field' });
+    row.append(element('span', { class: 'field__label', text: field.label }));
+
+    let input: HTMLInputElement | HTMLSelectElement;
+    if (field.kind === 'select') {
+      const select = element('select', { class: 'select' }) as HTMLSelectElement;
+      for (const option of field.options ?? []) {
+        const node = element('option', { value: option.value, text: option.label });
+        if (option.value === field.value) node.setAttribute('selected', 'selected');
+        select.append(node);
+      }
+      input = select;
+    } else if (field.kind === 'checkbox') {
+      const tick = element('input', { type: 'checkbox' }) as HTMLInputElement;
+      tick.checked = field.value === 'true';
+      input = tick;
+    } else {
+      input = element('input', { class: 'input', type: 'text', value: field.value ?? '' }) as HTMLInputElement;
+    }
+
+    input.addEventListener('input', refresh);
+    input.addEventListener('change', refresh);
+    inputs.set(field.key, input);
+    row.append(input);
+    if (field.hint) row.append(element('span', { class: 'field__hint', text: field.hint }));
+    body.append(row);
+  }
+
+  body.append(summary);
+
+  const foot = element('div', { class: 'dialog__foot' });
+  const cancel = element('button', { class: 'btn', text: 'Cancel' });
+  cancel.addEventListener('click', () => dialog.close());
+  confirm.addEventListener('click', () => {
+    const values: Record<string, string> = {};
+    for (const [key, input] of inputs) {
+      values[key] = input instanceof HTMLInputElement && input.type === 'checkbox' ? String(input.checked) : input.value;
+    }
+    dialog.close();
+    onConfirm(values);
+  });
+  foot.append(element('span', { class: 'topbar__spacer' }), cancel, confirm);
+
+  dialog.append(head, body, foot);
+  refresh();
+  dialog.showModal();
+}
+
+// ------------------------------------------------------------- attributes
+
+function promptSetValue(item: QueueItem, layerName: string, selection: number[]): void {
+  const data = datasetForTools(item);
+  const layer = data.layers.find((candidate: any) => candidate.name === layerName);
+  if (!layer) return;
+  const scope = selection.length > 0 ? selection : undefined;
+
+  editDialog(
+    scope ? `Set a value on ${scope.length} selected row(s)` : 'Set a value on every row',
+    [
+      {
+        key: 'field',
+        label: 'Field',
+        kind: 'select',
+        value: layer.fields[0]?.name,
+        options: layer.fields.map((field: any) => ({ value: field.name, label: `${field.name} (${field.type})` })),
+      },
+      { key: 'value', label: 'Value', hint: 'Leave empty and tick "empty" below to clear the cells.' },
+      { key: 'null', label: 'Set to empty (no value)', kind: 'checkbox' },
+    ],
+    (values) => {
+      const value = values.null === 'true' ? null : values.value;
+      const plan = planSetValue(data, layerName, values.field, value, { protectedLayers: protectedFor(item), scope });
+      return { text: describeAttributePlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const value = values.null === 'true' ? null : values.value;
+      const plan = planSetValue(data, layerName, values.field, value, { protectedLayers: protectedFor(item), scope });
+      queueEdit(item, { kind: 'set', layer: layerName, field: values.field, value, scope }, plan, describeAttributePlan(plan));
+    }
+  );
+}
+
+function promptCalculate(item: QueueItem, layerName: string, selection: number[]): void {
+  const data = datasetForTools(item);
+  const layer = data.layers.find((candidate: any) => candidate.name === layerName);
+  if (!layer) return;
+  const scope = selection.length > 0 ? selection : undefined;
+
+  editDialog(
+    'Calculate a field',
+    [
+      {
+        key: 'field',
+        label: 'Write the result into',
+        kind: 'select',
+        value: layer.fields[0]?.name,
+        options: layer.fields.map((field: any) => ({ value: field.name, label: `${field.name} (${field.type})` })),
+      },
+      {
+        key: 'expression',
+        label: 'Expression',
+        value: '',
+        hint: `Fields: ${layer.fields.map((field: any) => field.name).join(', ')}. Functions: ${FUNCTION_NAMES.join(', ')}. Use [brackets] for a name with spaces. Arithmetic on an empty cell gives an empty cell, never zero.`,
+      },
+    ],
+    (values) => {
+      if (!values.expression.trim()) return { text: 'Type an expression.', blocked: true };
+      const plan = planCalculate(data, layerName, values.field, values.expression, {
+        protectedLayers: protectedFor(item),
+        scope,
+      });
+      return { text: describeAttributePlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const plan = planCalculate(data, layerName, values.field, values.expression, {
+        protectedLayers: protectedFor(item),
+        scope,
+      });
+      queueEdit(
+        item,
+        { kind: 'calculate', layer: layerName, field: values.field, expression: values.expression, scope },
+        plan,
+        describeAttributePlan(plan)
+      );
+    }
+  );
+}
+
+const FIELD_TYPES: FieldType[] = ['string', 'number', 'integer', 'boolean', 'date'];
+
+function promptAddField(item: QueueItem, layerName: string): void {
+  const data = datasetForTools(item);
+
+  editDialog(
+    'Add a field',
+    [
+      { key: 'name', label: 'Name', hint: 'Shapefile truncates field names to 10 characters.' },
+      {
+        key: 'type',
+        label: 'Type',
+        kind: 'select',
+        value: 'string',
+        options: FIELD_TYPES.map((type) => ({ value: type, label: type })),
+      },
+      { key: 'initial', label: 'Starting value', hint: 'Leave empty to create the column with no values.' },
+    ],
+    (values) => {
+      if (!values.name.trim()) return { text: 'Type a name.', blocked: true };
+      const plan = planAddField(
+        data,
+        layerName,
+        { name: values.name, type: values.type as FieldType },
+        values.initial === '' ? null : values.initial,
+        { protectedLayers: protectedFor(item) }
+      );
+      return { text: describeAttributePlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const field = { name: values.name, type: values.type as FieldType };
+      const initial = values.initial === '' ? null : values.initial;
+      const plan = planAddField(data, layerName, field, initial, { protectedLayers: protectedFor(item) });
+      queueEdit(item, { kind: 'add-field', layer: layerName, field, initialValue: initial }, plan, describeAttributePlan(plan));
+    },
+    'Add field'
+  );
+}
+
+/** Rename, retype or delete one column. */
+function openFieldMenu(item: QueueItem, layerName: string, fieldName: string): void {
+  const data = datasetForTools(item);
+  const layer = data.layers.find((candidate: any) => candidate.name === layerName);
+  const current = layer?.fields.find((field: any) => field.name === fieldName);
+
+  editDialog(
+    `"${fieldName}"`,
+    [
+      {
+        key: 'action',
+        label: 'Operation',
+        kind: 'select',
+        value: 'rename',
+        options: [
+          { value: 'rename', label: 'Rename' },
+          { value: 'retype', label: 'Change type' },
+          { value: 'delete', label: 'Delete the field' },
+        ],
+      },
+      { key: 'newName', label: 'New name', value: fieldName },
+      {
+        key: 'type',
+        label: 'New type',
+        kind: 'select',
+        value: current?.type ?? 'string',
+        options: FIELD_TYPES.map((type) => ({ value: type, label: type })),
+      },
+      {
+        key: 'force',
+        label: 'Convert anyway, accepting the loss',
+        kind: 'checkbox',
+        hint: 'Only relevant when changing the type: values that cannot be converted become empty.',
+      },
+    ],
+    (values) => {
+      const plan = fieldPlan(item, data, layerName, fieldName, values);
+      return { text: describeAttributePlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const plan = fieldPlan(item, data, layerName, fieldName, values);
+      const command = fieldCommand(layerName, fieldName, values);
+      if (command) queueEdit(item, command, plan, describeAttributePlan(plan));
+    }
+  );
+}
+
+function fieldPlan(item: QueueItem, data: any, layerName: string, fieldName: string, values: Record<string, string>): AttributePlan {
+  const options = { protectedLayers: protectedFor(item) };
+  if (values.action === 'delete') return planDeleteField(data, layerName, fieldName, options);
+  if (values.action === 'retype') {
+    return planRetypeField(data, layerName, fieldName, values.type as FieldType, {
+      ...options,
+      force: values.force === 'true',
+    });
+  }
+  return planRenameField(data, layerName, fieldName, values.newName, options);
+}
+
+function fieldCommand(layerName: string, fieldName: string, values: Record<string, string>): EditCommand | null {
+  if (values.action === 'delete') return { kind: 'delete-field', layer: layerName, field: fieldName };
+  if (values.action === 'retype') {
+    return {
+      kind: 'retype-field',
+      layer: layerName,
+      field: fieldName,
+      type: values.type as FieldType,
+      force: values.force === 'true',
+    };
+  }
+  return { kind: 'rename-field', layer: layerName, field: fieldName, newName: values.newName };
+}
+
+/** Double-clicking a cell edits that one row, which is a scoped `set`. */
+function editCell(item: QueueItem, layerName: string, featureIndex: number, field: string, current: unknown): void {
+  const data = datasetForTools(item);
+
+  editDialog(
+    `Row ${featureIndex + 1} · "${field}"`,
+    [
+      { key: 'value', label: 'Value', value: current === null || current === undefined ? '' : String(current) },
+      {
+        key: 'null',
+        label: 'No value (empty)',
+        kind: 'checkbox',
+        value: current === null || current === undefined ? 'true' : 'false',
+        hint: 'An empty cell and a cell holding "" are different facts, and both are preserved as written.',
+      },
+    ],
+    (values) => {
+      const value = values.null === 'true' ? null : values.value;
+      const plan = planSetValue(data, layerName, field, value, {
+        protectedLayers: protectedFor(item),
+        scope: [featureIndex],
+      });
+      return { text: describeAttributePlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const value = values.null === 'true' ? null : values.value;
+      const plan = planSetValue(data, layerName, field, value, {
+        protectedLayers: protectedFor(item),
+        scope: [featureIndex],
+      });
+      queueEdit(item, { kind: 'set', layer: layerName, field, value, scope: [featureIndex] }, plan, describeAttributePlan(plan));
+    },
+    'Set'
+  );
+}
+
+/** Unique values, null count and range for one column. */
+function showFieldStatistics(item: QueueItem, layerName: string): void {
+  const data = datasetForTools(item);
+  const layer = data.layers.find((candidate: any) => candidate.name === layerName);
+  if (!layer || layer.fields.length === 0) return;
+
+  const dialog = $('helpDialog') as HTMLDialogElement;
+  dialog.replaceChildren();
+
+  const head = element('div', { class: 'dialog__head' });
+  head.append(element('span', { class: 'dialog__title', text: `Column statistics · ${layerName}` }));
+  const close = element('button', { class: 'btn btn--ghost', text: 'Close' });
+  close.addEventListener('click', () => dialog.close());
+  head.append(element('span', { class: 'topbar__spacer' }), close);
+
+  const body = element('div', { class: 'dialog__body stack' });
+  const truncated = truncationOf(item, layerName);
+  if (truncated) {
+    body.append(
+      messageBlock(
+        'warn',
+        `These statistics cover the ${truncated.shown.toLocaleString()} features loaded, not all ${truncated.total.toLocaleString()}.`,
+        'The workspace holds a preview of a large file. A range or a null count computed from part of a column can be very different from the whole.',
+        'Convert with "Assess project health" on for figures over the complete file.'
+      )
+    );
+  }
+
+  for (const field of layer.fields) {
+    const summary = summariseField(layer, field.name);
+    if (!summary) continue;
+
+    const block = element('div', { class: 'stat' });
+    block.append(element('div', { class: 'stat__name', text: `${field.name} · ${field.type}` }));
+    block.append(
+      element('div', {
+        class: 'stat__line',
+        text: `${summary.distinct.toLocaleString()} distinct value(s) · ${summary.nulls.toLocaleString()} empty`,
+      })
+    );
+    if (summary.numeric) {
+      block.append(
+        element('div', {
+          class: 'stat__line',
+          text: `min ${summary.numeric.min} · max ${summary.numeric.max} · mean ${summary.numeric.mean.toFixed(3)}${summary.numeric.nonNumeric > 0 ? ` · ${summary.numeric.nonNumeric} non-numeric` : ''}`,
+        })
+      );
+    }
+    if (summary.top.length > 0) {
+      block.append(
+        element('div', {
+          class: 'stat__top',
+          text: summary.top
+            .slice(0, 8)
+            .map((entry) => `${String(entry.value)} (${entry.count})`)
+            .join(' · '),
+        })
+      );
+    }
+    body.append(block);
+  }
+
+  const foot = element('div', { class: 'dialog__foot' });
+  const done = element('button', { class: 'btn btn--primary', text: 'Done' });
+  done.addEventListener('click', () => dialog.close());
+  foot.append(element('span', { class: 'topbar__spacer' }), done);
+
+  dialog.append(head, body, foot);
+  dialog.showModal();
+}
+
+// ------------------------------------------------------------- layers
+
+function promptRenameLayer(item: QueueItem, layerName: string): void {
+  const data = datasetForTools(item);
+
+  editDialog(
+    `Rename "${layerName}"`,
+    [{ key: 'name', label: 'New name', value: layerName }],
+    (values) => {
+      const plan = planRenameLayer(data, layerName, values.name, { protectedLayers: protectedFor(item) });
+      return { text: describeLayerPlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const plan = planRenameLayer(data, layerName, values.name, { protectedLayers: protectedFor(item) });
+      queueEdit(item, { kind: 'layer-rename', layer: layerName, to: values.name }, plan, describeLayerPlan(plan));
+      layerSelection = layerSelection.map((name) => (name === layerName ? values.name : name));
+    },
+    'Rename'
+  );
+}
+
+function promptMergeLayers(item: QueueItem, names: string[]): void {
+  const data = datasetForTools(item);
+
+  editDialog(
+    `Merge ${names.length} layers`,
+    [{ key: 'name', label: 'Name for the merged layer', value: names[0] }],
+    (values) => {
+      const plan = planMergeLayers(data, names, values.name, { protectedLayers: protectedFor(item) });
+      return { text: describeLayerPlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const plan = planMergeLayers(data, names, values.name, { protectedLayers: protectedFor(item) });
+      queueEdit(item, { kind: 'layer-merge', layers: names, into: values.name }, plan, describeLayerPlan(plan));
+      layerSelection = [values.name];
+    },
+    'Merge'
+  );
+}
+
+function promptSplitLayer(item: QueueItem, layerName: string): void {
+  const data = datasetForTools(item);
+  const layer = data.layers.find((candidate: any) => candidate.name === layerName);
+  if (!layer) return;
+
+  const options = [
+    { value: '__geometry__', label: 'geometry type' },
+    ...layer.fields.map((field: any) => ({ value: field.name, label: `field "${field.name}"` })),
+  ];
+
+  const by = (value: string) => (value === '__geometry__' ? ({ kind: 'geometry' } as const) : ({ kind: 'field', field: value } as const));
+
+  editDialog(
+    `Split "${layerName}"`,
+    [
+      {
+        key: 'by',
+        label: 'Split by',
+        kind: 'select',
+        value: '__geometry__',
+        options,
+        hint: 'A field with a distinct value per feature would produce one layer per feature, and is refused.',
+      },
+    ],
+    (values) => {
+      const plan = planSplitLayer(data, layerName, by(values.by), { protectedLayers: protectedFor(item) });
+      return { text: describeLayerPlan(plan), blocked: plan.refusal !== undefined };
+    },
+    (values) => {
+      const plan = planSplitLayer(data, layerName, by(values.by), { protectedLayers: protectedFor(item) });
+      queueEdit(item, { kind: 'layer-split', layer: layerName, by: by(values.by) }, plan, describeLayerPlan(plan));
+      layerSelection = [];
+    },
+    'Split'
+  );
+}
+
+function promptDeleteLayer(item: QueueItem, layerName: string): void {
+  const data = datasetForTools(item);
+
+  editDialog(
+    `Delete "${layerName}"`,
+    [],
+    () => {
+      const plan = planDeleteLayer(data, layerName, { protectedLayers: protectedFor(item) });
+      return { text: describeLayerPlan(plan), blocked: plan.refusal !== undefined };
+    },
+    () => {
+      const plan = planDeleteLayer(data, layerName, { protectedLayers: protectedFor(item) });
+      queueEdit(item, { kind: 'layer-delete', layer: layerName }, plan, describeLayerPlan(plan));
+      layerSelection = layerSelection.filter((name) => name !== layerName);
+    },
+    'Delete'
+  );
+}
+
+/**
+ * Exports only the selected layers, by queuing deletions for the rest.
+ *
+ * Expressed as edits rather than as a special export path, so the subset is
+ * visible in the pending-edits list, reversible like any other edit, and
+ * applied by the same replay against the full file. A separate "export subset"
+ * flag would be a second way to decide what gets written, and the two would
+ * eventually disagree.
+ */
+function exportSelectedLayers(item: QueueItem, selected: string[]): void {
+  const data = datasetForTools(item);
+  const dropped = data.layers.map((layer: any) => layer.name).filter((name: string) => !selected.includes(name));
+
+  if (dropped.length === 0) {
+    store.log('warn', 'Every layer is already selected — nothing would be excluded.');
+    render();
+    return;
+  }
+
+  editDialog(
+    'Export only the selected layers',
+    [],
+    () => ({
+      text: `Keeps ${selected.join(', ')}. Removes ${dropped.join(', ')} from the output. This is queued as ${dropped.length} deletion(s) you can undo, not a hidden export setting.`,
+      blocked: false,
+    }),
+    () => {
+      let working = item;
+      for (const name of dropped) {
+        const plan = planDeleteLayer(datasetForTools(working), name, { protectedLayers: protectedFor(working) });
+        if (plan.refusal) {
+          store.log('warn', `${plan.refusal.what} ${plan.refusal.why}`);
+          break;
+        }
+        queueEdit(working, { kind: 'layer-delete', layer: name }, plan, describeLayerPlan(plan));
+        working = store.selected() ?? working;
+      }
+    },
+    'Keep only these'
+  );
+}
+
 
 /**
  * "Show exactly what will be lost" (spec §22.3).
@@ -3357,6 +4514,7 @@ function buildCommands(): Command[] {
     ['overview', 'Overview'],
     ['geometry', 'Geometry'],
     ['crs', 'CRS'],
+    ['layers', 'Layers'],
     ['attributes', 'Attributes'],
     ['preview', 'Preview'],
     ['fidelity', 'What will be lost'],

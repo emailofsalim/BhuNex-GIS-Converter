@@ -1230,7 +1230,7 @@ Every section of the supplied Master Build Instructions, and where it lives now.
  38 smart intelligence layer         29                            SPECIFIED
  39 spatial index / performance      14.5                          SPECIFIED
  40 file drop experience             5.1, 11.3                     BUILT
- 41 layer management                 25.4                          PARTIAL
+ 41 layer management                 25.4                          BUILT
  42 attribute table                  25.5                          SPECIFIED
  43 measurement tools                26.1                          SPECIFIED
  44 advanced geometry operations     26.2                          SPECIFIED

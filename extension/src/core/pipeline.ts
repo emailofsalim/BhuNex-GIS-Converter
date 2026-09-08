@@ -29,6 +29,7 @@ import {
   type OutputLayout,
   type OutputNode,
 } from './layout';
+import { replayEdits, type EditCommand } from './edits';
 import { ConversionError, asConversionError } from './errors';
 import { featuresBounds } from './geometry';
 import { sha256Hex } from './hash';
@@ -157,6 +158,23 @@ export interface ConversionSettings {
    * opt-in rather than charged to every conversion.
    */
   assessHealth?: boolean;
+  /**
+   * Edits the user made in the workspace, replayed onto the full dataset.
+   *
+   * These are DESCRIPTIONS ("set OWNER to State on Plots"), not diffs, and they
+   * are re-planned here against every feature the source actually has. The
+   * workspace only ever holds a 5,000-feature preview per layer, so a diff
+   * computed there would silently apply to an eighth of a 40,000-parcel layer.
+   * See `core/edits.ts` for the full reasoning.
+   */
+  edits?: EditCommand[];
+  /**
+   * Layers the user marked legally operative. Every edit refuses on them.
+   *
+   * Carried into the conversion rather than enforced only in the UI: a
+   * workflow replayed on another machine must refuse the same edits.
+   */
+  protectedLayers?: string[];
   /**
    * How the delivery is shaped. Defaults to 'single' so a one-layer conversion
    * behaves the way anyone would expect: one file in, one file out.
@@ -862,6 +880,33 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
       code: 'SOURCE_READ_FAILED',
       action: 'Check the file in the inspector, or confirm the source format if detection was wrong.',
     });
+  }
+
+  // ---- Replay the workspace edits onto the real dataset.
+  //
+  // Before prediction, before QA and before writing, because everything
+  // downstream must describe the data being exported rather than the data as it
+  // arrived. A fidelity report about the unedited file would be about a file
+  // nobody is producing.
+  if (settings.edits && settings.edits.length > 0) {
+    const replay = replayEdits(sourceDataset, settings.edits, { protectedLayers: settings.protectedLayers });
+
+    if (replay.failure) {
+      // Refusing outright rather than exporting the partial result: a file
+      // carrying three of five edits matches no state the user has ever seen,
+      // and nothing downstream would report which two are missing (R18).
+      throw new ConversionError({
+        code: 'EDIT_REPLAY_FAILED',
+        what: `Edit ${replay.failure.index + 1} of ${settings.edits.length} could not be applied: ${replay.failure.what}`,
+        why: `${replay.failure.why} ${replay.applied} earlier edit(s) applied cleanly; nothing was written, because a file carrying only some of the edits is not a file you asked for.`,
+        action: replay.failure.action,
+      });
+    }
+
+    sourceDataset = replay.dataset;
+    for (const entry of replay.log) {
+      warnings.push({ code: 'edit-applied', severity: 'info', message: entry });
+    }
   }
   warnings.push(...sourceDataset.warnings);
 

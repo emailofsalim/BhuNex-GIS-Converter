@@ -18,6 +18,8 @@ import type { DiffReport } from '../qa/diff';
 import type { GeometryOverlay } from '../qa/geometry-overlay';
 import type { ProjectHealth } from '../qa/health';
 import type { ConversionReport } from '../core/report';
+import type { EditCommand } from '../core/edits';
+import type { LayerViewState } from '../core/layers';
 import type { HistoryState } from '../core/history';
 import type { Workflow } from '../core/workflow';
 import type { KmlTemplate } from '../engines/vector/kml-templates';
@@ -77,10 +79,43 @@ export interface QueueItem {
    * is not even looking at.
    */
   history?: HistoryState;
+  /**
+   * Edits the user made, as intents rather than diffs (spec §25.1/§25.4/§25.5).
+   *
+   * Replayed onto the FULL dataset at conversion time by `core/edits.ts`. The
+   * workspace only holds a 5,000-feature preview per layer, so storing the
+   * computed changes here would export an eighth of a 40,000-parcel edit.
+   */
+  edits?: EditCommand[];
+  /**
+   * The preview exactly as it was read, before any edit.
+   *
+   * Undo rebuilds from here by replaying the commands that remain, rather than
+   * inverting the one removed: an inverse that drifts from its forward
+   * operation is the classic way an undo leaves the data subtly changed.
+   */
+  pristineDataset?: any;
+  /** Per-layer visibility, lock, isolate and opacity — view only, never data. */
+  layerView?: LayerViewState;
+  /** Sort, filter, search and selection in the attribute table. */
+  table?: TableState;
   qa?: FidelityReport;
   provenance?: any;
   durationMs?: number;
 }
+
+/** What the attribute table is currently showing. Per item, like the history. */
+export interface TableState {
+  layer: string | null;
+  sortBy?: string;
+  sortDirection: 'asc' | 'desc';
+  search: string;
+  filter: string;
+  /** Feature indices the user selected, shared with the canvas. */
+  selection: number[];
+}
+
+export const EMPTY_TABLE: TableState = { layer: null, sortDirection: 'asc', search: '', filter: '', selection: [] };
 
 export interface AppSettings {
   theme: 'system' | 'dark' | 'light';
