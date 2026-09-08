@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Universal BhuNex Converter — GIS/CAD/Survey",
+  "name": "Universal BhuNex Converter \u2014 GIS/CAD/Survey",
   "short_name": "BhuNex",
-  "version": "1.0.2",
-  "description": "Convert GIS, survey, CAD, LiDAR and mining data offline. Nothing is uploaded — every file is processed on your machine.",
+  "version": "1.0.3",
+  "description": "Convert GIS, survey, CAD, LiDAR and mining data offline. Nothing is uploaded \u2014 every file is processed on your machine.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",
@@ -31,12 +31,22 @@
   "options_page": "src/workspace/index.html",
   "commands": {
     "open-workspace": {
-      "suggested_key": { "default": "Ctrl+Shift+U", "mac": "Command+Shift+U" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
       "description": "Open the Universal BhuNex Converter workspace"
     }
   },
-  "permissions": ["storage", "unlimitedStorage", "downloads", "sidePanel"],
-  "optional_permissions": ["nativeMessaging"],
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "downloads",
+    "sidePanel"
+  ],
+  "optional_permissions": [
+    "nativeMessaging"
+  ],
   "host_permissions": [],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' blob: data:"
