@@ -211,7 +211,53 @@ export function renderSettingsPanel(): void {
   if (item?.dataset?.kind === 'raster' && item.dataset.raster?.hasPixelData) {
     panel.append(clipTools(state.settings, item.id));
     panel.append(contourTools(state.settings, item.dataset.raster));
+    panel.append(vectorizeTools(state.settings, item.dataset.raster));
   }
+}
+
+/**
+ * Turning a classified raster into polygons (spec §16).
+ *
+ * Offered only for a raster that is NOT marked as elevation, because the engine
+ * refuses those — a DEM has a different value in almost every cell, so every
+ * cell becomes its own region. Showing a control that can only refuse wastes a
+ * click to deliver an error.
+ */
+function vectorizeTools(settings: AppSettings, raster: { isElevation?: boolean }): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Regions from cells' }));
+
+  if (raster.isElevation) {
+    section.append(
+      element('p', {
+        class: 'small muted',
+        text: 'This raster is elevation, so it has a different value in almost every cell and would produce one polygon per pixel. Trace contours instead, or classify it into categories first.',
+      })
+    );
+    return section;
+  }
+
+  section.append(
+    checkbox('Trace regions as polygons', settings.vectorizeEnabled, (value) =>
+      void store.patchSettings({ vectorizeEnabled: value })
+    )
+  );
+
+  if (settings.vectorizeEnabled) {
+    section.append(
+      textField('Value field name', settings.vectorizeField, (value) =>
+        void store.patchSettings({ vectorizeField: value || 'value' })
+      )
+    );
+    section.append(
+      element('p', {
+        class: 'small faint',
+        text: 'Adjacent cells sharing a value become ONE polygon rather than one square each — the edges between them are not boundaries on the ground. Each polygon carries its cell value and how many cells it covers.',
+      })
+    );
+  }
+
+  return section;
 }
 
 /**

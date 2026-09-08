@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Universal BhuNex Converter \u2014 GIS/CAD/Survey",
   "short_name": "BhuNex",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Convert GIS, survey, CAD, LiDAR and mining data offline. Nothing is uploaded \u2014 every file is processed on your machine.",
   "minimum_chrome_version": "116",
   "icons": {

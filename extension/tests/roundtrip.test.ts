@@ -1286,6 +1286,79 @@ describe('edits reach the exported file', () => {
     expect(text).toContain('-9999');
   });
 
+  /**
+   * A classified raster becoming editable polygons (spec §16).
+   *
+   * Zone codes rather than elevations, because the engine refuses a continuous
+   * surface: a DEM has a different value in almost every cell and would produce
+   * one polygon per pixel.
+   */
+  const ZONED_ASC = [
+    'ncols         4',
+    'nrows         3',
+    'xllcorner     412000.0',
+    'yllcorner     2591000.0',
+    'cellsize      10.0',
+    'NODATA_value  -9999',
+    '1 1 2 2',
+    '1 1 2 2',
+    '3 3 3 3',
+  ].join('\n');
+
+  it('writes merged region polygons from a classified raster', async () => {
+    const result = await convert({
+      input: input('zones.asc', ZONED_ASC),
+      targetFormatId: 'geojson',
+      settings: { precision: FULL_PRECISION, runQa: false, vectorize: { enabled: true } },
+    });
+
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    const polygons = written.features.filter((f: any) => f.geometry?.type === 'Polygon');
+
+    // Three zones, three polygons — NOT twelve squares, which is what the
+    // naive per-pixel version would produce.
+    expect(polygons).toHaveLength(3);
+    expect(polygons.map((f: any) => f.properties.value).sort()).toEqual([1, 2, 3]);
+  });
+
+  it('records how many cells each region covers', async () => {
+    const result = await convert({
+      input: input('zones.asc', ZONED_ASC),
+      targetFormatId: 'geojson',
+      settings: { precision: FULL_PRECISION, runQa: false, vectorize: { enabled: true } },
+    });
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    const zone3 = written.features.find((f: any) => f.properties?.value === 3);
+    expect(zone3.properties.cells).toBe(4);
+  });
+
+  it('georeferences the regions into the raster’s own coordinates', async () => {
+    const result = await convert({
+      input: input('zones.asc', ZONED_ASC),
+      targetFormatId: 'geojson',
+      settings: { precision: FULL_PRECISION, runQa: false, vectorize: { enabled: true } },
+    });
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    const polygon = written.features.find((f: any) => f.geometry?.type === 'Polygon');
+    for (const [x, y] of polygon.geometry.coordinates[0]) {
+      expect(x).toBeGreaterThanOrEqual(411999);
+      expect(x).toBeLessThanOrEqual(412041);
+      expect(y).toBeGreaterThanOrEqual(2590999);
+      expect(y).toBeLessThanOrEqual(2591031);
+    }
+  });
+
+  it('fails rather than quietly writing a raster with no regions asked for', async () => {
+    // The elevation fixture is continuous, so vectorizing it is refused.
+    await expect(
+      convert({
+        input: input('terrain.asc', ASC_SOURCE),
+        targetFormatId: 'geojson',
+        settings: { precision: FULL_PRECISION, runQa: false, vectorize: { enabled: true } },
+      })
+    ).rejects.toThrow(ConversionError);
+  });
+
   it('reports fidelity for the edited data, not the file as it arrived', async () => {
     // The prediction runs after the replay, so a field added in the workspace is
     // counted among the attributes the target has to carry.

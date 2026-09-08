@@ -67,6 +67,7 @@ import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
 import { generateContours, groundContours, type ContourOptions } from '../engines/raster/contour';
 import { clipRaster, type ClipOptions } from '../engines/raster/clip';
 import { planWarpGrid, warpRaster } from '../engines/raster/warp';
+import { vectorizeRaster, type VectorizeOptions } from '../engines/raster/vectorize';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
@@ -166,6 +167,14 @@ export interface ConversionSettings {
    * boundary, so a district-wide DEM is delivered as the site and nothing else.
    */
   clip?: ClipOptions;
+  /**
+   * Turn a classified raster into polygons (spec §16).
+   *
+   * Off unless switched on. A zone map becomes editable boundaries that can be
+   * delivered as a shapefile or DXF; adjacent cells sharing a value merge into
+   * one polygon rather than becoming one square each.
+   */
+  vectorize?: Partial<VectorizeOptions> & { enabled: true };
   /** Attach a provenance record to the output package. */
   embedMetadata?: boolean;
   /**
@@ -771,6 +780,33 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     }
     working = { ...working, raster: clipped.raster };
     warnings.push(...clipped.warnings);
+  }
+
+  // Vectorize after the clip, so only the delivered area becomes polygons.
+  if (settings.vectorize?.enabled && working.raster) {
+    const traced = vectorizeRaster(working.raster, settings.vectorize);
+    if (traced.refusal) {
+      throw new ConversionError({
+        code: 'VECTORIZE_REFUSED',
+        what: traced.refusal.what,
+        why: traced.refusal.why,
+        action: traced.refusal.action,
+      });
+    }
+
+    warnings.push(...traced.warnings);
+    if (traced.features.length > 0) {
+      working = {
+        ...working,
+        layers: [
+          ...working.layers,
+          createLayer(`${working.name} regions`, traced.features, [
+            { name: settings.vectorize.fieldName ?? 'value', type: 'number' },
+            { name: 'cells', type: 'integer' },
+          ]),
+        ],
+      };
+    }
   }
 
   // Contours (spec §16). Before the burn-in stage, so text can be attached to
