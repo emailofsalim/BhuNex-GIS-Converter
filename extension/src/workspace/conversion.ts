@@ -225,6 +225,17 @@ export function buildSettings(): Partial<ConversionSettings> {
           keepSourceLines: settings.polygonizeKeepLines,
         }
       : undefined,
+    // A zero interval is how "do not contour" is expressed, so the whole
+    // option is absent rather than present-and-zero: the pipeline treats an
+    // interval of 0 as a refusal, and it should never see one.
+    contours:
+      settings.contourInterval > 0
+        ? {
+            interval: settings.contourInterval,
+            indexEvery: settings.contourIndexEvery,
+            minLength: settings.contourMinLength,
+          }
+        : undefined,
     burnIn:
       settings.burnInEnabled && settings.burnInTargetLayer
         ? {

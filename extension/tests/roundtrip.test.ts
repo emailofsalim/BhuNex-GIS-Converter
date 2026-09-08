@@ -1051,6 +1051,96 @@ describe('edits reach the exported file', () => {
     }
   });
 
+  /**
+   * Contours from a DEM reaching the written file (spec §16).
+   *
+   * A DEM in, line work out, is the most common thing a survey office wants
+   * from a raster. These go through the same `settings.contours` path the
+   * workspace uses and read the BYTES, because "the engine traces contours" and
+   * "the file you downloaded has contours in it" are different claims.
+   */
+  it('writes contour lines traced from an elevation grid', async () => {
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'geojson',
+      settings: { precision: FULL_PRECISION, runQa: false, contours: { interval: 1 } },
+    });
+
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    const lines = written.features.filter((f: any) => f.geometry?.type === 'LineString');
+    expect(lines.length).toBeGreaterThan(0);
+
+    // Every contour carries its elevation, and the elevations sit on the
+    // interval — a contour labelled 410.37 would mean the levels were taken
+    // from the data rather than from round numbers.
+    for (const line of lines) {
+      expect(typeof line.properties.elevation).toBe('number');
+      expect(line.properties.elevation % 1).toBeCloseTo(0, 9);
+    }
+  });
+
+  it('georeferences the contours into the raster’s own coordinates', async () => {
+    // The grid is at 412000E, 2591000N with a 10 m cell. Contours that came
+    // out in pixel coordinates would be near the origin and look plausible.
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'geojson',
+      settings: { precision: FULL_PRECISION, runQa: false, contours: { interval: 1 } },
+    });
+
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    const line = written.features.find((f: any) => f.geometry?.type === 'LineString');
+    for (const [x, y] of line.geometry.coordinates) {
+      expect(x).toBeGreaterThan(411900);
+      expect(x).toBeLessThan(412100);
+      expect(y).toBeGreaterThan(2590900);
+      expect(y).toBeLessThan(2591100);
+    }
+  });
+
+  it('marks index contours so a plan can draw them heavier', async () => {
+    // Every third rather than the conventional fifth, because this fixture is
+    // four pixels wide with a no-data hole in it and only levels 411 and 412
+    // are actually crossed. 411 is divisible by 3; neither is divisible by 5,
+    // so asking for every fifth here would assert nothing.
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'geojson',
+      settings: { precision: FULL_PRECISION, runQa: false, contours: { interval: 1, indexEvery: 3 } },
+    });
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    const lines = written.features.filter((f: any) => f.geometry?.type === 'LineString');
+
+    expect(lines.some((f: any) => f.properties.index === true)).toBe(true);
+    expect(lines.some((f: any) => f.properties.index === false)).toBe(true);
+  });
+
+  it('records the trace in the conversion warnings', async () => {
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'geojson',
+      settings: { precision: FULL_PRECISION, runQa: false, contours: { interval: 1 } },
+    });
+    const traced = result.warnings.find((w) => w.code === 'CONTOURS_TRACED');
+    expect(traced?.message).toContain('contour line');
+
+    // The no-data cell in the fixture must be reported, not silently skipped.
+    expect(result.warnings.some((w) => w.code === 'contour-nodata')).toBe(true);
+  });
+
+  it('fails the conversion rather than quietly writing a file with no contours', async () => {
+    // An interval larger than the relief produces nothing. Writing the raster
+    // anyway would hand back a file that is missing the thing that was asked
+    // for, with nothing saying so.
+    await expect(
+      convert({
+        input: input('terrain.asc', ASC_SOURCE),
+        targetFormatId: 'geojson',
+        settings: { precision: FULL_PRECISION, runQa: false, contours: { interval: 5000 } },
+      })
+    ).rejects.toThrow(ConversionError);
+  });
+
   it('reports fidelity for the edited data, not the file as it arrived', async () => {
     // The prediction runs after the replay, so a field added in the workspace is
     // counted among the attributes the target has to carry.

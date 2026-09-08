@@ -169,6 +169,19 @@ export interface AppSettings {
   polygonizeTolerance: number;
   /** Keep the source line work beside the polygons it produced. */
   polygonizeKeepLines: boolean;
+  /**
+   * Trace contours from an elevation raster (spec §16).
+   *
+   * The interval is 0 until someone sets one, and 0 means "do not contour".
+   * There is no interval that is right for every survey — 0.5 m on a building
+   * plot and 10 m on a catchment are both correct — so a default would be
+   * silently wrong for one of them.
+   */
+  contourInterval: number;
+  /** Every Nth contour is the heavier, labelled one on a plan. */
+  contourIndexEvery: number;
+  /** Drop contour fragments shorter than this. 0 keeps them all. */
+  contourMinLength: number;
   /** Attach text found inside polygons to those polygons. */
   burnInEnabled: boolean;
   /** Layer holding the polygons that receive the text. */
@@ -236,6 +249,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   polygonizeEnabled: false,
   polygonizeTolerance: 0.01,
   polygonizeKeepLines: false,
+  contourInterval: 0,
+  contourIndexEvery: 5,
+  contourMinLength: 0,
   burnInEnabled: false,
   burnInTargetLayer: '',
   burnInField: 'label',

@@ -203,6 +203,79 @@ export function renderSettingsPanel(): void {
   if (item?.dataset?.kind === 'vector' && layerNames.length > 0) {
     panel.append(cadastralTools(state.settings, layerNames));
   }
+
+  // Contours, shown only for a raster that actually carries pixels. Offering
+  // them for a georeference-only read would be offering something that can
+  // only refuse.
+  if (item?.dataset?.kind === 'raster' && item.dataset.raster?.hasPixelData) {
+    panel.append(contourTools(state.settings, item.dataset.raster));
+  }
+}
+
+/**
+ * Contours from a DEM (spec §16).
+ *
+ * The interval is the whole control, and it is deliberately empty until someone
+ * types one. There is no interval that is right for every survey — half a metre
+ * on a building plot and ten metres on a catchment are both correct — so a
+ * default would be silently wrong for one of them, and silently wrong is the
+ * thing this tool exists not to be.
+ *
+ * The elevation range is shown beside it, because "what interval?" is
+ * unanswerable without knowing the relief, and the person asking is usually
+ * looking at a file they did not produce.
+ */
+function contourTools(settings: AppSettings, raster: { statistics?: { min: number; max: number }[]; isElevation?: boolean }): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Contours' }));
+
+  const stats = raster.statistics?.[0];
+  const relief = stats ? stats.max - stats.min : null;
+
+  section.append(
+    element('p', {
+      class: 'small muted',
+      text: stats
+        ? `Elevations run ${stats.min.toFixed(2)} to ${stats.max.toFixed(2)} — a relief of ${relief!.toFixed(2)}.`
+        : 'Trace contour lines from this raster and write them as line work.',
+    })
+  );
+
+  section.append(
+    numberField('Interval (0 = no contours)', settings.contourInterval, 0.1, (value) =>
+      void store.patchSettings({ contourInterval: Math.max(0, value) })
+    )
+  );
+
+  if (settings.contourInterval > 0) {
+    if (relief !== null && relief > 0) {
+      const count = Math.floor(relief / settings.contourInterval);
+      section.append(
+        element('p', {
+          class: 'small',
+          text: `About ${count.toLocaleString()} contour level${count === 1 ? '' : 's'} at this interval.`,
+        })
+      );
+    }
+    section.append(
+      numberField('Index contour every Nth (0 = none)', settings.contourIndexEvery, 1, (value) =>
+        void store.patchSettings({ contourIndexEvery: Math.max(0, Math.round(value)) })
+      )
+    );
+    section.append(
+      numberField('Drop fragments shorter than', settings.contourMinLength, 1, (value) =>
+        void store.patchSettings({ contourMinLength: Math.max(0, value) })
+      )
+    );
+    section.append(
+      element('p', {
+        class: 'small faint',
+        text: 'Contours are added as a layer beside the raster, each carrying its elevation, length, whether it closes, and whether it is an index contour. A cell touching a no-data pixel is skipped rather than interpolated across, so contours stop at the edge of the surveyed area.',
+      })
+    );
+  }
+
+  return section;
 }
 
 /**
