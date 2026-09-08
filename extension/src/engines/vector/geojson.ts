@@ -201,10 +201,13 @@ export function readGeoJson(text: string, source: SourceInfo, options: ReadGeoJs
     kind: 'vector',
     name: source.fileName,
     source,
-    // RFC 7946 pins GeoJSON to WGS 84, so an undeclared file is treated as
-    // declared WGS 84 — that is the standard speaking, not a guess.
+    // RFC 7946 pins GeoJSON to WGS 84, so an undeclared file is read as WGS 84.
+    // That is the standard speaking rather than a guess — but it is still an
+    // assumption, and it is wrong for every projected GeoJSON that QGIS writes,
+    // because RFC 7946 removed the `crs` member those files would have used to
+    // say so. Marking it `assumed` is what lets the CRS panel override it.
     crs: declaredCrs ?? crsFromEpsg(4326),
-    crsOrigin: declaredCrs ? 'declared' : 'declared',
+    crsOrigin: declaredCrs ? 'declared' : 'assumed',
     units: declaredCrs && declaredCrs.kind === 'projected' ? 'm' : null,
     axisOrder: 'xy',
     layers,

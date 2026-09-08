@@ -236,9 +236,38 @@ describe('CRS suggestion', () => {
     expect(resolved.crs).toBeNull();
   });
 
-  it('prefers a declared CRS over a user selection', () => {
+  it('prefers a deliberate user selection over what the file declares', () => {
+    // This used to assert the opposite. Ranking the file first made the CRS
+    // panel decoration: the commonest reason to open it is a file that is
+    // wrong about itself — an assumed WGS 84 on a projected GeoJSON, or a .prj
+    // carried over from the wrong job — and in exactly those cases the
+    // selection was discarded.
     const resolved = resolveSourceCrs({ declared: crsFromEpsg(32645), user: crsFromEpsg(4326) });
+    expect(resolved.crs?.epsg).toBe(4326);
+    expect(resolved.origin).toBe('user');
+  });
+
+  it('reports the CRS it overrode, so disagreeing with the file is never silent', () => {
+    const resolved = resolveSourceCrs({ declared: crsFromEpsg(32645), user: crsFromEpsg(4326) });
+    expect(resolved.overrode?.epsg).toBe(32645);
+  });
+
+  it('does not report an override when the selection agrees with the file', () => {
+    const resolved = resolveSourceCrs({ declared: crsFromEpsg(32645), user: crsFromEpsg(32645) });
+    expect(resolved.overrode).toBeNull();
+  });
+
+  it('does not report an override when the file only assumed its CRS', () => {
+    // An assumption is not a statement, so replacing one is not a disagreement
+    // and does not deserve a warning that says the file is being contradicted.
+    const resolved = resolveSourceCrs({ assumed: crsFromEpsg(4326), user: crsFromEpsg(32645) });
     expect(resolved.crs?.epsg).toBe(32645);
-    expect(resolved.origin).toBe('declared');
+    expect(resolved.overrode).toBeNull();
+  });
+
+  it('falls back to an assumed CRS only after a declaration and a sidecar', () => {
+    expect(resolveSourceCrs({ assumed: crsFromEpsg(4326) }).origin).toBe('assumed');
+    expect(resolveSourceCrs({ declared: crsFromEpsg(32645), assumed: crsFromEpsg(4326) }).origin).toBe('declared');
+    expect(resolveSourceCrs({ sidecar: crsFromEpsg(32645), assumed: crsFromEpsg(4326) }).origin).toBe('sidecar');
   });
 });

@@ -437,12 +437,36 @@ describe('DXF', () => {
     expect(Math.abs(parsed.features[0].geometry.coordinates[0])).toBeLessThan(180);
   });
 
-  it('blocks a KML export that would write projected metres as degrees', async () => {
+  it('reprojects a projected source to KML without being asked to', async () => {
+    // This used to refuse, telling the user to go and set a target CRS of
+    // EPSG:4326 — a value KML itself already determines. The registry knows
+    // that KML mandates WGS 84 and has no field for anything else, so the
+    // pipeline reads the requirement off the format rather than the user.
+    const result = await convert({
+      input: input('site.dxf', DXF_SOURCE),
+      targetFormatId: 'kml',
+      settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N },
+    });
+
+    const kmlText = decoder.decode(result.outputs[0].bytes);
+    // Jharkhand, as in the explicit-target case above: the numbers have to be
+    // degrees in the right place, not metres relabelled.
+    expect(kmlText).toMatch(/8[4-8]\.\d+,2[23]\.\d+/);
+
+    // And it says so, rather than reprojecting silently.
+    const transformed = result.warnings.find((entry) => entry.code === 'CRS_TRANSFORMED');
+    expect(transformed?.reason).toContain('no field in which to record a different one');
+  });
+
+  it('still refuses when the target CRS the user set cannot be stored', async () => {
+    // Asking for KML in UTM is not a gap to fill in — it is a contradiction,
+    // and writing eastings where a reader expects longitude would put the site
+    // in the Gulf of Guinea.
     await expect(
       convert({
         input: input('site.dxf', DXF_SOURCE),
         targetFormatId: 'kml',
-        settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N },
+        settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N, targetCrs: UTM45N },
       })
     ).rejects.toThrow(ConversionError);
   });

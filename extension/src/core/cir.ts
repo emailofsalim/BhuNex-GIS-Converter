@@ -230,7 +230,19 @@ export interface Bounds3 extends Bounds {
   maxZ: number;
 }
 
-export type CrsOrigin = 'declared' | 'sidecar' | 'user' | 'inferred' | 'unknown';
+/**
+ * Where a dataset's CRS came from, in descending order of how much it should be
+ * trusted against a contradicting user selection.
+ *
+ * `assumed` is the one that needed adding. A GeoJSON with no `crs` member is
+ * WGS 84 *by the standard*, and the reader is right to fill it in — but a file
+ * exported from QGIS in UTM has no `crs` member either, because RFC 7946
+ * removed it. Recording that as `declared` made the assumption indistinguishable
+ * from a statement, and the CRS panel could not override it: the user picked
+ * their UTM zone, the tool kept 4326, and the export wrote eastings where a
+ * reader expected longitude.
+ */
+export type CrsOrigin = 'declared' | 'sidecar' | 'assumed' | 'user' | 'inferred' | 'unknown';
 
 export interface CrsRef {
   /** EPSG code where known, e.g. 32645. */

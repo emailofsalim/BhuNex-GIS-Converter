@@ -245,19 +245,38 @@ export function suggestCrs(bounds: { minX: number; minY: number; maxX: number; m
 }
 
 /**
- * Applies the CRS resolution order from instruction §6.3: a declared CRS beats a
- * sidecar, which beats a user selection, which beats a suggestion. The result
- * records where the answer came from so the manifest can show it.
+ * Picks the source CRS from everything that has an opinion about it.
+ *
+ * A deliberate selection in the CRS panel outranks the file. That is a change
+ * from ranking `declared` first, and it is the difference between a control
+ * that works and one that is decoration: the person choosing has the survey
+ * record in front of them, and a wrong .prj or an assumed WGS 84 is exactly the
+ * situation the control exists for. Overriding something the file actually
+ * STATED is reported back through `overrode` so the pipeline can say so loudly
+ * — silently disagreeing with the file would be its own kind of dishonesty.
  */
 export function resolveSourceCrs(candidates: {
   declared?: CrsRef | null;
   sidecar?: CrsRef | null;
+  assumed?: CrsRef | null;
   user?: CrsRef | null;
   suggestion?: CrsSuggestion;
-}): { crs: CrsRef | null; origin: CirDataset['crsOrigin']; blocked: boolean; message?: string } {
+}): {
+  crs: CrsRef | null;
+  origin: CirDataset['crsOrigin'];
+  blocked: boolean;
+  message?: string;
+  /** The CRS the file stated, when the user's selection replaced it. */
+  overrode?: CrsRef | null;
+} {
+  const stated = candidates.declared ?? candidates.sidecar ?? null;
+  if (candidates.user) {
+    const conflicting = stated && !sameCrs(stated, candidates.user) ? stated : null;
+    return { crs: candidates.user, origin: 'user', blocked: false, overrode: conflicting };
+  }
   if (candidates.declared) return { crs: candidates.declared, origin: 'declared', blocked: false };
   if (candidates.sidecar) return { crs: candidates.sidecar, origin: 'sidecar', blocked: false };
-  if (candidates.user) return { crs: candidates.user, origin: 'user', blocked: false };
+  if (candidates.assumed) return { crs: candidates.assumed, origin: 'assumed', blocked: false };
   const suggestion = candidates.suggestion;
   if (suggestion && suggestion.crs && !suggestion.ambiguous) {
     return { crs: suggestion.crs, origin: 'inferred', blocked: false };

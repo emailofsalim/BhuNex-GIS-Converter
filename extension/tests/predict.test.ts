@@ -65,15 +65,33 @@ function find(findings: FidelityFinding[], code: string): FidelityFinding | unde
 }
 
 describe('fidelity prediction — what a target cannot hold', () => {
-  it('grades a lossless conversion green with nothing to report', () => {
+  it('says GeoJSON keeps a projected CRS rather than claiming it reprojects', () => {
     const prediction = predictConversion(vectorDataset([feature('Polygon', { plot_no: '784' })]), 'geojson', {
       sourceCrsEpsg: 32645,
     });
-    // GeoJSON reprojects to WGS 84, which is a change worth stating but not a loss.
+
+    // This assertion used to read CRS_REPROJECTION_REQUIRED, with a comment
+    // saying "GeoJSON reprojects to WGS 84". It does not: the writer keeps the
+    // source CRS and adds a legacy `crs` member (GEOJSON_NON_WGS84). RFC 7946
+    // mandates WGS 84, but the format has somewhere to say otherwise, so the
+    // mandate is a convention rather than a constraint — and a prediction that
+    // promised a transform nobody performs is the exact failure §22 exists to
+    // prevent.
     expect(prediction.blocked).toBe(false);
     expect(prediction.overall).toBe('yellow');
-    expect(find(prediction.findings, 'CRS_REPROJECTION_REQUIRED')).toBeDefined();
+    expect(find(prediction.findings, 'CRS_REPROJECTION_REQUIRED')).toBeUndefined();
+    expect(find(prediction.findings, 'CRS_NON_STANDARD_KEPT')?.statement).toContain('EPSG:32645');
     expect(prediction.findings.every((entry) => entry.grade !== 'red')).toBe(true);
+  });
+
+  it('promises reprojection only where the format really enforces its CRS', () => {
+    // KML cannot record a CRS at all, so the mandate is enforced and the
+    // pipeline reprojects automatically. Here the promise is one the tool keeps.
+    const prediction = predictConversion(vectorDataset([feature('Point', { id: '1' })]), 'kml', {
+      sourceCrsEpsg: 32645,
+    });
+    expect(find(prediction.findings, 'CRS_REPROJECTION_REQUIRED')?.remedy).toContain('automatic');
+    expect(find(prediction.findings, 'CRS_NON_STANDARD_KEPT')).toBeUndefined();
   });
 
   it('names the polygons GPX cannot store, and counts them', () => {

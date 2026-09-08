@@ -123,8 +123,8 @@ export function crsTab(item: QueueItem): HTMLElement[] {
 
   nodes.push(
     keyValues([
-      ['Declared CRS', crsLabel(dataset?.crs ?? null)],
-      ['Origin', dataset?.crsOrigin ?? 'unknown'],
+      ['CRS', crsLabel(dataset?.crs ?? null)],
+      ['Origin', ORIGIN_LABEL[dataset?.crsOrigin ?? 'unknown']],
       ['Axis order (authority)', dataset?.crs?.axisOrder ?? '—'],
       ['Datum', dataset?.crs?.datum ?? '—'],
       ['Projection', dataset?.crs?.projection ?? '—'],
@@ -132,21 +132,74 @@ export function crsTab(item: QueueItem): HTMLElement[] {
     ])
   );
 
+  // An assumed CRS is the one worth interrupting for: the file said nothing,
+  // the standard filled it in, and nothing about the display would otherwise
+  // distinguish that from a file that stated its own grid.
+  if (dataset?.crsOrigin === 'assumed') {
+    nodes.push(
+      messageBlock(
+        'warn',
+        `Nothing in this file states a CRS. ${crsLabel(dataset.crs)} comes from the format's specification, not from the data.`,
+        'A projected export from QGIS looks exactly like this, because RFC 7946 removed the member it would have used to say so. Set the source CRS below if these coordinates are not degrees.'
+      )
+    );
+  }
+
   const section = element('div', { class: 'section' });
-  section.append(element('h3', { class: 'section__title', text: 'Source CRS (used when the file declares none)' }));
+  section.append(element('h3', { class: 'section__title', text: 'Source CRS' }));
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text: 'A selection here outranks the file. Leave it unset to use what the file states.',
+    })
+  );
   section.append(crsSelect(state.settings.sourceCrsEpsg, (epsg) => void assignSourceCrs(item.id, epsg)));
   nodes.push(section);
 
   const targetSection = element('div', { class: 'section' });
-  targetSection.append(element('h3', { class: 'section__title', text: 'Target CRS (leave unset to keep the source CRS)' }));
+  targetSection.append(element('h3', { class: 'section__title', text: 'Target CRS' }));
+
+  // What the chosen target format will do on its own, said before the
+  // conversion rather than discovered in the warnings afterwards.
+  const targetId = item.targetFormatId ?? state.settings.globalTargetFormatId;
+  const targetFormat = targetId ? FORMATS.find((format) => format.id === targetId) : undefined;
+  const imposedEpsg = targetFormat && !targetFormat.supportsCRS ? targetFormat.limits?.mandatesCrsEpsg : undefined;
+
+  if (imposedEpsg !== undefined && !state.settings.targetCrsEpsg) {
+    targetSection.append(
+      messageBlock(
+        'info',
+        `${targetFormat!.name} stores its coordinates in ${crsLabel(crsFromEpsg(imposedEpsg))}, so the conversion reprojects into it automatically.`,
+        'There is no field anywhere in this format in which a different CRS could be recorded, so leaving this unset is the right choice for it.'
+      )
+    );
+  }
+
   targetSection.append(crsSelect(state.settings.targetCrsEpsg, (epsg) => void store.patchSettings({ targetCrsEpsg: epsg })));
   targetSection.append(
-    element('p', { class: 'small faint', style: 'margin-top:8px', text: 'A datum shift outside the WGS 84 family is refused rather than approximated. Reproject those in QGIS or GDAL first.' })
+    element('p', {
+      class: 'small faint',
+      style: 'margin-top:8px',
+      text:
+        imposedEpsg !== undefined
+          ? `Leave unset unless you need something other than EPSG:${imposedEpsg} — and note that ${targetFormat!.name} cannot record what you pick, so a conflicting choice is refused rather than written.`
+          : 'Leave unset to keep the source CRS. A datum shift outside the WGS 84 family is refused rather than approximated — reproject those in QGIS or GDAL first.',
+    })
   );
   nodes.push(targetSection);
 
   return nodes;
 }
+
+/** Plain-language names for `CrsOrigin`, which is otherwise a bare enum word. */
+const ORIGIN_LABEL: Record<string, string> = {
+  declared: 'Declared by the file',
+  sidecar: 'Read from a sidecar (.prj)',
+  assumed: 'Assumed from the format specification — the file states nothing',
+  user: 'Selected by you',
+  inferred: 'Inferred from the coordinate ranges',
+  unknown: 'Unknown',
+};
 
 export function crsSelect(current: number | null, onChange: (epsg: number | null) => void): HTMLElement {
   const wrap = element('div', { class: 'stack' });
