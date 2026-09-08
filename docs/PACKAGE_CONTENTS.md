@@ -178,6 +178,28 @@ npm run store:package  # no source maps, both validators, packaged
 Every validator runs on every push in `.github/workflows/ci.yml`, and the
 packaged ZIP is attached to every GitHub Release.
 
+### Two manifests, on purpose
+
+`extension/manifest.json` is the source of truth. The build writes two copies:
+
+| File | Paths | Why |
+|---|---|---|
+| `dist/manifest.json` | `src/popup/index.html` | what ships in the ZIP, and what makes `dist/` loadable on its own |
+| `manifest.json` (repo root) | `dist/src/popup/index.html` | makes the REPOSITORY ROOT loadable, so someone can extract a download and select the folder |
+
+The second one exists because the first was not enough. Committing `dist/` made
+the extension downloadable, but installing it still meant *extract → go into
+`dist` → Load unpacked*, and that middle step is where it goes wrong: the folder
+picker opens on the folder you just extracted, selecting it is the obvious move,
+and the result was "Manifest file is missing or unreadable" for a third distinct
+reason.
+
+They are generated rather than maintained, by `scripts/write-root-manifest.mjs`,
+because two hand-written copies drift the first time a page moves — and the
+symptom is a blank tab rather than an error. The service worker and the popup
+read the workspace path from `chrome.runtime.getManifest()` for the same reason:
+only the browser knows which of the two it loaded.
+
 ### Why the build output is in version control
 
 A browser loads a **folder**; it cannot build one. With `dist/` gitignored, the

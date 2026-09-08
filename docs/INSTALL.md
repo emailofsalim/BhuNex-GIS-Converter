@@ -19,8 +19,7 @@ wrong folder.
 
 | What you selected | Why it fails |
 |---|---|
-| The **repository root** after downloading the source | The root has no `manifest.json`. The built extension is one level down, in **`dist/`** — see Option A. |
-| The **`extension/`** folder | That is TypeScript source. A browser cannot run it. Load `dist/`. |
+| The **`extension/`** folder | That is TypeScript source, not a built extension. Select the folder above it, or `dist/`. |
 | The folder *containing* the extension folder | Load unpacked wants the folder that has `manifest.json` **in** it, not its parent. |
 | The `.zip` file itself, or the folder view Windows shows when you double-click a `.zip` | Browsers load a real **folder** on disk. Extract it first — double-clicking a ZIP only previews it. |
 
@@ -72,12 +71,13 @@ file is a placeholder — go back to the OneDrive fix above.
 
 ---
 
-## Option A — download the repository and load `dist/`
+## Option A — download the repository and load the folder
 
 **Recommended, and the whole install. No Node, no npm, no build step.**
 
-The built extension is committed to this repository, so downloading it gives you
-something the browser can load directly.
+The built extension is committed to this repository, and the repository root
+carries its own `manifest.json`, so the folder you extract is a loadable
+extension exactly as it comes.
 
 1. On the repository page, green **Code** button → **Download ZIP**.
    (Or `git clone https://github.com/emailofsalim/Universal-Converter.git`.)
@@ -92,25 +92,31 @@ something the browser can load directly.
 4. Turn on **Developer mode** (a toggle, top-right in Chrome, bottom-left in
    Edge).
 5. Click **Load unpacked**.
-6. Select the **`dist`** folder inside what you extracted — **not** the folder
-   above it, and not `extension/`.
+6. Select **the folder you just extracted**.
 7. Click the toolbar icon → **Open converter workspace**.
 
-### Checking you picked the right folder
+### Which folder?
 
-The folder you select must look like this:
+The one you extracted. It carries a `manifest.json` at its top level, which is
+what "Load unpacked" is looking for:
 
 ```
-dist/
-├── manifest.json        ← this file must be here
-├── service-worker.js
-├── icons/
-├── assets/
-└── src/
+Universal-Converter/
+├── manifest.json        ← this is what makes the folder loadable
+├── dist/                ← the built extension itself (also loadable on its own)
+│   ├── manifest.json
+│   ├── service-worker.js
+│   ├── icons/
+│   ├── assets/
+│   └── src/
+├── extension/           ← TypeScript source; NOT loadable
+├── docs/
+└── scripts/
 ```
 
-`manifest.json` directly inside the folder you selected. If you see another
-folder instead, go one level deeper.
+**Either the outer folder or `dist/` works** — they carry the same extension,
+with the paths written from different depths. `extension/` is the one that does
+not: it is the source the build compiles.
 
 ---
 

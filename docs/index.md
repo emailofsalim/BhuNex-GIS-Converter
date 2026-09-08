@@ -21,11 +21,11 @@ repository, so downloading it gives you something the browser can load directly.
 2. Extract it to a plain local folder such as `C:\Extensions\` — **not**
    OneDrive, Desktop, Documents or Downloads.
 3. `edge://extensions` or `chrome://extensions` → turn on **Developer mode**.
-4. **Load unpacked** → select the **`dist`** folder.
+4. **Load unpacked** → select the folder you just extracted.
 
-Select `dist/`, not the folder above it and not `extension/` — those have no
-`manifest.json` and produce *"Manifest file is missing or unreadable"*. From a
-release archive there is no `dist/`: select the extracted folder itself.
+The repository root carries a `manifest.json`, so the folder you extracted is
+the folder to select. `dist/` inside it works too — it has its own manifest —
+so there is no wrong choice between the two.
 
 Store listings are in preparation; once published, installing will be one click
 with no folder to keep.
