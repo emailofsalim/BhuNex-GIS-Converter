@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "vite build",
-    "package": "node scripts/package-extension.mjs",
+    "package": "node scripts/package-extension.mjs && node scripts/verify-package.mjs",
     "docs": "node --experimental-strip-types scripts/format-matrix.mjs",
     "docs:check": "node --experimental-strip-types scripts/format-matrix.mjs --check",
     "lint": "tsc --noEmit",
@@ -20,8 +20,9 @@
     "verify": "npm run lint && npm run test && npm run build",
     "build:store": "STORE_BUILD=1 vite build",
     "store:check": "node scripts/assert-store-ready.mjs",
-    "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs",
-    "assets": "node scripts/make-store-assets.mjs"
+    "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs && node scripts/verify-package.mjs",
+    "assets": "node scripts/make-store-assets.mjs",
+    "package:check": "node scripts/verify-package.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

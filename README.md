@@ -80,6 +80,13 @@ Seeing *"Manifest file is missing or unreadable"*? On a work laptop it is
 usually OneDrive, not the wrong folder — **[docs/INSTALL.md](docs/INSTALL.md)**
 explains both causes and how to tell them apart.
 
+**[docs/PACKAGE_CONTENTS.md](docs/PACKAGE_CONTENTS.md)** lists every file and
+folder the ZIP must contain to load through Developer mode in Chrome and Edge,
+and the archive rules behind it. `npm run package:check` enforces all of it —
+it reads the archive the way a strict extractor does, which is how a malformed
+central directory that Node and 7-Zip happily recovered from, but Windows
+Explorer did not, was found.
+
 Optional: DWG support needs a small local helper — see
 [docs/NATIVE_HOST.md](docs/NATIVE_HOST.md). Everything else works without it.
 

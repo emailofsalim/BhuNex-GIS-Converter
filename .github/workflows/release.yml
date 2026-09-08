@@ -72,19 +72,32 @@ jobs:
             ## Install — no build step, no Node
 
             1. Download the `.zip` below.
-            2. **Unzip it.** Browsers load a folder, not an archive, and this is
-               the step people miss.
+            2. **Unzip it to a local folder such as `C:\Extensions\`** — not
+               under OneDrive, Desktop, Documents or Downloads. Browsers load a
+               folder, not an archive, and they re-read that folder on every
+               start, so leave it where you put it.
             3. Open `chrome://extensions` (Chrome) or `edge://extensions`
                (Edge) and turn on **Developer mode**.
             4. Click **Load unpacked** and select the **unzipped folder** —
                the one that directly contains `manifest.json`.
             5. Click the toolbar icon → **Open converter workspace**.
 
-            If you see *"Manifest file is missing or unreadable"*, the selected
-            folder is the wrong one: pick the folder that has `manifest.json`
-            in it, not the folder containing that folder, and not the source
-            code downloaded from the green **Code** button — the source has to
-            be built first and this package is that build.
+            `INSTALL-FIRST.txt` at the top of the archive repeats all of this.
+
+            ### If you see "Manifest file is missing or unreadable"
+
+            There are three causes, in the order they actually happen:
+
+            - **The folder is inside OneDrive.** On a work laptop, Desktop,
+              Documents and Downloads are usually synced, and OneDrive replaces
+              files with cloud placeholders. Explorer shows `manifest.json`,
+              but the browser reads extension files directly and cannot trigger
+              the download. Move the folder to `C:\Extensions\` and load again.
+            - **The wrong folder is selected.** Pick the folder that has
+              `manifest.json` directly in it, not the folder containing it.
+            - **It is the source code, not this package.** The green **Code**
+              button gives you TypeScript that has to be built first. This ZIP
+              is that build.
 
             Everything runs locally. No file leaves the machine, and the
             packaged build is checked to contain no remote script, style or

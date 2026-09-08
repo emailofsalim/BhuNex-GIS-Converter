@@ -808,3 +808,183 @@ describe('QA reporting', () => {
     expect(allFeatures(result.sourceDataset).length).toBe(0); // table, not yet geometry
   });
 });
+
+/**
+ * Workspace edits reaching the written file (§25.1, §25.4, §25.5).
+ *
+ * The point of these is the WRITTEN BYTES. Everything else about the attribute
+ * table and the layer manager could be correct and the feature still useless,
+ * because until `settings.edits` existed the conversion re-read the source file
+ * and every edit was discarded silently. So each test here converts with edits
+ * and then parses the output, rather than inspecting a dataset in memory.
+ */
+describe('edits reach the exported file', () => {
+  // A single-layer reader names the layer after the file it came from.
+  const LAYER = 'parcels.geojson';
+
+  const PARCELS = JSON.stringify({
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', properties: { plot: 'A-1', owner: 'Rao', area_m2: 4046.86 }, geometry: { type: 'Point', coordinates: [77.1, 23.2] } },
+      { type: 'Feature', properties: { plot: 'A-2', owner: null, area_m2: 8093.72 }, geometry: { type: 'Point', coordinates: [77.2, 23.3] } },
+    ],
+  });
+
+  async function convertWithEdits(edits: any[], target = 'geojson') {
+    const result = await convert({
+      input: input('parcels.geojson', PARCELS),
+      targetFormatId: target,
+      settings: { precision: FULL_PRECISION, runQa: false, edits },
+    });
+    return result;
+  }
+
+  it('writes a calculated column into the output file', async () => {
+    const result = await convertWithEdits([
+      { kind: 'add-field', layer: LAYER, field: { name: 'area_ha', type: 'number' } },
+      { kind: 'calculate', layer: LAYER, field: 'area_ha', expression: 'round(area_m2 / 10000, 4)' },
+    ]);
+
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    expect(written.features[0].properties.area_ha).toBeCloseTo(0.4047, 6);
+    expect(written.features[1].properties.area_ha).toBeCloseTo(0.8094, 6);
+  });
+
+  it('writes a bulk set into the output file', async () => {
+    const result = await convertWithEdits([{ kind: 'set', layer: LAYER, field: 'owner', value: 'State' }]);
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    expect(written.features.map((feature: any) => feature.properties.owner)).toEqual(['State', 'State']);
+  });
+
+  it('writes a renamed field under its new name', async () => {
+    const result = await convertWithEdits([{ kind: 'rename-field', layer: LAYER, field: 'owner', newName: 'proprietor' }]);
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    expect(written.features[0].properties.proprietor).toBe('Rao');
+    expect(written.features[0].properties.owner).toBeUndefined();
+  });
+
+  it('omits a deleted field from the output entirely', async () => {
+    const result = await convertWithEdits([{ kind: 'delete-field', layer: LAYER, field: 'owner' }]);
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    expect(Object.keys(written.features[0].properties)).not.toContain('owner');
+    expect(written.features[0].properties.plot).toBe('A-1');
+  });
+
+  it('writes a null as null, not as an empty string', async () => {
+    const result = await convertWithEdits([]);
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    expect(written.features[1].properties.owner).toBeNull();
+  });
+
+  it('carries a layer rename into the dataset that gets written', async () => {
+    const result = await convert({
+      input: input('parcels.geojson', PARCELS),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [{ kind: 'layer-rename', layer: LAYER, to: 'Cadastre' }],
+      },
+    });
+    // With one layer the output FILE is still named after the source file —
+    // per-layer naming only uses layer names when there is more than one.
+    expect(result.sourceDataset.layers.map((layer) => layer.name)).toEqual(['Cadastre']);
+  });
+
+  it('splits one layer into one output file per part, nested under the original (R16)', async () => {
+    const blocks = JSON.stringify({
+      type: 'FeatureCollection',
+      features: [
+        { type: 'Feature', properties: { block: 'A', plot: 'A-1' }, geometry: { type: 'Point', coordinates: [77.1, 23.2] } },
+        { type: 'Feature', properties: { block: 'B', plot: 'B-1' }, geometry: { type: 'Point', coordinates: [77.2, 23.3] } },
+        { type: 'Feature', properties: { block: 'A', plot: 'A-2' }, geometry: { type: 'Point', coordinates: [77.3, 23.4] } },
+      ],
+    });
+
+    const result = await convert({
+      input: input('parcels.geojson', blocks),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        layout: 'per-layer',
+        edits: [{ kind: 'layer-split', layer: LAYER, by: { kind: 'field', field: 'block' } }],
+      },
+    });
+
+    // Two real files, in a folder named for the layer they came from. A
+    // multi-file delivery is packaged as one ZIP, so the parts are read back
+    // out of it rather than off `outputs`.
+    expect(result.tree).toEqual(['parcels.geojson/A.geojson', 'parcels.geojson/B.geojson']);
+
+    const entries = await readZip(result.outputs[0].bytes);
+    expect(entries.map((entry) => entry.name).sort()).toEqual([
+      'parcels.geojson/A.geojson',
+      'parcels.geojson/B.geojson',
+    ]);
+
+    const blockA = JSON.parse(decoder.decode(entries.find((entry) => entry.name.endsWith('A.geojson'))!.bytes));
+    expect(blockA.features.map((feature: any) => feature.properties.plot)).toEqual(['A-1', 'A-2']);
+
+    const blockB = JSON.parse(decoder.decode(entries.find((entry) => entry.name.endsWith('B.geojson'))!.bytes));
+    expect(blockB.features.map((feature: any) => feature.properties.plot)).toEqual(['B-1']);
+  });
+
+  it('records every applied edit in the conversion warnings, so the log can show them', async () => {
+    const result = await convertWithEdits([{ kind: 'set', layer: LAYER, field: 'owner', value: 'State' }]);
+    const applied = result.warnings.filter((warning) => warning.code === 'edit-applied');
+    expect(applied).toHaveLength(1);
+    expect(applied[0].message).toContain('Set "owner" on parcels.geojson');
+  });
+
+  it('refuses the whole conversion when one edit cannot be applied', async () => {
+    // Writing a file carrying two of three edits would match no state the user
+    // has seen, and nothing downstream would report which one is missing.
+    await expect(
+      convertWithEdits([
+        { kind: 'set', layer: LAYER, field: 'owner', value: 'State' },
+        { kind: 'calculate', layer: LAYER, field: 'area_m2', expression: 'nosuchfield * 2' },
+      ])
+    ).rejects.toThrow(ConversionError);
+  });
+
+  it('names the edit that failed and how many had already applied', async () => {
+    try {
+      await convertWithEdits([
+        { kind: 'set', layer: LAYER, field: 'owner', value: 'State' },
+        { kind: 'delete-field', layer: LAYER, field: 'nosuch' },
+      ]);
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      const conversion = error as ConversionError;
+      expect(conversion.what).toContain('Edit 2 of 2');
+      expect(conversion.why).toContain('1 earlier edit(s) applied cleanly');
+    }
+  });
+
+  it('refuses an edit on a protected layer', async () => {
+    await expect(
+      convert({
+        input: input('parcels.geojson', PARCELS),
+        targetFormatId: 'geojson',
+        settings: {
+          precision: FULL_PRECISION,
+          runQa: false,
+          protectedLayers: [LAYER],
+          edits: [{ kind: 'set', layer: LAYER, field: 'owner', value: 'State' }],
+        },
+      })
+    ).rejects.toThrow(/protected/);
+  });
+
+  it('reports fidelity for the edited data, not the file as it arrived', async () => {
+    // The prediction runs after the replay, so a field added in the workspace is
+    // counted among the attributes the target has to carry.
+    const result = await convertWithEdits([
+      { kind: 'add-field', layer: LAYER, field: { name: 'surveyed_by', type: 'string' }, initialValue: 'MSA' },
+    ]);
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    expect(written.features[0].properties.surveyed_by).toBe('MSA');
+    expect(result.qa).toBeDefined();
+  });
+});
