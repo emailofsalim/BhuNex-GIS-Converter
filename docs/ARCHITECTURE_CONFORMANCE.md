@@ -17,12 +17,13 @@ Every "Met" claim below was checked against the code, not assumed.
 
 | | Rules |
 |---|---|
-| **Met** | 37 of 40 |
+| **Met** | 38 of 40 |
 | **Met, different naming** | 2 (RULE 04 output path, §2 folder names) |
-| **Gap** | 1 — RULE 32 |
+| **Gap** | 0 |
 
-Three of the four gaps found in the first audit are now closed; the remaining
-one is listed at the end and tracked in `BUILD_STATE.md`.
+All four gaps found in the first audit are closed. What closing the last one
+took is at the end, because the shape of the fix matters more than the fact of
+it.
 
 ---
 
@@ -136,6 +137,7 @@ operation returns a plausible wrong answer in place of a refusal.
 
 | Rule | State | Evidence |
 |---|---|---|
+| 32 No giant files | **Met** | `workspace/main.ts` is 476 lines; the largest workspace module is 503. See below. |
 | §31 New modules without rewriting | **Met** | A format is added by registering a reader and a writer; the pipeline and the UI pick it up. |
 | §32 Registries | **Met** | `core/registry.ts` is the capability registry, and `docs/FORMAT_MATRIX.md` is generated from it — CI fails if they disagree, so the support table cannot drift from the truth. |
 | §33 Execution strategy by workload | **Met** | Under 2 MB runs inline; larger goes to a worker. DWG stays on the main thread because native messaging is unreachable from a worker. |
@@ -175,19 +177,68 @@ pay for itself at the sizes this tool sees. This is what §25 is asking for.
 
 ---
 
-## The remaining gap
+## The last gap, and what closing it needed
 
 ### RULE 32, §42 — no giant files
 
-`src/workspace/main.ts` is **4,609 lines**. The specification names this exact
-case ("do not create one giant popup.ts"), and it is the one rule this codebase
-clearly breaks.
+`src/workspace/main.ts` was **4,684 lines**. The specification names this exact
+case ("do not create one giant popup.ts"). It is now **476**, and the panels it
+used to contain are seventeen modules under `workspace/`, none over 503 lines.
 
-Nothing computational lives there — it is entirely UI wiring, so RULES 09–11
-still hold — but it is too large to navigate.
+| | Before | After |
+|---|---|---|
+| largest workspace file | 4,684 lines | **503** (`panels/attributes.ts`) |
+| `main.ts` | 4,684 lines | **476** — imports, five render functions, `wire`, `boot` |
+| modules | 1 | 20 |
 
-**Fix:** split by panel into `workspace/panels/*.ts`, leaving `main.ts` as the
-wiring.
+Tests were unchanged and all 773 still pass, which is the only evidence that a
+move of this size did not change behaviour.
+
+**Two problems had to be solved first, and neither is cosmetic.**
+
+#### The dependency cycle
+
+`main.ts` builds the page, so it imports every panel. Every panel changes
+something and needs the page redrawn, so it would import `render` back out of
+`main.ts` — a cycle in every direction at once. Bundlers do resolve cycles of
+hoisted function declarations, but "it happens to work" is not an architecture:
+the failure mode is a module that initialises half-way and an `undefined is not
+a function` at the first click.
+
+`workspace/host.ts` inverts it. Panels depend on a small interface that depends
+on nothing; `main.ts` fills it in at `boot()` before the first render. The graph
+is a DAG and RULE 41 holds — no panel reaches up into the shell.
+
+Its defaults **throw** rather than no-op. A no-op default turns "the shell was
+never wired" into a button that silently does nothing, which is the hardest
+class of UI bug to find because there is no error and the code that failed is
+not the code that looks wrong.
+
+#### The shared view state
+
+Eight values are genuinely shared: the three canvases, the vertex selection and
+edit target, the palette, and the layer list's filter and ticks. An exported
+`let` is a live binding a reader sees but **cannot assign**, so splitting the
+file would have turned eight variables into either sixteen accessors or a silent
+bug.
+
+`workspace/ui-state.ts` holds them in one named object. This is not RULE 24
+being bent: none of it survives a reload or reaches the worker, a canvas cannot
+be serialised, and a text filter is not worth a store round trip per keystroke.
+Different state, its own named owner — and every use site reads `ui.something`,
+so nothing looks local that is not.
+
+#### One defect the split exposed
+
+Two functions declared a local `const preview` while a module-level `preview`
+was in scope. Nothing was wrong — the shadow was deliberate and worked — but it
+meant no mechanical rename could be trusted, and TypeScript proved it: renaming
+the module-level canvases to `previewCanvas`, `dualCanvas` and `editCanvas`
+first turned any mistake into a type error rather than a working program that
+did the wrong thing.
+
+That is the general lesson of the move. Every step was made verifiable by the
+compiler before it was made, rather than checked by reading afterwards.
 
 ---
 
