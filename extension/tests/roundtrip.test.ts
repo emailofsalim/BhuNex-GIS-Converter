@@ -1219,6 +1219,73 @@ describe('edits reach the exported file', () => {
     }
   });
 
+  /**
+   * Reprojecting a raster's PIXELS, not just its label (spec §16).
+   *
+   * The bug these exist for: the pipeline used to reproject every vector layer,
+   * leave the raster's pixels alone, and relabel the dataset with the target
+   * CRS. The output claimed UTM while its pixels sat on the grid they arrived
+   * on — a file that opens, draws, and is a few hundred kilometres from where
+   * it says it is. Far enough to look like a different dataset, which is why
+   * nobody reported it.
+   */
+  it('moves a raster’s pixels onto a grid in the target CRS', async () => {
+    // The fixture is at 412000E, 2591000N — UTM 43N. Reprojected to WGS 84 the
+    // origin must become degrees, not stay in the hundreds of thousands.
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'asciigrid',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        sourceCrs: crsFromEpsg(32643),
+        targetCrs: crsFromEpsg(4326),
+      },
+    });
+
+    const text = decoder.decode(result.outputs[0].bytes);
+    const corner = Number(/xllcorner\s+([-\d.]+)/.exec(text)?.[1]);
+    expect(Number.isFinite(corner)).toBe(true);
+    // Longitude near 75-78 degrees for UTM 43N, not 412000.
+    expect(Math.abs(corner)).toBeLessThan(180);
+  });
+
+  it('does not warn that the raster was left behind once it has been warped', () => {
+    // A correct file carrying a warning saying it is wrong is worse than no
+    // warning: it teaches the reader to ignore the warnings that matter.
+    return convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'asciigrid',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        sourceCrs: crsFromEpsg(32643),
+        targetCrs: crsFromEpsg(4326),
+      },
+    }).then((result) => {
+      expect(result.warnings.some((w) => w.code === 'RASTER_NOT_REPROJECTED')).toBe(false);
+      expect(result.warnings.some((w) => w.code === 'CRS_TRANSFORMED')).toBe(true);
+    });
+  });
+
+  it('keeps the no-data hole a hole rather than blending it away', async () => {
+    // The source has one no-data cell. Bilinear across it would ramp gently
+    // into the hole and produce ground that was never surveyed.
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'asciigrid',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        sourceCrs: crsFromEpsg(32643),
+        targetCrs: crsFromEpsg(4326),
+      },
+    });
+
+    const text = decoder.decode(result.outputs[0].bytes);
+    expect(text).toContain('-9999');
+  });
+
   it('reports fidelity for the edited data, not the file as it arrived', async () => {
     // The prediction runs after the replay, so a field added in the workspace is
     // counted among the attributes the target has to carry.
