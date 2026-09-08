@@ -9,7 +9,23 @@
  * and show the first-run page after install.
  */
 
-const WORKSPACE_PATH = 'src/workspace/index.html';
+/**
+ * Where the workspace page lives, taken from the manifest rather than written
+ * out here.
+ *
+ * There are two manifests, and they disagree on this path DELIBERATELY. The one
+ * inside `dist/` says `src/workspace/index.html`, because that is where the page
+ * sits relative to `dist/`. The one at the repository root says
+ * `dist/src/workspace/index.html`, because loading the repository root as an
+ * unpacked extension is the whole point of it existing — it is what lets someone
+ * extract a download and select the folder, with no step into a subdirectory to
+ * get wrong.
+ *
+ * A hardcoded path here would be correct for exactly one of those and would
+ * open a blank tab under the other. `getManifest()` is the same value the
+ * browser resolved the extension with, so it cannot be the wrong one.
+ */
+const WORKSPACE_PATH = chrome.runtime.getManifest().options_page ?? 'src/workspace/index.html';
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   // The side panel opens from the toolbar icon without a separate click target.

@@ -41,8 +41,8 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 A **Chrome Manifest V3 extension**. The same package runs in **Google Chrome and
 Microsoft Edge** — both are Chromium, and nothing changes between them.
 
-**The built extension is in this repository, at [`dist/`](dist).** No Node, no
-npm, no build step. Downloading this repo and loading `dist/` is all it takes.
+**The built extension is in this repository, and the repository root is itself a
+loadable extension.** No Node, no npm, no build step.
 
 ### From the repository
 
@@ -52,12 +52,11 @@ npm, no build step. Downloading this repo and loading `dist/` is all it takes.
    managed laptop OneDrive turns the files into cloud placeholders the browser
    cannot read.
 3. `chrome://extensions` or `edge://extensions` → turn on **Developer mode**.
-4. **Load unpacked** → select the **`dist`** folder inside what you extracted.
+4. **Load unpacked** → select the folder you just extracted.
 5. Toolbar icon → **Open converter workspace**.
 
-> **Select `dist/`, not the repository root and not `extension/`.** The root has
-> no `manifest.json`, and `extension/` is TypeScript source. Both produce
-> *"Manifest file is missing or unreadable"*.
+That is the whole install. Selecting `dist/` inside it works too — it carries
+its own manifest — so there is no wrong folder to pick.
 
 ### From a release
 
@@ -247,7 +246,8 @@ minimal.
 ## Layout
 
 ```
-dist/           THE BUILT EXTENSION — load this folder in the browser
+manifest.json   generated — makes the repository root itself loadable
+dist/           the built extension (its own manifest, for the store ZIP)
 dist-zip/       the packaged archive — upload this to the stores
 extension/src/
   core/       CIR, format registry, detector, units, geometry, precision,

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite build --watch --mode development",
-    "build": "vite build",
+    "build": "vite build && node scripts/write-root-manifest.mjs",
     "package": "node scripts/package-extension.mjs && node scripts/verify-package.mjs",
     "docs": "node --experimental-strip-types scripts/format-matrix.mjs",
     "docs:check": "node --experimental-strip-types scripts/format-matrix.mjs --check",
@@ -18,7 +18,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run lint && npm run test && npm run build:store && npm run build:check",
-    "build:store": "STORE_BUILD=1 vite build",
+    "build:store": "STORE_BUILD=1 vite build && node scripts/write-root-manifest.mjs",
     "store:check": "node scripts/assert-store-ready.mjs",
     "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs && node scripts/verify-package.mjs",
     "assets": "node scripts/make-store-assets.mjs",

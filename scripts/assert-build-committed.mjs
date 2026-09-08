@@ -48,7 +48,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,8 +92,30 @@ try {
     .filter((name) => committedFiles.includes(name))
     .filter((name) => !readFileSync(join(fresh, name)).equals(readFileSync(join(committed, name))));
 
-  if (missing.length === 0 && extra.length === 0 && differing.length === 0) {
-    console.log(`Committed build is current — ${committedFiles.length} files match a fresh build exactly.`);
+  // The ROOT manifest is generated from extension/manifest.json too, and it is
+  // the file that makes the repository root loadable. Left to drift, the
+  // extension still loads and the toolbar button opens a blank tab — a failure
+  // with no error attached, which is the kind worth a check.
+  const rootManifest = resolve(root, 'manifest.json');
+  const expectedRoot = execFileSync('node', [resolve(root, 'scripts/write-root-manifest.mjs')], {
+    cwd: root,
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, ROOT_MANIFEST_OUT: join(fresh, 'root-manifest.json') },
+  });
+  void expectedRoot;
+
+  let rootDiffers = false;
+  try {
+    rootDiffers = !readFileSync(rootManifest).equals(readFileSync(join(fresh, 'root-manifest.json')));
+  } catch {
+    rootDiffers = true;
+  }
+
+  if (missing.length === 0 && extra.length === 0 && differing.length === 0 && !rootDiffers) {
+    console.log(
+      `Committed build is current — ${committedFiles.length} files match a fresh build exactly, ` +
+        'and the root manifest matches what extension/manifest.json generates.'
+    );
     process.exit(0);
   }
 
@@ -101,6 +123,7 @@ try {
   for (const name of missing) console.error(`  missing from dist/   ${name}`);
   for (const name of extra) console.error(`  should not be there  ${name}`);
   for (const name of differing) console.error(`  differs              ${name}`);
+  if (rootDiffers) console.error('  differs              manifest.json (repository root — regenerated from extension/manifest.json)');
   console.error(
     '\nThe extension people download is therefore not the extension this source' +
       '\ndescribes. Run:\n\n  npm run build:store && npm run package\n\nand commit dist/ and dist-zip/ with your change.'

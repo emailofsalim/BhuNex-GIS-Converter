@@ -8,7 +8,10 @@
 
 import { checkNativeHealth, NATIVE_STATUS_LABEL } from '../adapters/native-messaging/client';
 
-const WORKSPACE_PATH = 'src/workspace/index.html';
+// From the manifest, not written out here: the root manifest and the one in
+// dist/ point at this page from different depths, and only the browser knows
+// which one it loaded. See the note in background/service-worker.ts.
+const WORKSPACE_PATH = chrome.runtime.getManifest().options_page ?? 'src/workspace/index.html';
 
 document.getElementById('openWorkspace')?.addEventListener('click', async () => {
   await chrome.tabs.create({ url: chrome.runtime.getURL(WORKSPACE_PATH) });
