@@ -32,6 +32,7 @@
 import type { CommandPalette } from '../ui/command-palette';
 import type { DualCanvas } from '../ui/dual-canvas';
 import type { EditCanvas, EditTarget } from '../ui/edit-canvas';
+import type { MeasureCanvas } from '../ui/measure-canvas';
 import type { PreviewCanvas } from '../ui/preview';
 import type { VertexRef } from '../core/vertex-edit';
 
@@ -46,6 +47,8 @@ export interface UiState {
   dualCanvas: DualCanvas | null;
   /** The vertex-editing interaction layer, drawn over `previewCanvas`. */
   editCanvas: EditCanvas | null;
+  /** The measuring interaction layer, drawn over `previewCanvas`. */
+  measureCanvas: MeasureCanvas | null;
   /** Vertices currently selected in the editor. */
   editSelection: VertexRef[];
   /** The feature being edited: which layer, which index. */
@@ -60,6 +63,7 @@ export const ui: UiState = {
   previewCanvas: null,
   dualCanvas: null,
   editCanvas: null,
+  measureCanvas: null,
   editSelection: [],
   editTarget: null,
   palette: null,

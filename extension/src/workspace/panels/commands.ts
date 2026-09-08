@@ -128,6 +128,17 @@ export function buildCommands(): Command[] {
   });
 
   commands.push({
+    id: 'measure',
+    title: 'Measure on the map',
+    group: 'Edit',
+    keywords: ['measure', 'distance', 'length', 'area', 'bearing', 'azimuth', 'tape', 'chainage', 'perimeter'],
+    detail: 'Click a run of points for its length, legs and bearings, or close a ring for its area. The CRS decides whether the arithmetic is geodesic or planar, and the panel says which it used.',
+    enabled: Boolean(item?.dataset),
+    disabledReason: 'Select a queued file first.',
+    run: () => host.showInspectorTab('preview'),
+  });
+
+  commands.push({
     id: 'geometry-tools',
     title: 'Geometry tools',
     group: 'Edit',

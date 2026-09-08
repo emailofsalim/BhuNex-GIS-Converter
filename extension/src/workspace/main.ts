@@ -36,6 +36,7 @@ import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
 import { editTab, renderEdit, updateEditBar } from './panels/edit-tab';
 import { renderFormats } from './panels/formats';
+import { renderMeasure, stopMeasuring, updateMeasureBar, wireMeasureBar } from './panels/measure';
 import { healthPanel } from './panels/health';
 import { historyPanel, stepHistory } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
@@ -80,6 +81,10 @@ function render(): void {
   // Leaving the Edit tab turns editing off, so a stray Delete on another tab
   // cannot reach a vertex.
   if (state.inspectorTab !== 'edit') ui.editCanvas?.setEnabled(false);
+  // Same rule for measuring: leaving the tab that owns a tool turns the tool
+  // off, so a click on another tab's canvas cannot land a stray point.
+  if (state.inspectorTab !== 'preview') stopMeasuring();
+  updateMeasureBar(selected ?? undefined);
   $('compareWrap').classList.toggle('hidden', state.inspectorTab !== 'compare' || !selected);
 }
 
@@ -123,6 +128,10 @@ function renderInspector(): void {
       break;
     case 'preview':
       renderPreview(item);
+      // Measuring lives on the Preview tab because that is where the map is;
+      // giving it a tab of its own would mean two canvases showing the same
+      // data with different tools on them.
+      renderMeasure(item);
       break;
     case 'edit':
       body.append(...editTab(item));
@@ -448,6 +457,8 @@ function wire(): void {
       ui.palette.open(buildCommands());
     }
   });
+
+  wireMeasureBar();
 
   // The format registry drives even the drop-zone hint, so it can never drift
   // from what the engines actually support.

@@ -139,6 +139,9 @@ export function renderEdit(item: QueueItem): void {
   }
 
   void item;
+  // `renderPreview` runs first and resets the shared overlay hook, so the
+  // editor takes it back here rather than only in its constructor.
+  ui.editCanvas.reattach();
   if (ui.editTarget) ui.editCanvas.setTarget(ui.editTarget);
   updateEditBar();
 }

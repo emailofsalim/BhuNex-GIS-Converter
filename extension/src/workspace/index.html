@@ -80,6 +80,17 @@
               <label class="edit__snap"><input type="checkbox" id="editSnap" /> Snap</label>
               <span class="edit__readout" id="editReadout"></span>
             </div>
+            <!-- Measuring on the canvas (spec §26.1). The arithmetic is in
+                 core/measure.ts, which picks geodesic or planar from the CRS —
+                 nothing here computes a length. -->
+            <div class="edit__bar hidden" id="measureBar">
+              <button class="btn btn--ghost" id="measureDistance" title="Measure a distance or a run of legs">Distance</button>
+              <button class="btn btn--ghost" id="measureArea" title="Measure an enclosed area">Area</button>
+              <button class="btn btn--ghost" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
+              <span class="edit__hint">click to add a point · double-click or Esc to finish · Backspace undoes one</span>
+              <span class="topbar__spacer"></span>
+              <span class="edit__readout" id="measureReadout"></span>
+            </div>
             <div class="preview__overlay">
               <span class="preview__readout" id="readout">—</span>
               <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
