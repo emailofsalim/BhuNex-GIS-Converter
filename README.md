@@ -150,7 +150,7 @@ download anything.
 
 ## Beyond converting
 
-Four things the tool does that a format converter normally does not.
+Six things the tool does that a format converter normally does not.
 
 **It tells you the cost before you pay it.** Every output format is graded
 against *your* data across eleven axes — geometry, attributes, CRS, Z, style,
@@ -190,6 +190,31 @@ log with any unlogged gap or overlapping record flagged beside it. Every value i
 escaped, and anything credential-shaped is withheld and reported: a KMZ gets
 emailed around.
 
+**It edits, and the edits reach the file.** An attribute table with a field
+calculator, a layer manager, a vertex editor on the canvas, and sixteen geometry
+operations — buffer, offset, union, intersection, difference, symmetric
+difference, dissolve, clip, erase, convex hull, centroid, envelope, split by
+line, line merge, explode and multipart. Every one is previewed before it
+commits; the geometry ones are drawn over the source, because a dissolve on the
+wrong field and one on the right field both report "1,240 features → 1" and only
+the shape tells them apart.
+
+The part that makes this real rather than decorative: the workspace holds a
+5,000-feature preview, so an edit is stored as an INSTRUCTION and re-planned
+against the whole file when you convert. A bulk set reaches all 40,000 parcels,
+not the 5,000 on screen — and a convex hull is computed over all of them, which
+is a different polygon rather than a smaller one.
+
+**It measures, and says how.** Click a run of points for its length, its legs
+and their bearings in DMS and quadrant form; close a ring for its area and
+perimeter. The CRS decides whether the arithmetic is geodesic or planar and the
+panel prints which it used, always — a degree of longitude is 111.3 km at the
+equator and 102.5 km at 23°N, so a tool that treats degrees as a plane is wrong
+by a factor that grows with latitude and looks entirely reasonable. Buffer and
+offset go further and **refuse** on a geographic CRS: a "10 metre" setback there
+is about 1,100 km, and unlike a wrong length, a wrong polygon does not invite a
+sanity check.
+
 Ctrl/Cmd+K opens a command palette over all of it, so the first screen stays
 minimal.
 
@@ -201,15 +226,18 @@ minimal.
 extension/src/
   core/       CIR, format registry, detector, units, geometry, precision,
               layout (delivery structure), predict (fidelity), presets,
-              spatial index, pipeline
+              spatial index, expression parser, attributes, layers, edits,
+              measure, polygon boolean, buffer, geometry operations, pipeline
   crs/        projections, bundled EPSG subset, WKT/PRJ, transform safety
   engines/    vector/ cad/ raster/ pointcloud/ survey/ archives/
   qa/         defect catalogue, topology rules, preview-and-apply repair,
               burn-in, label placement, CAD polygonisation, the fidelity
               re-import comparison and the measured source-vs-output diff
-  ui/         canvas preview and the command palette
-  workers/    off-thread conversion
-  workspace/  the full-page professional workspace
+  ui/         canvas preview, the editing, measuring and comparison layers,
+              and the command palette
+  workers/    off-thread conversion: a worker pool, cancellation by
+              termination, and progress reported as a stage
+  workspace/  the full-page workspace — a shell plus one module per panel
   sidepanel/  quick drop + queue
   popup/      launcher
 native-host/  Python DWG helper + installer

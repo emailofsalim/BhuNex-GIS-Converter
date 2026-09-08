@@ -1188,65 +1188,136 @@ The branch for all work is claude/gis-cad-chrome-converter-hk8uwg.
 ================================================================================
 Every section of the supplied Master Build Instructions, and where it lives now.
 
- master section                     here                          status
- ---------------------------------- ----------------------------- ---------
-  1 core application architecture    2, 3, 22                      BUILT
-  2 universal internal data model    3 (CIR), 22.1 (provenance)    PARTIAL
-  3 maximum import support           4.3 target matrix             PARTIAL
-  4 maximum export support           4.3 target matrix             PARTIAL
-  5 interoperability matrix          22                            BUILT
-  6 CRS and geodesy intelligence     6                             PARTIAL
-  7 smart geometry QA engine         23                            PARTIAL
-  8 smart topology engine            23.2                          SPECIFIED
-  9 advanced geometry repair         24                            PARTIAL
- 10 smart vertex editor              25                            SPECIFIED
- 11 overlap/gap intelligence         23.3                          SPECIFIED
- 12 point/text burn-in               27                            SPECIFIED
- 13 intelligent label placement      27.3                          SPECIFIED
- 14 CAD intelligence                 9.1, 9.2, 27.4                PARTIAL
- 15 CAD <-> GIS intelligence         27.4                          PARTIAL
- 16 raster intelligence              9.7, 9.8, 28.2                PARTIAL
- 17 PDF / image map intelligence     28.3                          SPECIFIED
- 18 point cloud / LiDAR              9.4, 26.3                     PARTIAL
- 19 survey intelligence              9.6, 26.4                     PARTIAL
- 20 mining intelligence              9.6, 28.1                     PARTIAL
- 21 styled KML/KMZ engine            28                            SPECIFIED
- 22 smart map canvas                 30                            SPECIFIED
- 23 visual diff mode                 30.2                          SPECIFIED
- 24 minimal UI / powerful UX         11, 30.3                      PARTIAL
- 25 smart conversion center          22.2                          PARTIAL
- 26 batch conversion                 12.1                          BUILT
- 27 automation / workflow builder    31.2                          SPECIFIED
- 28 smart presets                    31.3                          SPECIFIED
- 29 intelligent error handling       10.6                          BUILT
- 30 undo / version history           31.1                          SPECIFIED
- 31 project file                     31.4                          SPECIFIED
- 32 precision and tolerance engine   8, R21                        PARTIAL
- 33 performance requirements         14                            BUILT
- 34 security / privacy               15, R23                       BUILT
- 35 export validation                22.3, R22                     PARTIAL
- 36 export preview                   30.1                          SPECIFIED
- 37 professional reporting           12.3, 22.4                    PARTIAL
- 38 smart intelligence layer         29                            SPECIFIED
- 39 spatial index / performance      14.5                          SPECIFIED
- 40 file drop experience             5.1, 11.3                     BUILT
- 41 layer management                 25.4                          BUILT
- 42 attribute table                  25.5                          SPECIFIED
- 43 measurement tools                26.1                          SPECIFIED
- 44 advanced geometry operations     26.2                          SPECIFIED
- 45 smart data normalization         7, 9.6                        PARTIAL
- 46 georeferencing control panel     28.4                          PARTIAL
- 47 KML/KMZ template system          28.5                          SPECIFIED
- 48 extension navigation             30.3                          PARTIAL
- 49 command palette                  31.5                          SPECIFIED
- 50 settings                         11.9                          PARTIAL
- 51 automatic project health         29.2                          SPECIFIED
- 52 fix all safe issues              24.3                          SPECIFIED
- 53 interoperability design rule     0.4                           BUILT
- 54 testing requirements             16                            BUILT
- 55 acceptance criteria              19.1                          -
- 56 development priority             18                            -
- 57 non-negotiable rules             1 (R17-R24)                   BUILT
+STATUS VOCABULARY. Four values, and the third one exists because the two-value
+version of this table was wrong for four months:
+
+  BUILT    built, tested, and reachable from the workspace
+  ENGINE   engine built and tested, NOT yet reachable from the workspace.
+           This is not "done". A capability nobody can click is a capability
+           the owner does not have, and calling it BUILT is the same lie in
+           the other direction.
+  PARTIAL  some of it built; the row says which part is missing
+  NONE     not started
+
+Re-verified against the tree on 2026-09-08 by opening every module named in the
+evidence column. The previous version of this table listed 24 shipped features
+as SPECIFIED - the topology engine, the vertex editor, burn-in, label placement,
+KML templates, the export preview, visual diff, workflows, presets, history, the
+project file, the command palette, project health, the attribute table,
+measurement, geometry operations, the spatial index and fix-all-safe among them.
+
+That is an R1 violation living in the repository: a support claim that does not
+match the code. It was stale because the table was hand-maintained and the code
+was not. Anything in the evidence column can be checked with `wc -l` and a read;
+if this table and the tree ever disagree again, THE TREE WINS - run
+`npm run verify`, then correct the table in the same commit.
+
+ master section                     here          status   evidence
+ ---------------------------------- ------------- -------- ---------------------------------------
+  1 core application architecture    2, 3, 22      BUILT    core/pipeline.ts, core/registry.ts
+  2 universal internal data model    3, 22.1       PARTIAL  core/cir.ts. Provenance: source file /
+                                                            layer / entity survive a round trip;
+                                                            original coordinates alongside the
+                                                            transformed ones, and the per-object
+                                                            transformation log, are NOT built.
+  3 maximum import support           4.3           PARTIAL  22 formats read directly, 5 partially,
+                                                            8 adapter-only (FGDB, FlatGeobuf, GPKG,
+                                                            GeoParquet, DWG, DGN, E57, LAZ).
+                                                            docs/FORMAT_MATRIX.md is generated from
+                                                            core/registry.ts and CI fails if they
+                                                            disagree, so that count cannot drift.
+  4 maximum export support           4.3           PARTIAL  same matrix, writer column
+  5 interoperability matrix          22            BUILT    docs/FORMAT_MATRIX.md (generated)
+  6 CRS and geodesy intelligence     6             PARTIAL  crs/epsg.ts, crs/transform.ts, Vincenty
+                                                            anchored to published vectors. Grid-
+                                                            shift (NTv2) files are NOT bundled.
+  7 smart geometry QA engine         23            BUILT    qa/defects.ts (11 relational detectors)
+  8 smart topology engine            23.2          BUILT    qa/topology.ts, qa/rules.ts
+  9 advanced geometry repair         24            PARTIAL  qa/repair.ts - plan/apply/undo, protected
+                                                            layers. Remaining repair operations of
+                                                            24.2 are not all implemented.
+ 10 smart vertex editor              25            BUILT    core/vertex-edit.ts, ui/edit-canvas.ts
+ 11 overlap/gap intelligence         23.3          BUILT    qa/defects.ts, core/spatial-index.ts
+ 12 point/text burn-in               27            BUILT    qa/burn-in.ts
+ 13 intelligent label placement      27.3          BUILT    qa/label-placement.ts (pole of
+                                                            inaccessibility, not the centroid)
+ 14 CAD intelligence                 9.1, 27.4     PARTIAL  engines/cad/dxf-read.ts + dxf-write.ts,
+                                                            DWG via the native host. DGN: NONE.
+ 15 CAD <-> GIS intelligence         27.4          BUILT    qa/polygonize.ts, qa/burn-in.ts
+ 16 raster intelligence              9.7, 28.2     PARTIAL  engines/raster/* - GeoTIFF read + write,
+                                                            ASCII Grid, world files. Resampling,
+                                                            reprojection, contours, clip-by-polygon
+                                                            and rasterize/vectorize: NONE.
+ 17 PDF / image map intelligence     28.3          NONE     no PDF code in the tree
+ 18 point cloud / LiDAR              9.4, 26.3     PARTIAL  engines/pointcloud/* - LAS, PLY, PTS,
+                                                            XYZ, decimation. LAZ: honest refusal
+                                                            until a real decoder is bundled.
+ 19 survey intelligence              9.6, 26.4     PARTIAL  engines/survey/schema.ts, core/measure.ts
+ 20 mining intelligence              9.6, 28.1     BUILT    engines/survey/borehole.ts,
+                                                            engines/vector/surpac.ts, kml-templates
+ 21 styled KML/KMZ engine            28            BUILT    engines/vector/kml-templates.ts
+ 22 smart map canvas                 30            BUILT    ui/preview.ts, ui/edit-canvas.ts
+ 23 visual diff mode                 30.2          BUILT    qa/diff.ts, ui/dual-canvas.ts,
+                                                            qa/geometry-overlay.ts
+ 24 minimal UI / powerful UX         11, 30.3      PARTIAL  workspace/ - and workspace/main.ts is
+                                                            4,684 lines, which breaks RULE 32 of
+                                                            the architecture specification
+ 25 smart conversion centre          22.2          BUILT    core/predict.ts (one pass, many targets)
+ 26 batch conversion                 12.1          PARTIAL  core/pipeline.ts isolates errors per
+                                                            file. Pause/resume and retry-failed
+                                                            controls: NONE.
+ 27 automation / workflow builder    31.2          BUILT    core/workflow.ts
+ 28 smart presets                    31.3          BUILT    core/presets.ts (12, guarded)
+ 29 intelligent error handling       10.6          BUILT    core/errors.ts - code/what/why/action
+ 30 undo / version history           31.1          BUILT    core/history.ts
+ 31 project file                     31.4          BUILT    core/project.ts, core/secrets.ts (R23)
+ 32 precision and tolerance engine   8, R21        PARTIAL  core/precision.ts. Every tolerance is a
+                                                            named parameter; a per-format precision
+                                                            policy UI is not built.
+ 33 performance requirements         14            PARTIAL  workers/pool.ts, benchmarks/. The 14.2
+                                                            MEASURED performance test is not
+                                                            written - targets stay unclaimed.
+ 34 security / privacy               15, R23       BUILT    scripts/assert-offline.mjs enforces it;
+                                                            zero runtime dependencies
+ 35 export validation                22.3, R22     PARTIAL  the pipeline re-imports and compares
+                                                            (qa/fidelity.ts). Not every writer has
+                                                            a reader to validate against.
+ 36 export preview                   30.1          BUILT    ui/preview.ts, ui/dual-canvas.ts
+ 37 professional reporting           12.3, 22.4    BUILT    core/report.ts, qa/health.ts
+ 38 smart intelligence layer         29            PARTIAL  core/predict.ts, qa/health.ts. The
+                                                            suggestion engine of 29.1 is not built.
+ 39 spatial index / performance      14.5          BUILT    core/spatial-index.ts, used by
+                                                            qa/defects.ts, qa/rules.ts, qa/burn-in.ts
+ 40 file drop experience             5.1, 11.3     BUILT    core/companions.ts, workspace/
+ 41 layer management                 25.4          BUILT    core/layers.ts, core/edits.ts
+ 42 attribute table                  25.5          BUILT    core/attributes.ts, core/expression.ts
+ 43 measurement tools                26.1          ENGINE   core/measure.ts is complete and tested
+                                                            (Vincenty, CRS-aware). There is no
+                                                            interactive measurement tool on the
+                                                            canvas yet.
+ 44 advanced geometry operations     26.2          ENGINE   core/geometry-ops.ts, polygon-boolean.ts,
+                                                            buffer.ts are complete and tested and
+                                                            IMPORTED NOWHERE. Nothing in the
+                                                            workspace can invoke them.
+ 45 smart data normalization         7, 9.6        PARTIAL  core/units.ts, core/naming.ts,
+                                                            engines/survey/schema.ts
+ 46 georeferencing control panel     28.4          PARTIAL  engines/raster/worldfile.ts, QGIS GCP
+                                                            read. No interactive control panel.
+ 47 KML/KMZ template system          28.5          BUILT    engines/vector/kml-templates.ts (6
+                                                            field-ordering templates + core log)
+ 48 extension navigation             30.3          BUILT    workspace/main.ts tabs, side panel,
+                                                            ui/command-palette.ts
+ 49 command palette                  31.5          BUILT    ui/command-palette.ts (Ctrl/Cmd+K)
+ 50 settings                         11.9          PARTIAL  state/store.ts holds AppSettings; not
+                                                            every engine tolerance is exposed
+ 51 automatic project health         29.2          BUILT    qa/health.ts (7 weighted components)
+ 52 fix all safe issues              24.3          BUILT    qa/repair.ts - only exactly-undoable
+                                                            operations are eligible
+ 53 interoperability design rule     0.4           BUILT    core/cir.ts is the only hub
+ 54 testing requirements             16            BUILT    773 tests across 23 suites
+ 55 acceptance criteria              19.1          -        checklist, not a deliverable
+ 56 development priority             18            -        ordering, not a deliverable
+ 57 non-negotiable rules             1 (R17-R24)   BUILT    each rule cited at its enforcement point
 
 
 ================================================================================

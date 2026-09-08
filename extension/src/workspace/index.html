@@ -54,6 +54,7 @@
             <button class="tab" data-tab="crs" role="tab" aria-selected="false">CRS</button>
             <button class="tab" data-tab="layers" role="tab" aria-selected="false">Layers</button>
             <button class="tab" data-tab="attributes" role="tab" aria-selected="false">Attributes</button>
+            <button class="tab" data-tab="geometry-ops" role="tab" aria-selected="false">Geometry tools</button>
             <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
             <button class="tab" data-tab="edit" role="tab" aria-selected="false">Edit</button>
             <button class="tab" data-tab="metadata" role="tab" aria-selected="false">Source metadata</button>
@@ -78,6 +79,17 @@
               <span class="topbar__spacer"></span>
               <label class="edit__snap"><input type="checkbox" id="editSnap" /> Snap</label>
               <span class="edit__readout" id="editReadout"></span>
+            </div>
+            <!-- Measuring on the canvas (spec §26.1). The arithmetic is in
+                 core/measure.ts, which picks geodesic or planar from the CRS —
+                 nothing here computes a length. -->
+            <div class="edit__bar hidden" id="measureBar">
+              <button class="btn btn--ghost" id="measureDistance" title="Measure a distance or a run of legs">Distance</button>
+              <button class="btn btn--ghost" id="measureArea" title="Measure an enclosed area">Area</button>
+              <button class="btn btn--ghost" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
+              <span class="edit__hint">click to add a point · double-click or Esc to finish · Backspace undoes one</span>
+              <span class="topbar__spacer"></span>
+              <span class="edit__readout" id="measureReadout"></span>
             </div>
             <div class="preview__overlay">
               <span class="preview__readout" id="readout">—</span>

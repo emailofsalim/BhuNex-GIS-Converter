@@ -119,6 +119,18 @@ export class EditCanvas {
     window.addEventListener('keydown', this.onKeyDown);
   }
 
+  /**
+   * Re-claims the canvas's single overlay hook.
+   *
+   * Three tools draw over the preview — this one, the measuring layer and the
+   * geometry planner — and `PreviewCanvas` deliberately has ONE hook rather
+   * than a list, because a list would let a stale tool keep drawing over a tab
+   * it no longer belongs to. Whichever tab is rendering re-claims the hook.
+   */
+  reattach(): void {
+    this.preview.onOverlay = (context, project) => this.draw(context, project);
+  }
+
   /** Turns editing on or off. Off restores plain pan-and-zoom. */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
