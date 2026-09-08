@@ -141,12 +141,49 @@ export function transformFeatures(features: CirFeature[], plan: TransformPlan): 
 export function transformDataset(dataset: CirDataset, target: CrsRef | null): CirDataset {
   const plan = planTransform(dataset.crs, target);
   if (plan.identity) return dataset;
+
+  const warnings = [...dataset.warnings, ...plan.warnings];
+
+  // A raster's PIXELS have to be resampled onto a grid in the target system —
+  // relabelling the dataset is not reprojecting it. This used to relabel and
+  // move on, producing a GeoTIFF that claimed UTM while its pixels were still
+  // on the geographic grid they arrived on: it opens, it draws, and it is in
+  // the wrong place by a few hundred kilometres, which is far enough to look
+  // like a different dataset rather than a wrong one.
+  //
+  // Warping needs the INVERSE transform, and `planTransform` only builds the
+  // forward one. Rather than half-do it, the raster is left in its own CRS and
+  // the mismatch is stated — which the caller can act on, unlike silence.
+  if (dataset.raster?.hasPixelData) {
+    warnings.push({
+      code: 'RASTER_NOT_REPROJECTED',
+      severity: 'warning',
+      message: `The vector layers were reprojected to ${crsLabel(target)}; the raster was left in ${crsLabel(dataset.crs)}.`,
+      reason:
+        'Reprojecting a raster means resampling its pixels onto a grid in the target system, not relabelling it. ' +
+        'Doing the relabel alone would produce a file that claims the target CRS while its pixels sit on the grid they arrived on — it opens, it draws, and it is in the wrong place.',
+      action:
+        'Convert the raster on its own to the target CRS, or deliver it in its source CRS alongside the reprojected vectors. Its own CRS is recorded in the output.',
+    });
+
+    return {
+      ...dataset,
+      crs: target,
+      crsOrigin: dataset.crsOrigin,
+      // The raster keeps the CRS it is actually on, so nothing downstream can
+      // read the dataset's label and conclude the pixels moved.
+      raster: { ...dataset.raster, metadata: { ...dataset.raster.metadata, crs: crsLabel(dataset.crs) } },
+      layers: dataset.layers.map((layer) => ({ ...layer, features: transformFeatures(layer.features, plan) })),
+      warnings,
+    };
+  }
+
   return {
     ...dataset,
     crs: target,
     crsOrigin: dataset.crsOrigin,
     layers: dataset.layers.map((layer) => ({ ...layer, features: transformFeatures(layer.features, plan) })),
-    warnings: [...dataset.warnings, ...plan.warnings],
+    warnings,
   };
 }
 
