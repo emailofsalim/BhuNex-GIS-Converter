@@ -1394,3 +1394,174 @@ describe('edits reach the exported file', () => {
     expect(result.qa).toBeDefined();
   });
 });
+
+/**
+ * The whole pre-export loop, in one pass: look at it, change it, write it.
+ *
+ * The three capabilities are individually tested elsewhere — the canvas draws,
+ * the vertex editor plans, the writers write — and that is exactly the shape of
+ * failure this guards against. Each piece can be correct while the sequence a
+ * user actually performs is broken, and the way it breaks is silent: the canvas
+ * shows the edit, the conversion succeeds, and the file on disk has the
+ * original coordinate in it because the edit lived only in the preview.
+ */
+describe('see it, edit it, then export it', () => {
+  const LAYER = 'boundary.geojson';
+  const BOUNDARY = JSON.stringify({
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: { plot: 'A-1' },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[77.1, 23.2], [77.2, 23.2], [77.2, 23.3], [77.1, 23.3], [77.1, 23.2]]],
+        },
+      },
+    ],
+  });
+
+  it('carries a moved vertex all the way into the written file', async () => {
+    // The strongest form of "the user can edit before taking output": a
+    // coordinate the user dragged has to be the coordinate in the bytes.
+    const moved = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 1 },
+                  from: [77.2, 23.2],
+                  to: [77.25, 23.21],
+                  distance: 0.05,
+                  description: 'moved 1 vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+
+    const written = JSON.parse(decoder.decode(moved.outputs[0].bytes));
+    const ring = written.features[0].geometry.coordinates[0];
+    expect(ring[1][0]).toBeCloseTo(77.25, 9);
+    expect(ring[1][1]).toBeCloseTo(23.21, 9);
+    // Everything the user did NOT touch has to be untouched.
+    expect(ring[0]).toEqual([77.1, 23.2]);
+    expect(ring[3]).toEqual([77.1, 23.3]);
+  });
+
+  it('keeps the ring closed when the moved vertex is the shared endpoint', async () => {
+    // A polygon's first and last vertex are the same point. Moving one and not
+    // the other opens the ring and produces a file that parses and is not a
+    // polygon — the defect the topology checker would then report on the
+    // user's own edit.
+    const moved = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 0 },
+                  from: [77.1, 23.2],
+                  to: [77.05, 23.15],
+                  distance: 0.05,
+                  description: 'moved the closing vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+
+    const ring = JSON.parse(decoder.decode(moved.outputs[0].bytes)).features[0].geometry.coordinates[0];
+    expect(ring[0]).toEqual(ring[ring.length - 1]);
+    expect(ring[0][0]).toBeCloseTo(77.05, 9);
+  });
+
+  it('reports the edit in the warnings, so the log shows what was changed', async () => {
+    const moved = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 1 },
+                  from: [77.2, 23.2],
+                  to: [77.25, 23.21],
+                  distance: 0.05,
+                  description: 'moved 1 vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+    // An edit that reached the file and left no trace in the record would be
+    // an undocumented change to survey data.
+    expect(moved.warnings.some((entry) => /edit/i.test(entry.code) || /edit/i.test(entry.message))).toBe(true);
+  });
+
+  it('survives the edit through a format change as well as a straight copy', async () => {
+    // The edit is replayed against the full dataset at conversion time, so it
+    // has to hold when the target is not the source format.
+    const toKml = await convert({
+      input: input('boundary.geojson', BOUNDARY),
+      targetFormatId: 'kml',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        edits: [
+          {
+            kind: 'vertices',
+            plan: {
+              operation: 'move',
+              maxDisplacement: 0.05,
+              changes: [
+                {
+                  operation: 'move',
+                  ref: { layer: LAYER, featureIndex: 0, ring: 0, vertex: 1 },
+                  from: [77.2, 23.2],
+                  to: [77.25, 23.21],
+                  distance: 0.05,
+                  description: 'moved 1 vertex',
+                },
+              ],
+            },
+          } as any,
+        ],
+      },
+    });
+    expect(decoder.decode(toKml.outputs[0].bytes)).toContain('77.25');
+  });
+});
