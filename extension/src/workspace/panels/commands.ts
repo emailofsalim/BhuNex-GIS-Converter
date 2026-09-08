@@ -13,7 +13,7 @@ import { exportTargetsFor, isAvailable } from '../../core/registry';
 import { assessHealth } from '../../qa/health';
 import { type AppSettings, store } from '../../state/store';
 import { type Command } from '../../ui/command-palette';
-import { convertAll } from '../conversion';
+import { convertAll, retryFailed, toggleBatchPause } from '../conversion';
 import { $ } from '../dom';
 import { host } from '../host';
 import { updateLinkButton } from './canvas';
@@ -125,6 +125,28 @@ export function buildCommands(): Command[] {
     enabled: Boolean(item?.dataset?.layers?.length),
     disabledReason: item ? 'This file has no vector layers to edit.' : 'Select a queued file first.',
     run: () => host.showInspectorTab('edit'),
+  });
+
+  commands.push({
+    id: 'batch-pause',
+    title: state.batchPaused ? 'Resume the batch' : 'Pause the batch',
+    group: 'Convert',
+    keywords: ['pause', 'resume', 'hold', 'batch', 'stop'],
+    detail: 'Stops the batch starting new files. The one already converting finishes — pausing never throws away work in progress, which is what Cancel is for.',
+    enabled: state.busy,
+    disabledReason: 'No batch is running.',
+    run: () => toggleBatchPause(),
+  });
+
+  commands.push({
+    id: 'batch-retry',
+    title: 'Retry the failed files',
+    group: 'Convert',
+    keywords: ['retry', 'failed', 'again', 'batch', 'rerun'],
+    detail: 'Converts only the files that failed, rather than running the whole batch again.',
+    enabled: !state.busy && state.items.some((candidate) => candidate.status === 'failed'),
+    disabledReason: state.busy ? 'Wait for the batch to finish.' : 'No file in the queue failed.',
+    run: () => void retryFailed(state.settings.runQa),
   });
 
   commands.push({

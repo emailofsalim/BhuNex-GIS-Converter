@@ -25,7 +25,9 @@ import {
   downloadBatchZip,
   downloadSelected,
   filesFromDataTransfer,
+  retryFailed,
   toIngestFile,
+  toggleBatchPause,
 } from './conversion';
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { host, installHost } from './host';
@@ -66,6 +68,19 @@ function render(): void {
   ($('convertQaBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;
   ($('downloadBtn') as HTMLButtonElement).disabled = !selected?.outputs?.length;
   ($('batchZipBtn') as HTMLButtonElement).disabled = !state.items.some((item) => item.status === 'done');
+
+  // Pause is only meaningful while a batch is running, and Retry only once
+  // something has failed — a control that can never do anything is noise, and
+  // a disabled one still asks the reader to work out why.
+  const pause = $('pauseBtn');
+  pause.classList.toggle('hidden', !state.busy);
+  pause.textContent = state.batchPaused ? 'Resume' : 'Pause';
+  pause.classList.toggle('btn--on', state.batchPaused);
+
+  const failedCount = state.items.filter((item) => item.status === 'failed').length;
+  const retry = $('retryBtn');
+  retry.classList.toggle('hidden', failedCount === 0 || state.busy);
+  retry.textContent = `Retry ${failedCount} failed`;
 
   const target = selected?.targetFormatId ?? state.settings.globalTargetFormatId;
   $('targetBadge').textContent = target ? (getFormat(target)?.name ?? target) : 'none selected';
@@ -355,6 +370,8 @@ function wire(): void {
     const item = store.selected();
     if (item) void convertItem(item.id, true);
   });
+  $('pauseBtn').addEventListener('click', toggleBatchPause);
+  $('retryBtn').addEventListener('click', () => void retryFailed(store.get().settings.runQa));
   $('downloadBtn').addEventListener('click', downloadSelected);
   $('batchZipBtn').addEventListener('click', () => void downloadBatchZip());
 

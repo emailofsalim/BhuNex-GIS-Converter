@@ -435,8 +435,29 @@ export async function convertItem(id: string, withQa: boolean): Promise<void> {
   host.render();
 }
 
-export async function convertAll(withQa: boolean): Promise<void> {
-  const pending = store.get().items.filter((item) => item.status === 'ready' || item.status === 'failed' || item.status === 'done');
+/**
+ * Waits while the batch is paused.
+ *
+ * Polled rather than event-driven because the thing being waited on is a
+ * checkbox a person ticks, and 150 ms of latency on resuming a batch is
+ * imperceptible. A subscription would be three more moving parts for that.
+ */
+async function waitWhilePaused(): Promise<void> {
+  while (store.get().batchPaused) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+/**
+ * Converts every file in the queue that is eligible.
+ *
+ * `only` restricts the run to named files, which is what "retry the failures"
+ * is: the same batch machinery over a smaller list, rather than a second code
+ * path that could drift from this one.
+ */
+export async function convertAll(withQa: boolean, only?: string[]): Promise<void> {
+  const eligible = store.get().items.filter((item) => item.status === 'ready' || item.status === 'failed' || item.status === 'done');
+  const pending = only ? eligible.filter((item) => only.includes(item.id)) : eligible;
   if (pending.length === 0) return;
   store.set({ busy: true, progress: 0 });
 
@@ -451,6 +472,9 @@ export async function convertAll(withQa: boolean): Promise<void> {
   const queue = [...pending];
   const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
     for (;;) {
+      // Checked before taking the next file rather than after, so a pause
+      // takes effect on the file it was pressed during, not the one after.
+      await waitWhilePaused();
       const item = queue.shift();
       if (!item) return;
       await convertItem(item.id, withQa);
@@ -460,10 +484,46 @@ export async function convertAll(withQa: boolean): Promise<void> {
   });
   await Promise.all(workers);
 
-  store.set({ busy: false, progress: 1 });
+  store.set({ busy: false, batchPaused: false, progress: 1 });
   const done = store.get().items.filter((item) => item.status === 'done').length;
   const failed = store.get().items.filter((item) => item.status === 'failed').length;
-  store.log(failed > 0 ? 'warn' : 'ok', `Batch finished: ${done} converted, ${failed} failed.`);
+  store.log(
+    failed > 0 ? 'warn' : 'ok',
+    failed > 0
+      ? `Batch finished: ${done} converted, ${failed} failed. Use "Retry failed" to run just those again.`
+      : `Batch finished: ${done} converted, ${failed} failed.`
+  );
+  host.render();
+}
+
+/**
+ * Re-runs only the files that failed.
+ *
+ * Worth its own button because the alternative is running the whole batch
+ * again: on a 200-file job where three failed, that is 197 conversions redone
+ * to fix three, and long enough that people stop using the batch at all.
+ */
+export async function retryFailed(withQa: boolean): Promise<void> {
+  const failed = store.get().items.filter((item) => item.status === 'failed');
+  if (failed.length === 0) {
+    store.log('info', 'Nothing to retry — no file in the queue failed.');
+    host.render();
+    return;
+  }
+  store.log('info', `Retrying ${failed.length} failed file(s).`);
+  await convertAll(withQa, failed.map((item) => item.id));
+}
+
+/** Pauses or resumes a running batch. */
+export function toggleBatchPause(): void {
+  const paused = !store.get().batchPaused;
+  store.set({ batchPaused: paused });
+  store.log(
+    'info',
+    paused
+      ? 'Batch paused. The file already converting will finish; nothing new will start.'
+      : 'Batch resumed.'
+  );
   host.render();
 }
 
