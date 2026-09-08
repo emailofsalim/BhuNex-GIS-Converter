@@ -1071,20 +1071,54 @@ export function booleanOperation(subject: MultiPoly, clip: MultiPoly, operation:
   return { polygons: cleaned.polygons, report: report({ slivers: cleaned.slivers }) };
 }
 
-/** Union of many polygons at once, folded pairwise. */
+/**
+ * Union of many polygons at once.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A BALANCED REDUCTION AND NOT A RUNNING TOTAL
+ *
+ * The obvious loop — `accumulated = union(accumulated, next)` — is QUADRATIC,
+ * and `benchmarks/scaling.bench.ts` measured it rather than leaving it to
+ * intuition: dissolving 32, 64 and 128 adjacent parcels took 0.15 ms, 0.64 ms
+ * and 2.69 ms. Each doubling of the input cost about 4.2x the time.
+ *
+ * The reason is that the accumulator grows. By the last step it carries every
+ * vertex of every polygon merged so far, and unioning that against one more
+ * small piece re-sweeps the whole accumulated boundary. Summing that over n
+ * steps gives O(n²) even though each individual sweep is near-linear.
+ *
+ * Pairing instead — union neighbours, then pairs of pairs, like a merge tree —
+ * keeps both operands about the same size at every step, so the total work is
+ * O(n log n) sweeps over inputs that stay small. It is also what makes buffering
+ * tractable: a buffer folds one piece per segment, so a 256-vertex traverse was
+ * paying the quadratic cost 256 times over.
+ *
+ * The result is identical either way — union is associative — so this is purely
+ * a question of the order the same merges happen in.
+ */
 export function unionAll(polygons: MultiPoly[]): BooleanResult {
   if (polygons.length === 0) return { polygons: [], report: { slivers: 0, droppedZ: false } };
 
-  let accumulated = polygons[0];
   let slivers = 0;
-  let droppedZ = hasZ(polygons[0]);
+  let droppedZ = polygons.some((polygon) => hasZ(polygon));
+  let level = polygons;
 
-  for (let index = 1; index < polygons.length; index++) {
-    const step = booleanOperation(accumulated, polygons[index], 'union');
-    accumulated = step.polygons;
-    slivers += step.report.slivers;
-    droppedZ = droppedZ || step.report.droppedZ;
+  while (level.length > 1) {
+    const merged: MultiPoly[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      if (index + 1 >= level.length) {
+        // An odd one out is carried to the next round rather than folded into
+        // the accumulator, which would reintroduce the growing operand.
+        merged.push(level[index]);
+        continue;
+      }
+      const step = booleanOperation(level[index], level[index + 1], 'union');
+      slivers += step.report.slivers;
+      droppedZ = droppedZ || step.report.droppedZ;
+      merged.push(step.polygons);
+    }
+    level = merged;
   }
 
-  return { polygons: accumulated, report: { slivers, droppedZ } };
+  return { polygons: level[0], report: { slivers, droppedZ } };
 }

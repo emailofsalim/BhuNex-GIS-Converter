@@ -18,7 +18,8 @@ import type { GeometryOverlay } from '../qa/geometry-overlay';
 import type { ProjectHealth } from '../qa/health';
 import type { ConversionReport } from '../core/report';
 import { ConversionError } from '../core/errors';
-import type { TransferableFile, WorkerRequest, WorkerResponse } from './convert.worker';
+import type { TransferableFile, WorkerRequest } from './convert.worker';
+import { recommendedPoolSize, WorkerPool, type JobProgress, type PoolWorker } from './pool';
 
 /** Files under this size are converted inline; a worker hop would cost more. */
 export const WORKER_THRESHOLD_BYTES = 2 * 1024 * 1024;
@@ -64,42 +65,71 @@ export interface ConvertPayload {
   provenance: any;
 }
 
-let worker: Worker | null = null;
+/**
+ * The pool that runs every off-thread job.
+ *
+ * Created lazily and re-created when the size setting changes, so a user who
+ * lowers `parallelJobs` mid-session gets the smaller pool for the next batch
+ * rather than at the next reload.
+ */
+let pool: WorkerPool | null = null;
+let poolSize = 0;
 let sequence = 0;
-const pending = new Map<string, { resolve: (value: any) => void; reject: (error: unknown) => void }>();
 
-function ensureWorker(): Worker {
-  if (worker) return worker;
-  worker = new Worker(new URL('./convert.worker.ts', import.meta.url), { type: 'module' });
-  worker.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
-    const response = event.data;
-    const entry = pending.get(response.id);
-    if (!entry) return;
-    pending.delete(response.id);
-    if (response.ok) entry.resolve(response.payload);
-    else entry.reject(new ConversionError({ ...response.error }));
+function workerError(message: string): Error {
+  return new ConversionError({
+    code: 'WORKER_CRASHED',
+    what: 'The conversion worker stopped unexpectedly.',
+    why: message,
+    action:
+      'Try the file again; if it repeats, the file may be far larger than the memory available. Other files in the batch are unaffected — each runs in its own worker.',
   });
-  worker.addEventListener('error', (event) => {
-    // A worker-level failure orphans every in-flight job, so they all have to be
-    // rejected rather than left pending for ever.
-    const error = new ConversionError({
-      code: 'WORKER_CRASHED',
-      what: 'The conversion worker stopped unexpectedly.',
-      why: event.message || 'The worker terminated without a message.',
-      action: 'Reload the workspace and try the file again; if it repeats, the file may be far larger than available memory.',
-    });
-    for (const [, entry] of pending) entry.reject(error);
-    pending.clear();
-    worker?.terminate();
-    worker = null;
+}
+
+function ensurePool(size = poolSize): WorkerPool {
+  const wanted = recommendedPoolSize(size);
+  if (pool && wanted === poolSize) return pool;
+
+  pool?.dispose();
+  poolSize = wanted;
+  pool = new WorkerPool({
+    size: wanted,
+    createWorker: () => new Worker(new URL('./convert.worker.ts', import.meta.url), { type: 'module' }) as unknown as PoolWorker,
+    onWorkerError: workerError,
   });
-  return worker;
+  return pool;
+}
+
+/** Sets how many conversions may run at once. Takes effect on the next job. */
+export function configurePool(parallelJobs: number): void {
+  ensurePool(parallelJobs);
+}
+
+export function poolStatus(): { size: number; spawned: number; running: number; queued: number } {
+  const active = ensurePool();
+  return { size: active.size, spawned: active.spawned, running: active.running, queued: active.queued };
 }
 
 export function releaseWorker(): void {
-  worker?.terminate();
-  worker = null;
-  pending.clear();
+  pool?.dispose();
+  pool = null;
+  poolSize = 0;
+}
+
+/**
+ * Stops a job.
+ *
+ * Terminates the worker running it, because a conversion is a synchronous parse
+ * loop that never returns to its message loop to read a cancel flag. Only that
+ * job's worker dies; the pool is what makes cancelling one file safe when a
+ * batch is running.
+ */
+export function cancelJob(jobId: string): boolean {
+  return pool ? pool.cancel(jobId) : false;
+}
+
+export function cancelAllJobs(): void {
+  pool?.cancelAll();
 }
 
 function toTransferable(file: QueuedFile): { file: TransferableFile; transfer: ArrayBuffer[] } {
@@ -123,13 +153,14 @@ function toTransferable(file: QueuedFile): { file: TransferableFile; transfer: A
   };
 }
 
-function request<T>(build: (id: string) => { message: WorkerRequest; transfer: ArrayBuffer[] }): Promise<T> {
-  const id = `job-${++sequence}`;
+function request<T>(
+  build: (id: string) => { message: WorkerRequest; transfer: ArrayBuffer[] },
+  onProgress?: (progress: JobProgress) => void,
+  jobId?: string
+): Promise<T> {
+  const id = jobId ?? `job-${++sequence}`;
   const { message, transfer } = build(id);
-  return new Promise<T>((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    ensureWorker().postMessage(message, transfer);
-  });
+  return ensurePool().submit<T>({ message: message as { id: string } & Record<string, unknown>, transfer, onProgress });
 }
 
 function toInput(file: QueuedFile) {
@@ -173,11 +204,24 @@ export async function inspect(
   });
 }
 
+export interface RunOptions {
+  /**
+   * The id used to cancel this job.
+   *
+   * Supplied by the caller rather than generated here, so the UI can put a
+   * working Cancel button on a row the moment it starts the conversion instead
+   * of waiting for an id to come back from a promise that has not resolved.
+   */
+  jobId?: string;
+  onProgress?: (progress: JobProgress) => void;
+}
+
 export async function runConversion(
   file: QueuedFile,
   targetFormatId: string,
   settings?: Partial<ConversionSettings>,
-  forcedFormatId?: string
+  forcedFormatId?: string,
+  run: RunOptions = {}
 ): Promise<ConvertPayload> {
   const detection = forcedFormatId ? null : detect(file);
   const isDwg = (forcedFormatId ?? detection?.formatId) === 'dwg';
@@ -185,7 +229,16 @@ export async function runConversion(
   // DWG has to stay on the main thread: chrome.runtime.sendNativeMessage is not
   // exposed to workers. The heavy lifting is in the native process anyway.
   if (isDwg || file.bytes.length < WORKER_THRESHOLD_BYTES) {
-    const result = await convert({ input: toInput(file), targetFormatId, settings, forcedSourceFormatId: forcedFormatId });
+    // Inline work reports its phases too. A small file that finishes in 80 ms
+    // still moves the label, and a DWG — which always runs here because native
+    // messaging is unreachable from a worker — can take a while.
+    const result = await convert({
+      input: toInput(file),
+      targetFormatId,
+      settings,
+      forcedSourceFormatId: forcedFormatId,
+      onPhase: (phase) => run.onProgress?.({ phase }),
+    });
     // Every field the worker path returns must be returned here too. A file
     // under the threshold is not a lesser conversion, and a compare canvas that
     // works on a 3 MB DXF but is empty on a 300 KB one reads as a bug in the
@@ -217,10 +270,14 @@ export async function runConversion(
     warnings: any[];
     qa: any;
     provenance: any;
-  }>((id) => {
-    const { file: transferable, transfer } = toTransferable(file);
-    return { message: { id, op: 'convert', file: transferable, targetFormatId, settings, forcedFormatId }, transfer };
-  });
+  }>(
+    (id) => {
+      const { file: transferable, transfer } = toTransferable(file);
+      return { message: { id, op: 'convert', file: transferable, targetFormatId, settings, forcedFormatId }, transfer };
+    },
+    run.onProgress,
+    run.jobId
+  );
 
   return {
     ...payload,

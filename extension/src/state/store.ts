@@ -11,6 +11,7 @@ import type { DetectionResult } from '../core/detect';
 import type { CrsRef, Warning } from '../core/cir';
 import type { FidelityReport } from '../qa/fidelity';
 import type { NamingPattern } from '../core/naming';
+import type { ConversionPhase } from '../core/pipeline';
 import type { OutputLayout } from '../core/layout';
 import type { DatasetProfile, FidelityPrediction } from '../core/predict';
 import type { BurnInMode, BurnInPriority } from '../qa/burn-in';
@@ -54,6 +55,16 @@ export interface QueueItem {
   profile?: DatasetProfile;
   targetFormatId?: string;
   status: QueueStatus;
+  /**
+   * The stage the conversion has reached, while it is running.
+   *
+   * A stage, not a percentage: the pipeline knows where it is and not how far
+   * through a reader it is. See `ConversionPhase` for why an invented
+   * percentage is worse than no percentage.
+   */
+  phase?: ConversionPhase;
+  /** The id the pool cancels by. Present only while the job is in flight. */
+  jobId?: string;
   warnings: Warning[];
   error?: { code: string; what: string; why: string; action: string };
   outputs?: OutputBlobFile[];

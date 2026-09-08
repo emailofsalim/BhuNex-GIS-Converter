@@ -823,18 +823,69 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
   return { dataset: working, warnings };
 }
 
+/**
+ * Which stage the conversion has reached.
+ *
+ * A stage, not a percentage. The pipeline knows where it is; it does not know
+ * how far through a reader it is without instrumenting every one of them, and
+ * an invented percentage that jumps 0 → 50 → 100 teaches the user that the
+ * number means nothing. Then the one time a job really is stuck, they have no
+ * reason to believe it.
+ */
+export type ConversionPhase =
+  | 'detecting'
+  | 'reading'
+  | 'editing'
+  | 'predicting'
+  | 'transforming'
+  | 'writing'
+  | 're-importing'
+  | 'checking'
+  | 'packaging';
+
+export const PHASE_LABEL: Record<ConversionPhase, string> = {
+  detecting: 'Identifying the format',
+  reading: 'Reading the source',
+  editing: 'Applying your edits',
+  predicting: 'Checking what the target can hold',
+  transforming: 'Transforming coordinates',
+  writing: 'Writing the output',
+  're-importing': 'Reading the output back',
+  checking: 'Comparing source with output',
+  packaging: 'Packaging the delivery',
+};
+
 export interface ConvertOptions {
   input: ConversionInput;
   targetFormatId: string;
   settings?: Partial<ConversionSettings>;
   /** Overrides detection when the user confirmed a different format. */
   forcedSourceFormatId?: string;
+  /**
+   * Called as the conversion moves between stages.
+   *
+   * Runs inside whichever thread `convert` runs on; the worker turns each call
+   * into a message so the UI can show it. Never used for control flow — a
+   * caller that throws from here would stop a conversion for a reporting
+   * failure, so it is invoked defensively.
+   */
+  onPhase?: (phase: ConversionPhase) => void;
 }
 
 export async function convert(options: ConvertOptions): Promise<ConversionResult> {
   const settings: ConversionSettings = { ...DEFAULT_SETTINGS, ...options.settings };
   const startedAt = new Date();
   const { input } = options;
+
+  // Reporting must never be able to stop a conversion.
+  const phase = (stage: ConversionPhase): void => {
+    try {
+      options.onPhase?.(stage);
+    } catch {
+      /* a progress listener that throws is not a reason to lose the job */
+    }
+  };
+  phase('detecting');
 
   const detection = options.forcedSourceFormatId
     ? {
@@ -873,6 +924,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
 
   const warnings: Warning[] = [];
   let sourceDataset: CirDataset;
+  phase('reading');
   try {
     sourceDataset = await readSource(input, detection, settings);
   } catch (error) {
@@ -889,6 +941,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   // arrived. A fidelity report about the unedited file would be about a file
   // nobody is producing.
   if (settings.edits && settings.edits.length > 0) {
+    phase('editing');
     const replay = replayEdits(sourceDataset, settings.edits, { protectedLayers: settings.protectedLayers });
 
     if (replay.failure) {
@@ -917,6 +970,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   // (rule R22, spec §22.3). A *lossy* target is not refused here: the loss is
   // recorded and the conversion proceeds, because what to trade away is the
   // engineer's decision, not this tool's.
+  phase('predicting');
   const prediction = predictConversion(sourceDataset, target.id, {
     sourceCrsEpsg: settings.sourceCrs?.epsg ?? null,
     targetCrsEpsg: settings.targetCrs?.epsg ?? null,
@@ -953,6 +1007,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     );
   }
 
+  phase('transforming');
   const prepared = prepare(sourceDataset, target, settings);
   warnings.push(...prepared.warnings);
 
@@ -969,6 +1024,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   });
   warnings.push(...plan.warnings);
 
+  phase('writing');
   const nodes: OutputNode[] = [];
   let firstWritten: OutputFile[] = [];
 
@@ -998,6 +1054,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   }
 
   // ---- QA: re-import the bytes just written and compare.
+  if (settings.runQa) phase('re-importing');
   let qa: FidelityReport;
   let diff: DiffReport | undefined;
   let outputDataset: CirDataset | undefined;
@@ -1007,6 +1064,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   } else if (plan.units.length > 1) {
     // Comparing one slice against the whole source would report every other
     // layer as missing, so the check runs against the layer that was written.
+    phase('checking');
     const checked = await runQa(plan.units[0].dataset, firstWritten, target, settings);
     diff = checked.diff;
     outputDataset = checked.outputDataset;
@@ -1016,6 +1074,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
       summary: `${checked.report.summary} Checked the first of ${plan.units.length} layer files; each layer is written by the same engine on the same path.`,
     };
   } else {
+    phase('checking');
     const checked = await runQa(prepared.dataset, firstWritten, target, settings);
     qa = checked.report;
     diff = checked.diff;
@@ -1031,6 +1090,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   const health = settings.assessHealth ? assessHealth(prepared.dataset, { prediction }) : undefined;
 
   // ---- Package: one file stays loose, a tree becomes a ZIP that *is* the tree.
+  phase('packaging');
   const packaged = await packageOutput(deduplicated.nodes, `${baseName}.zip`);
   const outputs: OutputFile[] = packaged.files.map((node) => ({ name: node.path, bytes: node.bytes, mimeType: node.mimeType }));
   const tree = deduplicated.nodes.map((node) => node.path);

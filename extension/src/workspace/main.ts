@@ -17,7 +17,7 @@ import { ENGINE_VERSION } from '../core/cir';
 import { groupCompanions, type IngestFile } from '../core/companions';
 import { CONFIRM_THRESHOLD } from '../core/detect';
 import { ConversionError } from '../core/errors';
-import { packageBatch, type ConversionSettings } from '../core/pipeline';
+import { packageBatch, PHASE_LABEL, type ConversionSettings } from '../core/pipeline';
 import { describeTree, OUTPUT_LAYOUT_DESCRIPTION, OUTPUT_LAYOUT_LABEL, type OutputLayout } from '../core/layout';
 import {
   AXIS_LABEL,
@@ -150,7 +150,7 @@ import {
   type QueueItem,
   type TableState,
 } from '../state/store';
-import { expand, inspect, preflight, runConversion } from '../workers/client';
+import { cancelJob, configurePool, expand, inspect, poolStatus, preflight, runConversion } from '../workers/client';
 
 // --------------------------------------------------------------------- helpers
 
@@ -455,7 +455,11 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
     });
   }
 
-  store.updateItem(id, { status: 'converting', error: undefined });
+  // The job id is chosen HERE rather than inside the client, so the row's
+  // Cancel button works from the first frame instead of waiting for a promise
+  // that by definition has not resolved.
+  const jobId = `convert-${id}-${Date.now()}`;
+  store.updateItem(id, { status: 'converting', error: undefined, jobId, phase: 'detecting' });
   render();
   const startedAt = performance.now();
 
@@ -481,13 +485,22 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
       },
       targetId,
       settings,
-      item.forcedFormatId
+      item.forcedFormatId,
+      {
+        jobId,
+        onProgress: ({ phase }) => {
+          store.updateItem(id, { phase: phase as never });
+          renderQueue();
+        },
+      }
     );
     const durationMs = Math.round(performance.now() - startedAt);
     const outputBytes = result.outputs.reduce((sum, output) => sum + output.bytes.length, 0);
 
     store.updateItem(id, {
       status: 'done',
+      jobId: undefined,
+      phase: undefined,
       outputs: result.outputs,
       tree: result.tree,
       prediction: result.prediction,
@@ -522,8 +535,15 @@ async function convertItem(id: string, withQa: boolean): Promise<void> {
             why: error instanceof Error ? error.message : String(error),
             action: 'Check the source file in the inspector.',
           };
-    store.updateItem(id, { status: 'failed', error: structured as QueueItem['error'] });
-    store.log('error', `${item.fileName}: ${structured.what} ${structured.why} ${structured.action}`);
+    if (structured.code === 'JOB_CANCELLED') {
+      // Cancelling is not a failure. Marking it failed would put a red badge on
+      // a row for doing exactly what the user asked, and would make the file
+      // look damaged when nothing touched it.
+      store.updateItem(id, { status: 'ready', jobId: undefined, phase: undefined, error: undefined });
+    } else {
+      store.updateItem(id, { status: 'failed', jobId: undefined, phase: undefined, error: structured as QueueItem['error'] });
+      store.log('error', `${item.fileName}: ${structured.what} ${structured.why} ${structured.action}`);
+    }
   }
   render();
 }
@@ -534,8 +554,13 @@ async function convertAll(withQa: boolean): Promise<void> {
   store.set({ busy: true, progress: 0 });
 
   // Error isolation: one failed file never aborts the batch (instruction §12.1).
+  //
+  // The pool is sized from the setting BEFORE the batch starts. Until the pool
+  // existed this loop started N conversions that all queued behind one worker,
+  // so the setting described a parallelism the tool did not have.
   let completed = 0;
   const concurrency = Math.max(1, store.get().settings.parallelJobs);
+  configurePool(concurrency);
   const queue = [...pending];
   const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
     for (;;) {
@@ -680,6 +705,22 @@ function renderQueue(): void {
       });
       actions.append(expandBtn);
     }
+    if (item.status === 'converting' && item.jobId) {
+      const cancelBtn = element('button', {
+        class: 'btn btn--ghost btn--danger',
+        text: 'Cancel',
+        title: 'Stop this conversion. The worker running it is terminated, so it stops immediately rather than at the next checkpoint.',
+      });
+      cancelBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        cancelJob(item.jobId as string);
+        store.log('warn', `${item.fileName}: cancelled.`);
+        // The promise rejects with CancelledError, which convertItem turns into
+        // the row's state — nothing else to do here.
+      });
+      actions.append(cancelBtn);
+    }
+
     const removeBtn = element('button', { class: 'btn btn--ghost btn--danger', text: '✕', 'aria-label': `Remove ${item.fileName}` });
     removeBtn.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -691,6 +732,15 @@ function renderQueue(): void {
 
     const meta = element('div', { class: 'qrow__meta' });
     meta.append(badge(statusLabel(item), statusKind(item)));
+    if (item.status === 'converting' && item.phase) {
+      meta.append(
+        badge(
+          PHASE_LABEL[item.phase],
+          'accent',
+          'The stage the conversion has reached. There is no percentage because the pipeline knows which stage it is in, not how far through one it is — and a number that means nothing is worse than no number.'
+        )
+      );
+    }
     if (item.detection) {
       meta.append(
         badge(
@@ -4032,7 +4082,32 @@ function openSettingsDialog(): void {
   body.append(rescan);
 
   body.append(element('h3', { class: 'section__title', text: 'Performance' }));
-  body.append(numberField('Parallel jobs', state.settings.parallelJobs, 1, (value) => void store.patchSettings({ parallelJobs: Math.max(1, Math.round(value)) })));
+  body.append(
+    numberField('Parallel jobs', state.settings.parallelJobs, 1, (value) => {
+      const wanted = Math.max(1, Math.round(value));
+      void store.patchSettings({ parallelJobs: wanted });
+      configurePool(wanted);
+      render();
+    })
+  );
+
+  // What the setting actually gets, which is not always what was asked for.
+  //
+  // One core is reserved for the UI thread — using every core defeats the point
+  // of workers — and the pool is capped at 8 because each worker holds a whole
+  // file plus its intermediate representation, so memory runs out before CPU
+  // does. Saying so beats a control that silently means something else.
+  const pool = poolStatus();
+  const cores = navigator.hardwareConcurrency ?? 4;
+  body.append(
+    element('p', {
+      class: 'muted small',
+      text:
+        `Running ${pool.size} worker${pool.size === 1 ? '' : 's'} of ${cores} logical core(s): one is left free for the interface, ` +
+        `and the pool is capped at 8 because each worker holds a whole file in memory. ` +
+        `${pool.spawned} started so far — workers are created only when there is work for them.`,
+    })
+  );
   body.append(numberField('Maximum archive expansion (MB)', state.settings.maxArchiveMb, 64, (value) => void store.patchSettings({ maxArchiveMb: value })));
 
   body.append(element('h3', { class: 'section__title', text: 'Delivery structure' }));

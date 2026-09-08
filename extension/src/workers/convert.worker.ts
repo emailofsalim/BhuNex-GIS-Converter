@@ -10,7 +10,7 @@
  * rather than cloned.
  */
 
-import { convert, expandArchive, readSource, type ConversionInput, type ConversionSettings } from '../core/pipeline';
+import { convert, expandArchive, readSource, type ConversionInput, type ConversionPhase, type ConversionSettings } from '../core/pipeline';
 import { profileDataset } from '../core/predict';
 import { detectFormat } from '../core/detect';
 import { ConversionError } from '../core/errors';
@@ -35,7 +35,14 @@ export interface TransferableFile {
 
 export type WorkerResponse =
   | { id: string; ok: true; op: string; payload: unknown; transfer?: ArrayBuffer[] }
-  | { id: string; ok: false; op: string; error: { code: string; what: string; why: string; action: string } };
+  | { id: string; ok: false; op: string; error: { code: string; what: string; why: string; action: string } }
+  /**
+   * A stage boundary, not a percentage.
+   *
+   * Sent while the job is still running, so the pool must not treat it as a
+   * completion — see `WorkerPool`, which keeps the slot occupied on this kind.
+   */
+  | { id: string; kind: 'progress'; progress: { phase: ConversionPhase; detail?: string } };
 
 function toInput(file: TransferableFile): ConversionInput {
   return {
@@ -212,6 +219,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
           targetFormatId: request.targetFormatId,
           settings: request.settings,
           forcedSourceFormatId: request.forcedFormatId,
+          onPhase: (phase) => post({ id: request.id, kind: 'progress', progress: { phase } }),
         });
         const outputs = result.outputs.map((output) => ({ name: output.name, mimeType: output.mimeType, buffer: output.bytes.buffer as ArrayBuffer }));
         post(
