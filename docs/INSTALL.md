@@ -19,7 +19,8 @@ wrong folder.
 
 | What you selected | Why it fails |
 |---|---|
-| The source code from the green **Code → Download ZIP** button | That is TypeScript. A browser cannot run it. Download the built package instead (Option A below). |
+| The **repository root** after downloading the source | The root has no `manifest.json`. The built extension is one level down, in **`dist/`** — see Option A. |
+| The **`extension/`** folder | That is TypeScript source. A browser cannot run it. Load `dist/`. |
 | The folder *containing* the extension folder | Load unpacked wants the folder that has `manifest.json` **in** it, not its parent. |
 | The `.zip` file itself, or the folder view Windows shows when you double-click a `.zip` | Browsers load a real **folder** on disk. Extract it first — double-clicking a ZIP only previews it. |
 
@@ -71,43 +72,60 @@ file is a placeholder — go back to the OneDrive fix above.
 
 ---
 
-## Option A — download the built extension (no Node, no build)
+## Option A — download the repository and load `dist/`
 
-**Recommended. This is the whole install.**
+**Recommended, and the whole install. No Node, no npm, no build step.**
 
-1. Go to the repository's **Releases** page:
-   <https://github.com/emailofsalim/Universal-Converter/releases>
-2. Under the latest release, download
-   `universal-bhunex-converter-<version>.zip`.
-3. **Extract it to a plain local folder — not OneDrive.** Right-click →
+The built extension is committed to this repository, so downloading it gives you
+something the browser can load directly.
+
+1. On the repository page, green **Code** button → **Download ZIP**.
+   (Or `git clone https://github.com/emailofsalim/Universal-Converter.git`.)
+2. **Extract it to a plain local folder — not OneDrive.** Right-click →
    *Extract All* on Windows, and set the destination to something like
    `C:\Extensions\`. On a work laptop, Desktop, Documents and Downloads are
    often inside OneDrive, and files synced there load as placeholders the
    browser cannot read. See the OneDrive section above.
-4. Open the extensions page:
+3. Open the extensions page:
    - Chrome: `chrome://extensions`
    - Edge: `edge://extensions`
-5. Turn on **Developer mode** (a toggle, top-right in Chrome, bottom-left in
+4. Turn on **Developer mode** (a toggle, top-right in Chrome, bottom-left in
    Edge).
-6. Click **Load unpacked**.
-7. Select the **unzipped folder** — the one that directly contains
-   `manifest.json`. If you open the folder and see `manifest.json` listed, you
-   have the right one.
-8. Click the toolbar icon → **Open converter workspace**.
+5. Click **Load unpacked**.
+6. Select the **`dist`** folder inside what you extracted — **not** the folder
+   above it, and not `extension/`.
+7. Click the toolbar icon → **Open converter workspace**.
 
 ### Checking you picked the right folder
 
 The folder you select must look like this:
 
 ```
-universal-bhunex-converter/
+dist/
 ├── manifest.json        ← this file must be here
 ├── service-worker.js
+├── icons/
 ├── assets/
 └── src/
 ```
 
-If instead you see a folder inside a folder, go one level deeper.
+`manifest.json` directly inside the folder you selected. If you see another
+folder instead, go one level deeper.
+
+---
+
+## Option A2 — download a release archive
+
+The same build, packaged so that `manifest.json` is at the top of the archive
+rather than one level down.
+
+1. <https://github.com/emailofsalim/Universal-Converter/releases>
+2. Download `universal-bhunex-converter-<version>.zip`.
+3. Extract it outside OneDrive, then Load unpacked → the extracted folder
+   itself. `INSTALL-FIRST.txt` inside repeats these steps.
+
+The identical archive is also committed at `dist-zip/` if you already have the
+repository.
 
 ---
 
@@ -119,17 +137,28 @@ Only needed if you want to modify the code. Requires **Node 20 or newer**.
 git clone https://github.com/emailofsalim/Universal-Converter.git
 cd Universal-Converter
 npm ci
-npm run build          # writes dist/
+npm run build          # a DEVELOPER build, with source maps, over dist/
 ```
 
 Then load **`dist/`** with Load unpacked — not the repository root, and not
 `extension/`. The repository root has no manifest, and `extension/` holds the
 TypeScript sources that `npm run build` compiles.
 
+Note that `npm run build` overwrites the committed `dist/` with a build that
+carries source maps, so `git status` will show a diff. That is expected while
+developing; `npm run build:store` restores exactly what is committed.
+
 ```bash
-npm run verify         # typecheck + tests + build, what CI runs
-npm run package        # dist-zip/universal-bhunex-converter-<version>.zip
+npm run verify         # typecheck + tests + build + committed-build check
+npm run store:package  # rebuilds dist/ and dist-zip/ as committed
 ```
+
+**Why `dist/` is committed at all.** A browser loads a folder and cannot build
+one, so gitignoring the build meant the obvious use of this repository — 
+download it, load it — failed with the exact error at the top of this page.
+Committed build output normally goes stale silently, which would be worse, so
+CI rebuilds from source on every push and fails if one byte differs
+(`npm run build:check`).
 
 ---
 

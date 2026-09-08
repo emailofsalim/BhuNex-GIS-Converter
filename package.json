@@ -17,13 +17,14 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run lint && npm run test && npm run build",
+    "verify": "npm run lint && npm run test && npm run build:store && npm run build:check",
     "build:store": "STORE_BUILD=1 vite build",
     "store:check": "node scripts/assert-store-ready.mjs",
     "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs && node scripts/verify-package.mjs",
     "assets": "node scripts/make-store-assets.mjs",
     "package:check": "node scripts/verify-package.mjs",
-    "bench": "vitest bench --run"
+    "bench": "vitest bench --run",
+    "build:check": "node scripts/assert-build-committed.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
@@ -31,5 +32,6 @@
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
     "vitest": "^2.1.9"
-  }
+  },
+  "author": "Md Salim Ansari"
 }

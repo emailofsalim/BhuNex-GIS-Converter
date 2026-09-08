@@ -158,10 +158,15 @@ error message.
 
 ## 7. Building and checking it
 
+**Both artefacts are committed**, so nothing below is needed to install or to
+submit — `dist/` loads and `dist-zip/*.zip` uploads as they are.
+
 ```bash
-npm run build          # → dist/
+npm run build          # a DEVELOPER build over dist/, with source maps
+npm run build:store    # the build that is committed: no maps
 npm run store:check    # validates dist/ against store rules
 npm run package        # → dist-zip/*.zip, then validates the archive
+npm run build:check    # rebuilds from source and byte-compares with dist/
 ```
 
 Or, for a store submission in one step:
@@ -170,8 +175,22 @@ Or, for a store submission in one step:
 npm run store:package  # no source maps, both validators, packaged
 ```
 
-Both validators run on every push in `.github/workflows/ci.yml`, and the
+Every validator runs on every push in `.github/workflows/ci.yml`, and the
 packaged ZIP is attached to every GitHub Release.
+
+### Why the build output is in version control
+
+A browser loads a **folder**; it cannot build one. With `dist/` gitignored, the
+obvious use of the repository — download it, load it — produced the exact error
+this document exists to prevent, and the only alternative on offer was "install
+Node first", which is not an ask a survey office should have to meet.
+
+The real cost of committing build output is that it drifts silently, and a stale
+extension is worse than none: the bug report describes code that is already
+fixed. So `scripts/assert-build-committed.mjs` rebuilds from source into a
+temporary directory on every CI run and compares every file byte for byte. Drift
+is a build failure with the file list attached — the same guard `npm run
+docs:check` already puts on the generated format matrix.
 
 ---
 

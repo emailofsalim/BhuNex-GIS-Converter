@@ -15,8 +15,8 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Working branch | `claude/gis-cad-chrome-converter-hk8uwg` |
 | Product | **Universal BhuNex Converter** — Chrome MV3 extension for GIS / geomatics / survey / CAD / LiDAR / mining |
 | Scope | **Chrome MV3 extension only.** A web app is deferred and the reasoning is recorded in `docs/SCOPE.md` — do not start one without reading it. |
-| Base project | `vendor/reference/Universal-Conveter.zip` (Flask + ODA DWG→DXF prototype) |
-| Engine donor | `vendor/reference/Geo-Studio-Pro-main.zip` (React/TS, `src/lib/*`) |
+| Base project | *Universal-Conveter* (Flask + ODA DWG→DXF prototype) — donor archive removed once nothing referenced it |
+| Engine donor | *Geo-Studio-Pro* (React/TS, `src/lib/*`) — likewise; what was taken is listed below |
 | Spec of record | `docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt` (v2.0) |
 | Owner's master doc | merged into the spec; verbatim copy at `docs/reference/MASTER_INSTRUCTIONS_AS_SUPPLIED.txt` |
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |

@@ -1,6 +1,15 @@
 node_modules/
-dist/
-dist-zip/
+
+# dist/ and dist-zip/ are COMMITTED on purpose, and it is the one exception
+# worth making. A browser loads a folder; it cannot build one. Gitignoring the
+# build meant that downloading this repository and pointing "Load unpacked" at
+# it produced "Manifest file is missing or unreadable" — the obvious use of the
+# repository failed. scripts/assert-build-committed.mjs rebuilds from source in
+# CI and fails if the committed copy has drifted, so it cannot go stale.
+#
+# `npm run build` (the developer build, with source maps) writes over dist/ and
+# will show as a diff. `npm run build:store` puts it back.
+
 *.log
 .DS_Store
 .vite/

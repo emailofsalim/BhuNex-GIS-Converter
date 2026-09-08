@@ -177,7 +177,8 @@ R24  The first screen stays minimal. Advanced capability is reached through
       FORMAT_MATRIX.md           generated-by-hand mirror of the registry
       NATIVE_HOST.md             DWG/ODA helper install + protocol
     native-host/                 python native messaging host + installers
-    vendor/reference/            original source zips, kept for provenance
+    dist/                        THE BUILT EXTENSION, committed - load this
+    dist-zip/                    the packaged archive, committed - upload this
     extension/
       manifest.json
       public/icons/              packaged icons (no remote assets)
