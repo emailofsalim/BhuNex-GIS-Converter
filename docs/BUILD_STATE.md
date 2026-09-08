@@ -22,7 +22,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
 | Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 482 across 17 suites, all green |
+| Tests | 799 across 24 suites, all green |
 | Install | **Load `dist/`, never the repo root.** On a managed laptop, extract outside OneDrive — `docs/INSTALL.md` |
 | Store | Package + listing ready: `npm run store:package`, `docs/STORE_LISTING.md`, `docs/PRIVACY.md` |
 
@@ -55,7 +55,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅, spatial index ✅; remaining repair ops ⛔ (§23, §24) | 🟡 partial |
-| 11 | Measurement ✅, snapping ✅, vertex editor ✅ **wired to the canvas**; geometry ops, attribute table, layer manager ⛔ (§25, §26) | 🟡 partial |
+| 11 | Measurement ✅ **with a canvas tool**, snapping ✅, vertex editor ✅, attribute table ✅, layer manager ✅, geometry ops ✅ **wired and reaching the exported file** (§25, §26) | ✅ done |
 | 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
 | 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
@@ -111,11 +111,17 @@ snapping — nothing moves unless it is named), `diff.ts` (measured source-vs-ou
 `fidelity.ts` (re-import comparison; `NOT_VALIDATED` exists so
 an unreadable target can never show PASS).
 
-**UI** — `workspace/` (full page), `sidepanel/`, `popup/`, `ui/preview.ts` (canvas,
-no tiles), `ui/dual-canvas.ts` (source and output side by side, linked views),
+**UI** — `workspace/` split by panel (RULE 32): `main.ts` is the shell,
+`host.ts` inverts the shell dependency so panels never import back into it,
+`ui-state.ts` owns the view state, `dom.ts` the shared helpers, `conversion.ts`
+the driver, and `workspace/panels/*.ts` one module per panel — none over 503
+lines. Plus `sidepanel/`, `popup/`, `ui/preview.ts` (canvas, no tiles),
+`ui/dual-canvas.ts` (source and output side by side, linked views),
 `ui/edit-canvas.ts` (vertex handles, hit testing, drag — owns no geometry, every
-change goes out as a plan the host applies),
-`ui/command-palette.ts`, `state/store.ts`, `workers/`.
+change goes out as a plan the host applies), `ui/measure-canvas.ts` (click a run
+of points; computes nothing, every number comes from `core/measure.ts`),
+`ui/command-palette.ts`, `state/store.ts`, `workers/` (pool, cancellation,
+stage progress).
 
 **Native host** — `native-host/universal_bhunex_host.py` + `install.py`.
 
@@ -203,30 +209,47 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 ## Next tasks, in order
 
-1. **Architecture conformance — one gap left.** `docs/ARCHITECTURE_CONFORMANCE.md`
-   audits this codebase against all 40 rules of
-   `docs/CHROME_EDGE_ARCHITECTURE_SPEC.txt`: 37 met, 2 met under different
-   naming, 1 gap. The worker pool, cancellation, progress and benchmarks are
-   done. Remaining:
-   - **`workspace/main.ts` is 4,609 lines (RULE 32).** Split by panel into
-     `workspace/panels/*.ts`, leaving `main.ts` as the wiring. Nothing
-     computational lives there, so RULES 09-11 still hold — it is simply too
-     large to navigate.
-2. **Phase 11 remainder.** Measurement, snapping, the vertex editor, the
-   attribute table (§25.5), the layer manager (§25.4) and the geometry
-   operations of §26.2 are all built, and workspace edits reach the exported
-   file (`core/edits.ts`). §26.2 is engine-complete but NOT yet wired to the
-   workspace — that and a canvas measurement tool are next.
-2. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
-   `adapter`. Until then the honest refusal stays.
-3. **Phase 6 — GeoPackage** via SQLite WASM; FlatGeobuf reader; DGN/E57 adapters.
-4. **Phase 4 remainder** — resampling, raster reprojection, contour generation,
-   clip-by-polygon, rasterize/vectorize.
-5. **Perf** — the measured performance test from spec §14.2 (targets are to be
-   measured, not claimed), and the spatial index of §14.5 in the same phase as the
-   first feature that needs it.
-6. **Batch** — pause/resume and retry-failed controls; the pipeline already isolates
-   errors per file.
+**Architecture conformance is complete.** `docs/ARCHITECTURE_CONFORMANCE.md`
+audits this codebase against all 40 rules of
+`docs/CHROME_EDGE_ARCHITECTURE_SPEC.txt`: 38 met, 2 met under different naming,
+0 gaps. All four gaps from the first audit are closed.
+
+**Phases 9-13 are complete**, including the two capabilities that were engine-
+only: §26.2 geometry operations and the §26.1 measurement tool are both
+reachable and, in the geometry case, carried through to the exported file as
+`EditCommand`s that are re-planned against the whole dataset.
+
+What is left is FORMAT COVERAGE and two smaller items. In order:
+
+1. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
+   `adapter` in the registry. Until then the honest refusal stays: rule R5 says
+   a compressed payload is reported rather than mis-parsed. This is the single
+   largest remaining gap for LiDAR users, and it is a bundling job, not an
+   algorithm one — the CSP already carries `wasm-unsafe-eval` for it, and R15
+   means the decoder must be IN the package, never fetched.
+2. **Phase 6 — GeoPackage** via SQLite WASM (same bundling constraint), then a
+   FlatGeobuf reader (pure TypeScript, flatbuffers-shaped, no dependency
+   needed), then DGN and E57. GeoPackage is the one most often asked for.
+3. **Phase 4 remainder** — resampling, raster reprojection, contour generation,
+   clip-by-polygon, rasterize/vectorize. The GeoTIFF codec reads and writes
+   already; this is the analysis layer on top of it.
+4. **Perf** — the measured performance test from spec §14.2. Targets are to be
+   MEASURED, not claimed: `benchmarks/` measures scaling and deliberately
+   asserts no absolute millisecond figure, because an absolute number from a
+   shared runner is noise and asserting one only trains people to loosen the
+   threshold. §14.2 wants a real budget, which needs a real machine.
+5. **Batch** — pause/resume and retry-failed controls. The pipeline already
+   isolates errors per file and the worker pool already cancels, so this is a
+   UI and queue-state job rather than an engine one.
+
+### Not on this list, and why
+
+- **Datum shifts beyond the WGS 84 family, and geoid separation.** No engine, so
+  no UI. Offering a control that silently does nothing would be worse than the
+  refusal `crs/transform.ts` gives now.
+- **PDF / image map georeferencing (§28.3).** Not started. It needs a raster
+  georeferencing UI (§28.4 is also only partly built) before the PDF part is
+  worth anything.
 
 ---
 
@@ -234,6 +257,7 @@ pipeline. That split is why `tests/structure.test.ts` can assert on paths alone.
 
 | Date | Session | What landed |
 |---|---|---|
+| 2026-09-08 | the two engines nobody could reach, and the file nobody could navigate | Three things, and the first two are the same defect from opposite directions. **`workspace/main.ts` was 4,684 lines**, which the architecture spec names by example ("do not create one giant popup.ts") and which was the one rule this codebase clearly broke. It is now 476: the panels are seventeen modules under `workspace/`, none over 503 lines, and all 773 tests passed unchanged through the move, which is the only evidence a refactor that size did not change behaviour. Two problems had to be solved first. THE CYCLE: `main.ts` imports every panel and every panel needs `render` back, which is a cycle in every direction at once — bundlers resolve cycles of hoisted declarations, but "it happens to work" is not an architecture, and the failure mode is a module that initialises half-way and an `undefined is not a function` at the first click. `workspace/host.ts` inverts it, and its defaults THROW rather than no-op because a no-op turns "never wired" into a button that silently does nothing, the hardest UI bug to find. THE SHARED STATE: eight values are genuinely shared, and an exported `let` is a live binding a reader sees but cannot assign, so the split would have produced sixteen accessors or a silent bug; `workspace/ui-state.ts` holds them in one named object, and it does not bend RULE 24 because none of it survives a reload or reaches the worker. The move was made safe by renaming the module-level canvases FIRST, so that two deliberate local shadows turned any mistake into a type error rather than a working program doing the wrong thing. **§26.2 geometry operations were complete, tested and IMPORTED NOWHERE** — sixteen operations nobody using the tool could invoke. Now a Geometry tools tab, with the plan DRAWN OVER THE SOURCE before it commits, because the number cannot catch the mistake: a dissolve on the wrong field and one on the right field both report "1,240 → 1" and only the shape differs. More importantly they are now `EditCommand`s, so they survive conversion — and the command stores a DESCRIPTION, not a result, which matters more here than for attributes: a bulk set planned over 5,000 of 40,000 rows is a smaller version of the right answer, but a convex hull planned over the first 5,000 parcels is a DIFFERENT POLYGON. The stored command deliberately omits `crs` and `protectedLayers`, so a buffer configured on a projected copy re-fires the CRS gate when replayed against a geographic source rather than silently meaning 1,100 km. **§26.1 measurement had no user either** — `core/measure.ts` was reachable only as a label formatter. `ui/measure-canvas.ts` adds click-to-measure with the method (geodesic / planar / planar-undeclared) printed under every number, which is the point rather than a decoration: a degree of longitude is 111.3 km at the equator and 102.5 km at 23N. Three tools now share ONE canvas overlay hook, deliberately — a list would let a stale tool keep drawing over a tab it no longer belongs to. Also: the instruction document's traceability table listed 24 shipped features as SPECIFIED, an R1 violation living in the repository, so every row was re-verified against the tree, an evidence column added, and a fourth status introduced — ENGINE, for built-but-unreachable — which is exactly what the two above were. 799 tests (`measure-canvas.test.ts` new, 11; 15 more on geometry commands, 4 of them parsing the written bytes). Version 1.0.4. |
 | 2026-09-08 | worker pool, cancellation, progress, benchmarks | Three of the four architecture gaps closed, and the fourth measured rather than guessed at. **`workers/pool.ts`** — a lazily spawned pool, sized from `hardwareConcurrency` with one core left free for the UI thread and a cap of 8 because each worker holds a whole file plus its intermediate representation, so memory runs out before CPU does. It replaces a single module-level `Worker` that every "concurrent" job queued behind: `parallelJobs` had been describing a parallelism the tool did not have, which is worse than not offering the control. **Cancellation** is why the pool had to exist rather than being a feature added to the old design. A conversion is a synchronous parse loop that never returns to its message loop, so a cancel flag it checks between messages is never read; the only thing that stops a 400 MB point cloud mid-parse is `Worker.terminate()`, and with one shared worker that killed every other job in flight. A cancelled job now returns the row to `ready` rather than `failed`: marking it failed would put a red badge on a row for doing exactly what the user asked. **Progress** reports the STAGE the pipeline has reached — nine of them, from detecting to packaging — and not a percentage. The pipeline knows which stage it is in and not how far through a reader it is, and an invented percentage that jumps 0 → 50 → 100 teaches the user the number means nothing; then the one time a job really is stuck at 40% they have no reason to believe it. A percentage appears only where something is genuinely counted, which is files completed in a batch. **`benchmarks/`** (`npm run bench`) measures SCALING rather than milliseconds, because an absolute number from a shared runner is noise and asserting one just trains people to loosen the threshold. It settled both suspects the audit had named. `unionAll` was quadratic and is now a balanced reduction: the linear fold looks O(n) and is not, because unioning adjacent parcels keeps the collinear vertices where the seam was, so the accumulator grows and each further union re-sweeps all of it. 128 parcels went 2.69 ms → 1.53 ms, growth per doubling 4.2× → 2.0×, and buffering — which folds one piece per segment and so paid that cost once per vertex — went 281.6 ms → 36.6 ms on a 256-vertex traverse, 7.7× faster, with nothing in `buffer.ts` changed. Union is associative, so only the order of the same merges changed and all 121 geometry tests passed unchanged. The other suspect was exonerated: `StatusLine` is a sorted array with O(n) insertion and therefore O(n²) in the worst case, but on real boundaries it measures near-linear (0.50, 1.07, 2.19 ms for 256, 512, 1024 vertices), so it was LEFT ALONE on evidence — which is the whole point of measuring before optimising. 773 tests (`pool.test.ts` new, 26, against an injected fake worker so the pool is testable without a browser). |
 | 2026-09-08 | geometry operations (§26.2) | `core/polygon-boolean.ts`, `core/buffer.ts` and `core/geometry-ops.ts`: intersection, union, difference, symmetric difference, buffer, offset, convex hull, dissolve, centroid, envelope, clip, erase, split-by-line, line merge, line substring, explode and multipart — each as a plan previewed before it commits, on the same contract as every other editing engine here. **The boolean core is Martínez–Rueda, not Greiner–Hormann**, and the reason is the whole job: two adjacent parcels SHARE a boundary, so their edges are exactly collinear and overlapping, and that is the case Greiner–Hormann either crashes on or answers wrongly. Merging two neighbouring plots is the single most likely thing a surveyor asks of this tool. Four defects found and fixed while building it, each caught by an area identity rather than by looking at the output: the contour walk used `pos >= i` instead of the reference's `pos === origPos`, so a step landing exactly on the origin re-traced the contour until the array refused to grow; result components meeting at a point were emitted as ONE self-touching ring whose shoelace cancels, so an XOR read 24 m² where the answer was 64; the walk paired incoming and outgoing edges by array order at junctions where four result-edges meet, which is arbitrary — a plot abutting a neighbour's notch traced the abutting piece backwards and SUBTRACTED it (60 m² for a 76 m² answer), fixed by choosing the next edge by angle as planar-graph traversal requires; and XOR, the only operation that keeps every edge and so the only one where that junction is even reachable, is now composed as (A\B) ∪ (B\A) rather than swept directly. **Buffering builds the result as a union of swept pieces rather than by walking and untangling**, so it cannot fold. The first version used a rectangle per segment plus a disc per vertex, and was wrong about half the time: a disc is exactly TANGENT to the rectangles either side of it, and tangency is the hardest case for a float-predicate sweep — a 100 m square buffered by 5 m reported 6,664 m² instead of 12,079. Buffering by 10 m happened to work, which is worse, because a bug that passes half its cases reads as a rounding issue. Sweeping each segment as a CAPSULE makes consecutive pieces overlap in a real 2D region instead, and all 15 distance × tolerance combinations are now exact. Also fixed: the polygon centroid ADDED holes instead of subtracting them, because negating a correctly wound hole's own signed area double-negates it — a 2×2 void in the lower-left of a 10×10 square moved the centroid to 4.885 instead of 5.125, in the opposite direction to the missing material. And `offsetLine` now trims inside corners to their intersection the way a CAD offset does; emitting both endpoints left a doubling-back at every inside corner however gentle, so the self-intersection warning fired on nearly every inward offset and meant nothing. The **CRS gate** is the module's most valuable check and has no counterpart in the spec: buffer and offset REFUSE on a geographic or undeclared CRS, because 10 there means ten degrees — about 1,100 km — and unlike a wrong length, a wrong polygon does not invite a sanity check. 747 tests (`polygon-boolean.test.ts` 49, `geometry-ops.test.ts` 72). |
 | 2026-09-08 | architecture conformance | The supplied Chrome + Edge base architecture recorded at `docs/CHROME_EDGE_ARCHITECTURE_SPEC.txt`, and this codebase audited against all 40 of its rules in `docs/ARCHITECTURE_CONFORMANCE.md`. 34 met, 2 met under different naming (`dist/` rather than `dist/universal/`; the §2 folder tree is illustrative and the mapping is tabulated), 4 genuine gaps now on the ledger. Every "met" was checked against the code rather than assumed — including grepping `core/`, `crs/`, `engines/` and `qa/` for DOM references and confirming the only matches are a local parameter named `document` and MIME strings, which is why `engines/xml.ts` is a hand-written parser: `DOMParser` does not exist in a Web Worker. The spec's own RULE 36 forbids rewriting stable architecture without a technical reason, so this is an audit and a gap list rather than a reshaping of a working system into example folder names. |

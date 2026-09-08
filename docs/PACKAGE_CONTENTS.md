@@ -19,7 +19,7 @@ tree.
 folder.
 
 ```
-universal-bhunex-converter-1.0.2.zip
+universal-bhunex-converter-1.0.4.zip     17 entries, 0.35 MB
 ├── manifest.json               ← at the ROOT. Not in a subfolder.
 ├── INSTALL-FIRST.txt
 ├── service-worker.js
