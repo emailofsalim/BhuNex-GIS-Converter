@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Universal BhuNex Converter</title>
+    <style>
+      /* The popup is a launcher, not the application: the workspace needs room
+         for a queue, a preview and a settings panel, and a 360 px popup has
+         none of it (instruction §11.1). */
+      body {
+        width: 320px;
+        padding: 14px;
+        overflow: auto;
+      }
+      .launch {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+    </style>
+    <script type="module" crossorigin src="../../assets/popup.js"></script>
+    <link rel="stylesheet" crossorigin href="../../assets/client.css">
+  </head>
+  <body>
+    <div class="brand" style="margin-bottom: 12px">
+      <img class="brand__mark" src="../../icons/icon-48.png" alt="" />
+      <div>
+        <div style="font-weight: 600">Universal BhuNex Converter</div>
+        <div class="brand__sub">GIS · Survey · CAD · LiDAR · Mining</div>
+      </div>
+    </div>
+
+    <div class="row wrap" style="margin-bottom: 12px">
+      <span class="badge badge--ok">Local only</span>
+      <span class="badge badge--muted" id="nativeBadge">Native engine: checking…</span>
+    </div>
+
+    <div class="launch">
+      <button class="btn btn--primary" id="openWorkspace">Open converter workspace</button>
+      <button class="btn" id="openSidePanel">Open side panel</button>
+    </div>
+
+    <p class="small faint" style="margin-top: 14px">
+      Everything is converted on this machine. Nothing is uploaded, and no conversion path contains a network request.
+    </p>
+
+  </body>
+</html>

@@ -50,6 +50,19 @@ jobs:
         # failure rather than a documentation chore.
         run: npm run docs:check
 
+      - name: Assert the committed build matches the source
+        # dist/ is COMMITTED, because a browser loads a folder and cannot build
+        # one — without it, downloading this repository and pointing "Load
+        # unpacked" at it gives "Manifest file is missing or unreadable", which
+        # is the obvious use of the repository failing.
+        #
+        # The real risk of committing build output is that it goes stale
+        # silently, and a stale extension is worse than none: the bug report
+        # describes code that is already fixed. So this rebuilds from source
+        # into a temporary directory and compares every file byte for byte.
+        # It runs BEFORE the local build below, which would overwrite dist/.
+        run: npm run build:check
+
       - name: Build extension
         run: npm run build
 
@@ -65,6 +78,21 @@ jobs:
         # at upload — this project shipped at 134 once, which would have been an
         # automatic rejection nobody could have spotted by reading the manifest.
         run: npm run store:check
+
+      - name: Assert the committed package is the one the source produces
+        # The same argument as the committed dist/, for the ZIP: someone who
+        # downloads dist-zip/*.zip from the repository must be getting the
+        # archive this commit builds, not an older one left behind.
+        run: |
+          npm run build:store
+          node scripts/package-extension.mjs
+          git diff --exit-code --stat -- dist dist-zip || {
+            echo
+            echo "dist/ or dist-zip/ is not what this source builds."
+            echo "Run: npm run build:store && npm run package"
+            echo "then commit dist/ and dist-zip/ with your change."
+            exit 1
+          }
 
       - name: Package extension and verify the archive
         # `npm run package` builds the ZIP and then validates it with

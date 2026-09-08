@@ -41,24 +41,40 @@ conversion path, and CI fails the build if a remote resource reaches the bundle.
 A **Chrome Manifest V3 extension**. The same package runs in **Google Chrome and
 Microsoft Edge** — both are Chromium, and nothing changes between them.
 
-> **Do not load this repository folder into your browser.** It contains
-> TypeScript, not a built extension, and there is no `manifest.json` at the
-> root — that is what produces *"Manifest file is missing or unreadable"*.
+**The built extension is in this repository, at [`dist/`](dist).** No Node, no
+npm, no build step. Downloading this repo and loading `dist/` is all it takes.
 
-### The easy way — no Node, no build
+### From the repository
 
-1. Download `universal-bhunex-converter-<version>.zip` from
-   **[Releases](https://github.com/emailofsalim/Universal-Converter/releases)**.
-2. **Extract it to a plain local folder such as `C:\Extensions\`** — browsers
-   load a folder, not an archive, and a folder inside OneDrive loads as
-   unreadable placeholders on a managed laptop.
-3. Read `INSTALL-FIRST.txt`, which is inside the folder you just extracted.
-4. `edge://extensions` (or `chrome://extensions`) → turn on **Developer mode**.
-5. **Load unpacked** → select the unzipped folder, the one that directly
-   contains `manifest.json`.
-6. Toolbar icon → **Open converter workspace**.
+1. Green **Code** button → **Download ZIP**, or `git clone`.
+2. Extract it to a plain local folder such as `C:\Extensions\` — **not**
+   OneDrive, Desktop, Documents or Downloads. Browsers load a folder, and on a
+   managed laptop OneDrive turns the files into cloud placeholders the browser
+   cannot read.
+3. `chrome://extensions` or `edge://extensions` → turn on **Developer mode**.
+4. **Load unpacked** → select the **`dist`** folder inside what you extracted.
+5. Toolbar icon → **Open converter workspace**.
 
-Keep the folder where you put it: the browser re-reads it at every start.
+> **Select `dist/`, not the repository root and not `extension/`.** The root has
+> no `manifest.json`, and `extension/` is TypeScript source. Both produce
+> *"Manifest file is missing or unreadable"*.
+
+### From a release
+
+**[Releases](https://github.com/emailofsalim/Universal-Converter/releases)** has
+`universal-bhunex-converter-<version>.zip` — the same build, already unwrapped
+so `manifest.json` sits at the top of the archive. Extract it and select the
+folder itself. `INSTALL-FIRST.txt` inside repeats these steps.
+
+The identical archive is committed at
+[`dist-zip/`](dist-zip) if you would rather take it from the repository.
+
+### For the Chrome Web Store or Edge Add-ons
+
+Upload `dist-zip/universal-bhunex-converter-<version>.zip` as it is. The listing
+copy, permission justifications and data-use answers are written out in
+**[docs/STORE_LISTING.md](docs/STORE_LISTING.md)**, and the privacy policy both
+stores require is **[docs/PRIVACY.md](docs/PRIVACY.md)**.
 
 ### Building it yourself
 
@@ -66,25 +82,33 @@ Node 20+:
 
 ```bash
 npm ci
-npm run verify        # typecheck + 450 tests + build
+npm run verify   # typecheck + 799 tests + build + committed-build check
 ```
 
-Then **Load unpacked** → select **`dist/`**. Not the repository root, and not
-`extension/` — the root has no manifest and `extension/` is the source that
-`npm run build` compiles into `dist/`.
+`npm run build` writes a **developer** build to `dist/` — with source maps, so it
+will show as a diff against the committed copy. `npm run build:store` puts the
+committed version back.
 
-`npm run store:package` produces `dist-zip/universal-bhunex-converter-<version>.zip`
-— a store build with no source maps, checked against every rule the stores enforce.
+```bash
+npm run store:package   # rebuilds dist/ and dist-zip/ exactly as committed
+```
 
-Seeing *"Manifest file is missing or unreadable"*? On a work laptop it is
-usually OneDrive, not the wrong folder — **[docs/INSTALL.md](docs/INSTALL.md)**
-explains both causes and how to tell them apart.
+**`dist/` and `dist-zip/` are committed on purpose**, which is normally a
+mistake and here is the exception that earns itself: a browser loads a folder
+and cannot build one, so gitignoring the build meant the obvious use of this
+repository — download it, load it — failed with *"Manifest file is missing or
+unreadable"*. The real risk of committed build output is that it goes stale
+silently, so CI rebuilds from source on every push and fails if a single byte
+differs (`npm run build:check`). It cannot drift.
 
-**[docs/PACKAGE_CONTENTS.md](docs/PACKAGE_CONTENTS.md)** lists every file and
-folder the ZIP must contain to load through Developer mode in Chrome and Edge,
-and the archive rules behind it. `npm run package:check` enforces all of it —
-it reads the archive the way a strict extractor does, which is how a malformed
-central directory that Node and 7-Zip happily recovered from, but Windows
+Still seeing *"Manifest file is missing or unreadable"*? On a work laptop it is
+usually OneDrive rather than the wrong folder — **[docs/INSTALL.md](docs/INSTALL.md)**
+explains how to tell the two apart.
+
+**[docs/PACKAGE_CONTENTS.md](docs/PACKAGE_CONTENTS.md)** lists every file the
+archive must contain and the rules behind it. `npm run package:check` enforces
+all of it, reading the archive the way a strict extractor does — which is how a
+malformed central directory that Node and 7-Zip recovered from, but Windows
 Explorer did not, was found.
 
 Optional: DWG support needs a small local helper — see
@@ -223,6 +247,8 @@ minimal.
 ## Layout
 
 ```
+dist/           THE BUILT EXTENSION — load this folder in the browser
+dist-zip/       the packaged archive — upload this to the stores
 extension/src/
   core/       CIR, format registry, detector, units, geometry, precision,
               layout (delivery structure), predict (fidelity), presets,
@@ -306,4 +332,4 @@ specification is
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE). Developed by Md Salim Ansari.

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" data-theme="">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Universal BhuNex Converter</title>
+    <script type="module" crossorigin src="../../assets/workspace.js"></script>
+    <link rel="stylesheet" crossorigin href="../../assets/client.css">
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <img class="brand__mark" src="../../icons/icon-48.png" alt="" />
+          <span>Universal BhuNex Converter</span>
+          <span class="brand__sub">GIS · Survey · CAD · LiDAR · Mining</span>
+        </div>
+        <div class="topbar__spacer"></div>
+        <span class="badge badge--ok" id="localBadge" title="No file leaves this machine. There is no network path in any conversion.">
+          Local only
+        </span>
+        <span class="badge badge--muted" id="nativeBadge" title="Status of the optional DWG helper">Native engine: checking…</span>
+        <button class="btn btn--ghost" id="themeBtn" title="Switch theme" aria-label="Switch theme">Theme</button>
+        <button class="btn btn--ghost" id="settingsBtn">Settings</button>
+        <button class="btn btn--ghost" id="helpBtn">Help</button>
+      </header>
+
+      <div class="main">
+        <!-- Left: the queue -->
+        <section class="pane" aria-label="Conversion queue">
+          <div class="pane__head">
+            <span class="pane__title">Queue</span>
+            <span class="badge badge--muted" id="queueCount">0 files</span>
+            <div class="topbar__spacer"></div>
+            <button class="btn btn--ghost" id="addFilesBtn" title="Add files (Ctrl+O)">Add Files</button>
+            <button class="btn btn--ghost btn--danger" id="clearQueueBtn">Clear</button>
+          </div>
+          <div class="pane__body queue" id="queue">
+            <p class="queue__empty">Nothing queued yet.<br />Drop files anywhere, or use Add Files.</p>
+          </div>
+        </section>
+
+        <!-- Centre: drop zone, inspector, preview -->
+        <section class="pane" aria-label="Inspector and preview">
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop files or folders here to convert">
+            <div class="dropzone__title">Drop files or folders here</div>
+            <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
+            <button class="btn btn--primary" id="dropBrowseBtn" type="button">Choose files</button>
+            <div class="dropzone__formats" id="dropFormats"></div>
+          </div>
+
+          <nav class="tabs hidden" id="inspectorTabs" role="tablist" aria-label="Inspector sections">
+            <button class="tab tab--on" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+            <button class="tab" data-tab="geometry" role="tab" aria-selected="false">Geometry</button>
+            <button class="tab" data-tab="crs" role="tab" aria-selected="false">CRS</button>
+            <button class="tab" data-tab="layers" role="tab" aria-selected="false">Layers</button>
+            <button class="tab" data-tab="attributes" role="tab" aria-selected="false">Attributes</button>
+            <button class="tab" data-tab="geometry-ops" role="tab" aria-selected="false">Geometry tools</button>
+            <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
+            <button class="tab" data-tab="edit" role="tab" aria-selected="false">Edit</button>
+            <button class="tab" data-tab="metadata" role="tab" aria-selected="false">Source metadata</button>
+            <button class="tab" data-tab="fidelity" role="tab" aria-selected="false">What will be lost</button>
+            <button class="tab" data-tab="compare" role="tab" aria-selected="false">Compare</button>
+            <button class="tab" data-tab="warnings" role="tab" aria-selected="false">
+              Warnings <span class="badge badge--muted" id="warnCount">0</span>
+            </button>
+          </nav>
+
+          <div class="pane__body" id="inspectorBody" role="tabpanel"></div>
+
+          <div class="preview hidden" id="previewWrap">
+            <canvas id="previewCanvas"></canvas>
+            <div class="preview__tools">
+              <button class="btn btn--ghost" id="fitBtn" title="Fit to extent">Fit</button>
+              <button class="btn btn--ghost" id="gridBtn" title="Toggle grid">Grid</button>
+            </div>
+            <div class="edit__bar hidden" id="editBar">
+              <button class="btn btn--ghost" id="editToggle" title="Turn vertex editing on or off">Edit off</button>
+              <span class="edit__hint">drag a vertex · Alt-click a segment to insert · Del to delete · Shift to multi-select</span>
+              <span class="topbar__spacer"></span>
+              <label class="edit__snap"><input type="checkbox" id="editSnap" /> Snap</label>
+              <span class="edit__readout" id="editReadout"></span>
+            </div>
+            <!-- Measuring on the canvas (spec §26.1). The arithmetic is in
+                 core/measure.ts, which picks geodesic or planar from the CRS —
+                 nothing here computes a length. -->
+            <div class="edit__bar hidden" id="measureBar">
+              <button class="btn btn--ghost" id="measureDistance" title="Measure a distance or a run of legs">Distance</button>
+              <button class="btn btn--ghost" id="measureArea" title="Measure an enclosed area">Area</button>
+              <button class="btn btn--ghost" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
+              <span class="edit__hint">click to add a point · double-click or Esc to finish · Backspace undoes one</span>
+              <span class="topbar__spacer"></span>
+              <span class="edit__readout" id="measureReadout"></span>
+            </div>
+            <div class="preview__overlay">
+              <span class="preview__readout" id="readout">—</span>
+              <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
+            </div>
+          </div>
+
+          <!-- Source and output side by side, so nobody has to export a file to
+               find out the conversion damaged it (spec §30.1). -->
+          <div class="compare hidden" id="compareWrap">
+            <div class="compare__tools">
+              <button class="btn btn--ghost" id="compareFitBtn" title="Fit both panes to their data">Fit</button>
+              <button class="btn btn--ghost" id="compareGridBtn" title="Toggle the grid on both panes">Grid</button>
+              <button class="btn btn--ghost" id="compareLinkBtn" title="Pan and zoom the two panes together">Linked</button>
+              <span class="compare__readout" id="compareReadout">—</span>
+              <span class="compare__legend" id="compareLegend"></span>
+            </div>
+            <div class="compare__panes" id="compareCanvas"></div>
+            <p class="compare__note hidden" id="compareNote"></p>
+          </div>
+        </section>
+
+        <!-- Right: target format and settings -->
+        <section class="pane" aria-label="Output format and conversion settings">
+          <div class="pane__head">
+            <span class="pane__title">Output format</span>
+            <div class="topbar__spacer"></div>
+            <span class="badge badge--muted" id="targetBadge">none selected</span>
+          </div>
+          <div class="pane__body">
+            <div class="formats">
+              <input class="input" id="formatSearch" type="search" placeholder="Search formats…" aria-label="Search output formats" />
+              <div class="chips" id="categoryChips" role="group" aria-label="Format categories"></div>
+              <div class="fcards" id="formatCards"></div>
+            </div>
+            <div id="settingsPanel"></div>
+          </div>
+          <div class="actions">
+            <button class="btn btn--primary" id="convertBtn" disabled>Convert</button>
+            <button class="btn" id="convertQaBtn" disabled title="Convert, then re-import the output and compare it with the source">
+              Convert + QA
+            </button>
+            <div class="actions__spacer"></div>
+            <button class="btn" id="downloadBtn" disabled>Download</button>
+            <button class="btn" id="batchZipBtn" disabled title="One ZIP with every output and a conversion manifest">Batch ZIP</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Bottom: QA, log, progress -->
+      <section class="bottom" aria-label="Results and log">
+        <div class="progress"><div class="progress__bar" id="progressBar"></div></div>
+        <nav class="tabs">
+          <button class="tab tab--on" data-bottom="qa">QA report</button>
+          <button class="tab" data-bottom="log">Conversion log</button>
+          <button class="tab" data-bottom="delivery">Delivery structure</button>
+          <button class="tab" data-bottom="manifest">Batch manifest</button>
+          <button class="tab" data-bottom="health">Health</button>
+          <button class="tab" data-bottom="history">History</button>
+          <button class="tab" data-bottom="workflows">Workflows</button>
+          <span class="topbar__spacer"></span>
+          <span class="badge badge--muted" id="perfBadge" style="align-self: center; margin-right: 12px"></span>
+        </nav>
+        <div class="pane__body" id="bottomBody"></div>
+      </section>
+    </div>
+
+    <input type="file" id="filePicker" multiple class="sr-only" aria-hidden="true" />
+    <input type="file" id="folderPicker" webkitdirectory multiple class="sr-only" aria-hidden="true" />
+
+    <dialog class="dialog" id="settingsDialog" aria-label="Settings"></dialog>
+    <dialog class="dialog" id="helpDialog" aria-label="Help"></dialog>
+    <dialog class="dialog palette" id="commandPalette" aria-label="Command palette"></dialog>
+
+  </body>
+</html>

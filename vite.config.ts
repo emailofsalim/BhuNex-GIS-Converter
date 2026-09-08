@@ -5,7 +5,17 @@ import { defineConfig, type Plugin } from 'vite';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const extensionRoot = resolve(root, 'extension');
-const outDir = resolve(root, 'dist');
+
+/**
+ * Where the build lands. `dist/` unless OUT_DIR says otherwise.
+ *
+ * The override exists for one caller: `scripts/assert-build-committed.mjs`,
+ * which rebuilds into a temporary directory and compares the result with the
+ * `dist/` committed to the repository. It has to build somewhere ELSE, because
+ * building over the committed copy is precisely the thing that would make the
+ * comparison meaningless.
+ */
+const outDir = process.env.OUT_DIR ? resolve(process.env.OUT_DIR) : resolve(root, 'dist');
 
 /**
  * Copies manifest.json and everything under extension/public into the build
