@@ -1,0 +1,1903 @@
+UNIVERSAL CHROME + MICROSOFT EDGE EXTENSION
+POWERFUL COMPUTATION-FIRST ARCHITECTURE SPECIFICATION
+============================================================
+VERSION 2.0
+============================================================
+
+PURPOSE
+============================================================
+
+This document is the mandatory BASE ARCHITECTURE SPECIFICATION for building
+ONE powerful browser extension that runs on BOTH:
+
+1. Google Chrome
+2. Microsoft Edge
+
+The extension must be designed as a single Chromium/WebExtension application,
+not as two separately maintained applications.
+
+The same source code, same manifest, same UI, same processing engines,
+same algorithms, same storage architecture, and same packaged extension
+must work in both Chrome and Edge wherever the standards and APIs permit.
+
+The extension is expected to perform complex mathematical calculations,
+complex algorithms, computational geometry, large-data processing,
+file processing, scientific calculations, engineering calculations,
+GIS/Survey/CAD-related algorithms, and potentially other computationally
+intensive operations.
+
+Therefore, this is NOT a simple popup extension architecture.
+
+The system must be designed as a serious computation platform capable of
+handling CPU-intensive and memory-intensive workloads without freezing
+the browser UI.
+
+============================================================
+1. PRIMARY ARCHITECTURAL PRINCIPLE
+============================================================
+
+ONE CODEBASE
++
+ONE MANIFEST V3
++
+ONE APPLICATION
++
+ONE BUILD
++
+WEBEXTENSION / CHROMIUM COMPATIBILITY
+=
+CHROME + EDGE
+
+
+Do NOT create:
+
+- Separate Chrome source code
+- Separate Edge source code
+- Separate application logic
+- Duplicate UI
+- Duplicate processing engines
+- Duplicate algorithms
+
+
+The default architecture must be:
+
+                    UNIVERSAL EXTENSION
+                           |
+                +----------+----------+
+                |                     |
+                v                     v
+             CHROME                  EDGE
+                |                     |
+                +----------+----------+
+                           |
+                    SAME APPLICATION
+                    SAME SOURCE CODE
+                    SAME BUILD
+
+
+Browser-specific code must only be introduced when a genuine API
+compatibility issue requires it.
+
+
+============================================================
+2. COMPLETE PROJECT FOLDER STRUCTURE
+============================================================
+
+universal-computing-extension/
+│
+├── README.md
+├── LICENSE
+├── package.json
+├── package-lock.json
+├── tsconfig.json
+├── vite.config.ts
+├── eslint.config.js
+├── prettier.config.js
+│
+├── manifest.json
+│
+├── src/
+│   │
+│   ├── background/
+│   │   ├── service-worker.ts
+│   │   ├── message-router.ts
+│   │   └── event-manager.ts
+│   │
+│   ├── content/
+│   │   ├── content-script.ts
+│   │   ├── page-detector.ts
+│   │   └── page-bridge.ts
+│   │
+│   ├── popup/
+│   │   ├── index.html
+│   │   ├── popup.ts
+│   │   ├── popup.css
+│   │   └── components/
+│   │       ├── Header.ts
+│   │       ├── Toolbar.ts
+│   │       ├── Status.ts
+│   │       ├── TaskMonitor.ts
+│   │       └── Settings.ts
+│   │
+│   ├── options/
+│   │   ├── index.html
+│   │   ├── options.ts
+│   │   └── options.css
+│   │
+│   ├── app/
+│   │   ├── application.ts
+│   │   ├── command-bus.ts
+│   │   ├── task-controller.ts
+│   │   └── application-state.ts
+│   │
+│   ├── core/
+│   │   │
+│   │   ├── engine/
+│   │   │   ├── computation-engine.ts
+│   │   │   ├── algorithm-engine.ts
+│   │   │   ├── pipeline-engine.ts
+│   │   │   └── task-engine.ts
+│   │   │
+│   │   ├── math/
+│   │   │   ├── arithmetic/
+│   │   │   ├── algebra/
+│   │   │   ├── calculus/
+│   │   │   ├── trigonometry/
+│   │   │   ├── statistics/
+│   │   │   ├── probability/
+│   │   │   ├── linear-algebra/
+│   │   │   ├── numerical-methods/
+│   │   │   ├── optimization/
+│   │   │   ├── interpolation/
+│   │   │   └── numerical-validation/
+│   │   │
+│   │   ├── algorithms/
+│   │   │   ├── sorting/
+│   │   │   ├── searching/
+│   │   │   ├── graph/
+│   │   │   ├── pathfinding/
+│   │   │   ├── optimization/
+│   │   │   ├── spatial/
+│   │   │   ├── geometry/
+│   │   │   └── generic/
+│   │   │
+│   │   ├── geometry/
+│   │   │   ├── point/
+│   │   │   ├── line/
+│   │   │   ├── polygon/
+│   │   │   ├── triangulation/
+│   │   │   ├── topology/
+│   │   │   ├── intersection/
+│   │   │   ├── buffering/
+│   │   │   └── validation/
+│   │   │
+│   │   ├── services/
+│   │   │   ├── calculation-service.ts
+│   │   │   ├── algorithm-service.ts
+│   │   │   ├── validation-service.ts
+│   │   │   ├── file-service.ts
+│   │   │   └── export-service.ts
+│   │   │
+│   │   ├── managers/
+│   │   │   ├── task-manager.ts
+│   │   │   ├── project-manager.ts
+│   │   │   ├── memory-manager.ts
+│   │   │   ├── cache-manager.ts
+│   │   │   └── session-manager.ts
+│   │   │
+│   │   └── utils/
+│   │       ├── number-utils.ts
+│   │       ├── array-utils.ts
+│   │       ├── validation-utils.ts
+│   │       ├── performance-utils.ts
+│   │       └── error-utils.ts
+│   │
+│   ├── workers/
+│   │   ├── worker-manager.ts
+│   │   ├── computation.worker.ts
+│   │   ├── algorithm.worker.ts
+│   │   ├── geometry.worker.ts
+│   │   ├── data.worker.ts
+│   │   └── worker-types.ts
+│   │
+│   ├── wasm/
+│   │   ├── modules/
+│   │   ├── loaders/
+│   │   └── wasm-types.ts
+│   │
+│   ├── parallel/
+│   │   ├── task-scheduler.ts
+│   │   ├── job-queue.ts
+│   │   ├── worker-pool.ts
+│   │   └── parallel-executor.ts
+│   │
+│   ├── precision/
+│   │   ├── precision-manager.ts
+│   │   ├── floating-point.ts
+│   │   ├── decimal.ts
+│   │   ├── big-number.ts
+│   │   └── tolerance.ts
+│   │
+│   ├── parsers/
+│   │   ├── expression-parser.ts
+│   │   ├── formula-parser.ts
+│   │   └── input-parser.ts
+│   │
+│   ├── storage/
+│   │   ├── storage-manager.ts
+│   │   ├── indexed-db.ts
+│   │   ├── cache-store.ts
+│   │   └── project-store.ts
+│   │
+│   ├── adapters/
+│   │   ├── browser/
+│   │   │   ├── browser-interface.ts
+│   │   │   └── browser-adapter.ts
+│   │   │
+│   │   └── webextension/
+│   │       ├── runtime.ts
+│   │       ├── storage.ts
+│   │       ├── tabs.ts
+│   │       ├── downloads.ts
+│   │       └── permissions.ts
+│   │
+│   ├── formats/
+│   │   ├── json/
+│   │   ├── csv/
+│   │   ├── txt/
+│   │   └── custom/
+│   │
+│   └── types/
+│       ├── index.ts
+│       ├── math.ts
+│       ├── algorithm.ts
+│       ├── computation.ts
+│       ├── worker.ts
+│       ├── messages.ts
+│       ├── storage.ts
+│       └── extension.d.ts
+│
+├── public/
+│   ├── icons/
+│   │   ├── icon16.png
+│   │   ├── icon32.png
+│   │   ├── icon48.png
+│   │   └── icon128.png
+│   │
+│   ├── assets/
+│   └── wasm/
+│
+├── libraries/
+│   └── vendor/
+│
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   ├── numerical/
+│   ├── algorithms/
+│   ├── geometry/
+│   ├── performance/
+│   └── e2e/
+│
+├── benchmarks/
+│   ├── math/
+│   ├── algorithms/
+│   ├── geometry/
+│   └── memory/
+│
+├── docs/
+│   ├── architecture.md
+│   ├── computation-engine.md
+│   ├── worker-system.md
+│   ├── precision.md
+│   ├── performance.md
+│   ├── security.md
+│   ├── installation.md
+│   └── development.md
+│
+├── scripts/
+│   ├── build.ts
+│   ├── package.ts
+│   └── validate-build.ts
+│
+└── dist/
+    └── universal/
+
+
+============================================================
+3. SINGLE MANIFEST REQUIREMENT
+============================================================
+
+There must be ONE primary:
+
+manifest.json
+
+Do NOT create:
+
+manifest/chrome/manifest.json
+manifest/edge/manifest.json
+
+unless a future, proven browser-specific requirement makes this necessary.
+
+The default assumption is that the same Manifest V3 configuration works
+for both Chrome and Edge.
+
+The extension should target standard WebExtension/Chromium APIs.
+
+Only introduce browser-specific manifest handling if a real incompatibility
+is demonstrated.
+
+
+============================================================
+4. SINGLE BUILD REQUIREMENT
+============================================================
+
+There must be ONE normal production build.
+
+Source:
+
+src/
++
+manifest.json
++
+public/
++
+libraries/
++
+wasm/
++
+configuration
+|
+v
+BUILD
+|
+v
+dist/universal/
+
+
+The resulting extension package must be suitable for loading in:
+
+- Google Chrome
+- Microsoft Edge
+
+
+Do not unnecessarily create:
+
+dist/chrome/
+dist/edge/
+
+The default output is:
+
+dist/universal/
+
+
+============================================================
+5. BACKGROUND SERVICE WORKER
+============================================================
+
+Location:
+
+src/background/
+
+Files:
+
+service-worker.ts
+message-router.ts
+event-manager.ts
+
+
+The Service Worker is responsible for browser-level coordination.
+
+It may handle:
+
+- Extension lifecycle
+- Browser events
+- Message routing
+- Context menus
+- Tabs
+- Downloads
+- Notifications
+- Permission requests
+- Communication with content scripts
+- Coordination with the application
+- Coordination with workers
+
+
+IMPORTANT:
+
+The Service Worker is NOT the computation engine.
+
+Do not put complex mathematical algorithms inside service-worker.ts.
+
+Do not perform large calculations directly inside the Service Worker unless
+there is a clear technical reason and the operation is trivial.
+
+
+============================================================
+6. APPLICATION LAYER
+============================================================
+
+Location:
+
+src/app/
+
+This layer coordinates the application.
+
+Files:
+
+application.ts
+command-bus.ts
+task-controller.ts
+application-state.ts
+
+
+Responsibilities:
+
+- Application lifecycle
+- Command dispatch
+- Task coordination
+- Application state
+- Communication between UI and Core
+
+
+The Application layer should coordinate modules rather than duplicate
+their functionality.
+
+
+============================================================
+7. CORE COMPUTATION ENGINE
+============================================================
+
+Location:
+
+src/core/
+
+The Core is the computational heart of the extension.
+
+It must remain independent from the popup and browser-specific UI.
+
+Major components include:
+
+- Computation Engine
+- Algorithm Engine
+- Math Engine
+- Geometry Engine
+- Processing Pipeline
+- Services
+- Managers
+
+
+The Core must be testable without launching the browser UI wherever practical.
+
+
+============================================================
+8. MATHEMATICS ENGINE
+============================================================
+
+Location:
+
+src/core/math/
+
+
+The architecture must support complex mathematical operations.
+
+Potential categories include:
+
+- Arithmetic
+- Algebra
+- Calculus
+- Differential equations
+- Trigonometry
+- Statistics
+- Probability
+- Linear algebra
+- Matrix operations
+- Numerical methods
+- Optimization
+- Interpolation
+- Regression
+- Numerical integration
+- Numerical differentiation
+- Root finding
+- Equation solving
+- Vector mathematics
+- Complex numbers
+- Coordinate calculations
+- Engineering mathematics
+
+
+Do not place all mathematics inside one file.
+
+Each mathematical domain must be independently testable and extendable.
+
+
+============================================================
+9. ALGORITHM ENGINE
+============================================================
+
+Location:
+
+src/core/algorithms/
+
+
+The architecture must support complex algorithms.
+
+Potential categories:
+
+- Sorting
+- Searching
+- Graph algorithms
+- Pathfinding
+- Optimization
+- Spatial algorithms
+- Computational geometry
+- Dynamic programming
+- Numerical algorithms
+- Data processing
+- Custom domain algorithms
+
+
+Algorithms must be implemented as modular, reusable functions/classes.
+
+Avoid coupling algorithms directly to UI.
+
+
+============================================================
+10. GEOMETRY ENGINE
+============================================================
+
+Location:
+
+src/core/geometry/
+
+
+This module is intended for computational geometry and can later support
+GIS, CAD, surveying, mapping, engineering, and spatial workloads.
+
+Potential functionality:
+
+- Points
+- Lines
+- Polygons
+- Multi-geometries
+- Intersections
+- Union
+- Difference
+- Buffering
+- Simplification
+- Triangulation
+- Topology
+- Spatial indexing
+- Distance calculations
+- Area calculations
+- Perimeter calculations
+- Coordinate operations
+- Geometry validation
+
+
+Geometry operations must be deterministic and thoroughly tested.
+
+
+============================================================
+11. PRECISION ARCHITECTURE
+============================================================
+
+Location:
+
+src/precision/
+
+
+This is a critical component.
+
+Do NOT assume JavaScript Number is sufficient for every mathematical task.
+
+The system must support choosing an appropriate numerical representation
+depending on the operation.
+
+Potential representations:
+
+- IEEE-754 floating point
+- Arbitrary precision integers
+- Arbitrary precision decimal
+- Big-number arithmetic
+- Complex numbers
+- Configurable tolerances
+
+
+The Precision Manager should allow algorithms to define:
+
+- Precision
+- Rounding mode
+- Tolerance
+- Significant digits
+- Numerical comparison rules
+
+
+Never silently reduce precision when precision is important to the result.
+
+
+============================================================
+12. EXPRESSION / FORMULA PARSING
+============================================================
+
+Location:
+
+src/parsers/
+
+
+The extension may need to interpret:
+
+- Mathematical expressions
+- Formulas
+- Variables
+- Functions
+- Constants
+- User-entered equations
+
+
+Parsing must be isolated from evaluation.
+
+Architecture:
+
+INPUT
+ |
+ v
+LEXER / PARSER
+ |
+ v
+ABSTRACT SYNTAX TREE
+ |
+ v
+VALIDATION
+ |
+ v
+EVALUATION ENGINE
+ |
+ v
+RESULT
+
+
+Do not evaluate arbitrary user input through unsafe dynamic code execution.
+
+
+============================================================
+13. WEB WORKER ARCHITECTURE
+============================================================
+
+Location:
+
+src/workers/
+
+
+Heavy calculations MUST be moved away from the main UI thread.
+
+Base workers:
+
+processing.worker.ts
+computation.worker.ts
+algorithm.worker.ts
+geometry.worker.ts
+data.worker.ts
+
+
+The Worker system must support:
+
+- Task IDs
+- Progress reporting
+- Cancellation
+- Errors
+- Results
+- Time measurement
+- Memory-conscious processing
+- Large datasets
+- Transferable objects where appropriate
+
+
+General flow:
+
+USER
+ |
+ v
+UI
+ |
+ v
+TASK CONTROLLER
+ |
+ v
+WORKER MANAGER
+ |
+ v
+WORKER
+ |
+ v
+COMPUTATION
+ |
+ v
+RESULT
+ |
+ v
+UI
+
+
+============================================================
+14. WORKER POOL AND PARALLEL COMPUTING
+============================================================
+
+Location:
+
+src/parallel/
+
+
+The architecture must be capable of parallel computation.
+
+Components:
+
+task-scheduler.ts
+job-queue.ts
+worker-pool.ts
+parallel-executor.ts
+
+
+The system may distribute independent jobs across multiple Workers.
+
+Example:
+
+Large Task
+ |
+ +---- Job 1 ---> Worker 1
+ +---- Job 2 ---> Worker 2
+ +---- Job 3 ---> Worker 3
+ +---- Job 4 ---> Worker 4
+ |
+ v
+Result Aggregator
+ |
+ v
+Final Result
+
+
+Do not automatically spawn unlimited workers.
+
+Worker count must be controlled based on available resources and workload.
+
+
+============================================================
+15. WEBASSEMBLY ARCHITECTURE
+============================================================
+
+Location:
+
+src/wasm/
+public/wasm/
+
+
+WebAssembly may be used for extremely CPU-intensive workloads.
+
+Potential use cases:
+
+- Numerical computation
+- Computational geometry
+- Large matrix operations
+- Scientific algorithms
+- Parsing
+- Point-cloud processing
+- Image/data processing
+- Other performance-critical algorithms
+
+
+JavaScript/TypeScript should remain the primary orchestration layer.
+
+WASM should be introduced where it provides a genuine performance or
+capability advantage.
+
+Do not use WASM merely for complexity.
+
+
+============================================================
+16. MEMORY MANAGEMENT
+============================================================
+
+Location:
+
+src/core/managers/memory-manager.ts
+
+
+The extension must be designed with memory usage in mind.
+
+Potential requirements:
+
+- Avoid unnecessary data duplication
+- Release unused buffers
+- Reuse typed arrays where appropriate
+- Process large data in chunks
+- Use transferable objects where appropriate
+- Avoid retaining references unnecessarily
+- Monitor long-running tasks
+- Prevent uncontrolled cache growth
+
+
+Large datasets must not be loaded into memory repeatedly without reason.
+
+
+============================================================
+17. TASK MANAGEMENT
+============================================================
+
+All expensive operations should be represented as tasks.
+
+A task should have a conceptual state such as:
+
+CREATED
+  |
+QUEUED
+  |
+RUNNING
+  |
++--------+--------+
+|                 |
+COMPLETED       FAILED
+|
+CANCELLED
+
+
+Tasks should support where practical:
+
+- Unique task ID
+- Status
+- Progress
+- Start time
+- End time
+- Cancellation
+- Error information
+- Result
+- Performance metrics
+
+
+============================================================
+18. STORAGE ARCHITECTURE
+============================================================
+
+Location:
+
+src/storage/
+
+
+Structure:
+
+storage/
+├── storage-manager.ts
+├── indexed-db.ts
+├── cache-store.ts
+└── project-store.ts
+
+
+Use storage according to data size and persistence requirements.
+
+Small settings:
+Use appropriate browser extension storage.
+
+Large structured data:
+Use IndexedDB.
+
+Temporary computational data:
+Prefer memory or temporary stores rather than persistent storage.
+
+Do not write every intermediate calculation result permanently.
+
+
+============================================================
+19. CACHE ARCHITECTURE
+============================================================
+
+Caching may be used for expensive deterministic operations.
+
+Cache entries should have:
+
+- Key
+- Input identity
+- Algorithm/version identity
+- Result
+- Metadata
+- Timestamp
+- Optional expiration
+
+
+IMPORTANT:
+
+When an algorithm changes, cached results from an incompatible algorithm
+version must not be silently reused.
+
+
+============================================================
+20. BROWSER ADAPTER ARCHITECTURE
+============================================================
+
+Location:
+
+src/adapters/
+
+
+Default structure:
+
+adapters/
+├── browser/
+│   ├── browser-interface.ts
+│   └── browser-adapter.ts
+│
+└── webextension/
+    ├── runtime.ts
+    ├── storage.ts
+    ├── tabs.ts
+    ├── downloads.ts
+    └── permissions.ts
+
+
+Use standard WebExtension APIs wherever possible.
+
+Do NOT write separate Chrome and Edge implementations unless required.
+
+If a future browser-specific difference appears:
+
+1. Identify the incompatibility.
+2. Define an abstraction.
+3. Implement the difference behind the adapter.
+4. Keep Core independent from the difference.
+
+
+============================================================
+21. CONTENT SCRIPT ARCHITECTURE
+============================================================
+
+Location:
+
+src/content/
+
+
+Content scripts are for webpage integration.
+
+They may:
+
+- Detect supported websites
+- Read permitted page context
+- Communicate with supported page APIs
+- Inject UI
+- Send data to the application
+- Receive results
+
+
+They must NOT become the computational engine.
+
+Complex processing must be delegated to Core/Workers.
+
+
+============================================================
+22. POPUP ARCHITECTURE
+============================================================
+
+Location:
+
+src/popup/
+
+
+The popup must be lightweight.
+
+It should:
+
+- Start calculations
+- Select tools
+- Submit tasks
+- Display progress
+- Display results
+- Open advanced interfaces
+- Show errors
+- Access settings
+
+
+The popup should not perform large calculations itself.
+
+
+============================================================
+23. USER INTERFACE ARCHITECTURE
+============================================================
+
+The UI should be separated from computation.
+
+Correct:
+
+UI
+ |
+ v
+Application
+ |
+ v
+Core
+ |
+ v
+Worker
+ |
+ v
+Result
+
+
+Incorrect:
+
+UI
+ |
+ +---- Massive calculation
+ +---- File parser
+ +---- Algorithm
+ +---- Database
+ +---- Browser API
+ +---- Everything else
+
+
+The UI must remain replaceable without rewriting the computational engine.
+
+
+============================================================
+24. TYPE SYSTEM AND MESSAGE CONTRACTS
+============================================================
+
+Location:
+
+src/types/
+
+
+All important communication should have explicit types.
+
+Examples:
+
+- TaskRequest
+- TaskProgress
+- TaskResult
+- TaskError
+- CalculationRequest
+- CalculationResult
+- WorkerMessage
+- WorkerResponse
+- ApplicationCommand
+
+
+Do not rely on uncontrolled strings or undocumented object structures
+for major internal communication.
+
+
+============================================================
+25. PERFORMANCE BENCHMARKS
+============================================================
+
+Location:
+
+benchmarks/
+
+
+Performance must be measurable.
+
+Benchmark important algorithms for:
+
+- Execution time
+- Memory usage where measurable
+- Scaling behaviour
+- Dataset size
+- Worker vs main-thread performance
+- WASM vs JavaScript where relevant
+
+
+Do not optimize blindly.
+
+Measure first.
+
+
+============================================================
+26. TESTING REQUIREMENTS
+============================================================
+
+Location:
+
+tests/
+
+
+Structure:
+
+tests/
+├── unit/
+├── integration/
+├── numerical/
+├── algorithms/
+├── geometry/
+├── performance/
+└── e2e/
+
+
+Numerical tests are particularly important.
+
+Test:
+
+- Known mathematical results
+- Edge cases
+- Very large values
+- Very small values
+- Precision boundaries
+- Rounding
+- Negative values
+- Zero
+- Invalid inputs
+- Degenerate geometry
+- Overflow/underflow scenarios where applicable
+
+
+Algorithm tests must include:
+
+- Normal cases
+- Edge cases
+- Empty input
+- Large input
+- Invalid input
+- Worst-case patterns where appropriate
+
+
+============================================================
+27. NUMERICAL CORRECTNESS
+============================================================
+
+For mathematical operations, correctness is more important than merely
+producing a plausible answer.
+
+Where appropriate:
+
+- Compare against known reference values.
+- Use tolerance-based comparison for floating-point calculations.
+- Use exact arithmetic where possible.
+- Document numerical assumptions.
+- Document approximation methods.
+- Report precision/accuracy limitations where relevant.
+
+
+Never hide numerical instability.
+
+
+============================================================
+28. ERROR HANDLING
+============================================================
+
+Distinguish:
+
+1. Invalid input
+2. Mathematical domain error
+3. Numerical instability
+4. Algorithm failure
+5. Worker failure
+6. Memory/resource failure
+7. Browser API failure
+8. Permission failure
+9. File parsing failure
+10. Internal programming error
+
+
+The system must return useful errors.
+
+Example conceptual result:
+
+SUCCESS
+{
+  result: ...
+  precision: ...
+  executionTime: ...
+}
+
+
+FAILURE
+{
+  errorType: ...
+  message: ...
+  details: ...
+  taskId: ...
+}
+
+
+Never silently return an incorrect result.
+
+
+============================================================
+29. SECURITY REQUIREMENTS
+============================================================
+
+The extension must use secure practices.
+
+Mandatory principles:
+
+- Minimum permissions
+- Validate all external/page input
+- Validate imported files
+- Validate worker messages
+- Do not execute arbitrary user input as JavaScript
+- Do not use unsafe dynamic code execution
+- Avoid unnecessary remote code
+- Keep sensitive information out of URLs
+- Restrict access to extension resources
+- Validate data before processing
+
+
+Mathematical expression parsing must be implemented safely.
+
+
+============================================================
+30. OFFLINE-FIRST COMPUTATION
+============================================================
+
+The computational engine should work offline wherever the functionality
+does not inherently require an external service.
+
+Core mathematics and algorithms should be locally bundled.
+
+Do not make basic calculations dependent on an internet connection.
+
+Network-dependent functionality must fail gracefully when offline.
+
+
+============================================================
+31. EXTENSIBILITY
+============================================================
+
+The architecture must allow new mathematical and algorithmic modules to
+be added without rewriting the existing engine.
+
+Example:
+
+src/core/math/
+|
+├── algebra/
+├── calculus/
+├── statistics/
+├── linear-algebra/
+|
+└── future-module/
+
+
+New algorithms must be independent modules.
+
+The computation engine should discover or register capabilities through
+a controlled registry mechanism where appropriate.
+
+
+============================================================
+32. MODULE REGISTRY
+============================================================
+
+For a large system, implement registries where useful.
+
+Potential registries:
+
+- Algorithm Registry
+- Math Function Registry
+- Worker Registry
+- Format Registry
+- Capability Registry
+
+
+Example conceptual flow:
+
+REQUEST
+ |
+ v
+CAPABILITY REGISTRY
+ |
+ v
+Find compatible algorithm
+ |
+ v
+Validate inputs
+ |
+ v
+Select execution strategy
+ |
+ +---- Main thread for trivial work
+ |
+ +---- Worker for heavy work
+ |
+ +---- Worker pool for parallel work
+ |
+ +---- WASM for performance-critical work
+ |
+ v
+RESULT
+
+
+============================================================
+33. EXECUTION STRATEGY
+============================================================
+
+The system should not automatically use the heaviest technology for every
+operation.
+
+Choose execution strategy based on workload.
+
+Conceptually:
+
+SMALL / SIMPLE
+    -> Main thread when safe
+
+MODERATE
+    -> Worker
+
+LARGE
+    -> Worker + chunking
+
+PARALLEL
+    -> Worker pool
+
+EXTREMELY CPU-INTENSIVE
+    -> Worker + WASM where beneficial
+
+
+The objective is maximum practical performance without unnecessary
+complexity.
+
+
+============================================================
+34. LARGE DATA PROCESSING
+============================================================
+
+For large files or datasets:
+
+Do NOT assume the complete dataset must always be loaded and duplicated
+in memory.
+
+Where practical:
+
+- Stream
+- Chunk
+- Process incrementally
+- Use typed arrays
+- Use transferable buffers
+- Aggregate results
+- Release temporary memory
+
+
+Algorithms must document if they require the entire dataset in memory.
+
+
+============================================================
+35. FILE PROCESSING
+============================================================
+
+Location:
+
+src/formats/
+
+
+The format architecture must remain modular.
+
+Do not create one universal giant parser.
+
+Example:
+
+formats/
+├── json/
+├── csv/
+├── txt/
+└── custom/
+
+
+Future formats should be added independently.
+
+
+============================================================
+36. LOGGING AND DIAGNOSTICS
+============================================================
+
+The extension should have structured diagnostics.
+
+Useful information includes:
+
+- Task ID
+- Operation
+- Algorithm
+- Input size
+- Execution time
+- Worker ID where applicable
+- Error category
+- Browser environment
+- Application version
+
+
+Production logs must not expose sensitive user information.
+
+
+============================================================
+37. VERSIONING
+============================================================
+
+Algorithm behaviour can change over time.
+
+Important computational modules should have identifiable versions.
+
+This is particularly important for caching and reproducibility.
+
+A result should be traceable to:
+
+- Application version
+- Algorithm version
+- Relevant configuration
+- Precision settings
+
+
+============================================================
+38. DOCUMENTATION
+============================================================
+
+Location:
+
+docs/
+
+
+Required documentation:
+
+architecture.md
+----------------
+Overall architecture.
+
+computation-engine.md
+---------------------
+How computation is executed.
+
+worker-system.md
+-----------------
+Worker lifecycle and parallel processing.
+
+precision.md
+------------
+Numerical precision and tolerance policy.
+
+performance.md
+--------------
+Performance strategy and benchmarks.
+
+security.md
+-----------
+Security architecture.
+
+installation.md
+---------------
+Installation instructions.
+
+development.md
+--------------
+Development workflow.
+
+
+============================================================
+39. BUILD OUTPUT
+============================================================
+
+The build output should be:
+
+dist/
+└── universal/
+
+
+It must contain the complete unpacked extension.
+
+Example:
+
+dist/universal/
+├── manifest.json
+├── background/
+├── content/
+├── popup/
+├── options/
+├── assets/
+├── icons/
+├── workers/
+└── wasm/
+
+
+The build system must ensure that all resources required by the extension
+are available locally and referenced correctly.
+
+
+============================================================
+40. SINGLE PACKAGE TESTING
+============================================================
+
+The same built extension must be tested in:
+
+1. Google Chrome
+2. Microsoft Edge
+
+
+Testing objective:
+
+Install the same package.
+
+Run the same functionality.
+
+Verify the same expected results.
+
+Any difference must be investigated and documented.
+
+
+============================================================
+41. STRICT DEPENDENCY RULES
+============================================================
+
+Do not allow uncontrolled dependencies.
+
+Core mathematics should not depend on UI.
+
+Core algorithms should not depend on popup.
+
+Workers should not depend on DOM APIs.
+
+Browser adapters should not contain mathematical logic.
+
+Storage should not contain algorithm logic.
+
+UI should not contain computational engines.
+
+
+Maintain clean dependency direction.
+
+
+============================================================
+42. NO GIANT FILES
+============================================================
+
+Never create files containing the entire application.
+
+Do not create:
+
+- one giant app.ts
+- one giant popup.ts
+- one giant service-worker.ts
+- one giant math.ts
+- one giant algorithms.ts
+- one giant utils.ts
+
+
+Break the system into logically independent modules.
+
+
+============================================================
+43. NO UNNECESSARY REWRITES
+============================================================
+
+When adding a feature:
+
+1. Inspect the existing architecture.
+2. Identify the correct module.
+3. Add the feature there.
+4. Reuse existing infrastructure.
+5. Preserve existing behaviour.
+6. Add tests.
+7. Only refactor unrelated architecture if technically necessary.
+
+
+Do not rewrite stable modules simply to add a new feature.
+
+
+============================================================
+44. DEVELOPMENT ORDER
+============================================================
+
+The AI/developer must follow this approximate order:
+
+STEP 1:
+Create the complete folder structure.
+
+STEP 2:
+Create package and TypeScript configuration.
+
+STEP 3:
+Create the single Manifest V3 file.
+
+STEP 4:
+Create the Application layer.
+
+STEP 5:
+Create the Background Service Worker.
+
+STEP 6:
+Create message contracts.
+
+STEP 7:
+Create browser/WebExtension adapter layer.
+
+STEP 8:
+Create Storage layer.
+
+STEP 9:
+Create Worker infrastructure.
+
+STEP 10:
+Create Worker Pool / task scheduler.
+
+STEP 11:
+Create Core Computation Engine.
+
+STEP 12:
+Create Precision architecture.
+
+STEP 13:
+Create Mathematics modules.
+
+STEP 14:
+Create Algorithm modules.
+
+STEP 15:
+Create Geometry modules where required.
+
+STEP 16:
+Create WASM integration where justified.
+
+STEP 17:
+Create Popup and Options UI.
+
+STEP 18:
+Create testing infrastructure.
+
+STEP 19:
+Create benchmarks.
+
+STEP 20:
+Create production build.
+
+STEP 21:
+Load the SAME build into Chrome.
+
+STEP 22:
+Load the SAME build into Edge.
+
+STEP 23:
+Run the same test suite.
+
+STEP 24:
+Only after the foundation is stable, implement application-specific
+features.
+
+
+============================================================
+45. NON-NEGOTIABLE RULES
+============================================================
+
+RULE 01:
+Build ONE extension for both Chrome and Edge.
+
+RULE 02:
+Use ONE shared source codebase.
+
+RULE 03:
+Use ONE primary Manifest V3 file.
+
+RULE 04:
+Use ONE normal production build.
+
+RULE 05:
+Do not maintain duplicate Chrome and Edge applications.
+
+RULE 06:
+Use standard WebExtension/Chromium APIs wherever possible.
+
+RULE 07:
+Keep browser-specific compatibility behind adapters.
+
+RULE 08:
+Keep business logic inside Core.
+
+RULE 09:
+Keep mathematical logic independent from UI.
+
+RULE 10:
+Keep algorithm logic independent from UI.
+
+RULE 11:
+Do not perform heavy computation in popup.ts.
+
+RULE 12:
+Do not perform heavy computation in content-script.ts.
+
+RULE 13:
+Do not use the Service Worker as the computation engine.
+
+RULE 14:
+Use Web Workers for expensive calculations.
+
+RULE 15:
+Use Worker Pools for appropriate parallel workloads.
+
+RULE 16:
+Use WebAssembly when it provides a meaningful performance advantage.
+
+RULE 17:
+Design for memory efficiency.
+
+RULE 18:
+Design for numerical correctness.
+
+RULE 19:
+Do not silently lose numerical precision.
+
+RULE 20:
+Use explicit tolerances for floating-point comparisons where appropriate.
+
+RULE 21:
+Validate mathematical and algorithmic inputs.
+
+RULE 22:
+Never execute arbitrary user input as JavaScript.
+
+RULE 23:
+Use typed communication contracts.
+
+RULE 24:
+Centralize persistent storage.
+
+RULE 25:
+Do not duplicate large datasets unnecessarily.
+
+RULE 26:
+Use chunking/streaming for large workloads where practical.
+
+RULE 27:
+Support task cancellation for long-running operations where practical.
+
+RULE 28:
+Provide progress reporting for long-running operations.
+
+RULE 29:
+Test numerical correctness.
+
+RULE 30:
+Test algorithms with edge cases.
+
+RULE 31:
+Benchmark important performance-critical algorithms.
+
+RULE 32:
+Do not create giant source files.
+
+RULE 33:
+Do not introduce unnecessary dependencies.
+
+RULE 34:
+Do not manually edit generated build output.
+
+RULE 35:
+Do not break existing functionality when adding features.
+
+RULE 36:
+Do not rewrite stable architecture without a technical reason.
+
+RULE 37:
+Document significant architectural changes.
+
+RULE 38:
+Test the SAME build in both Chrome and Edge.
+
+RULE 39:
+Any browser-specific difference must be isolated and documented.
+
+RULE 40:
+Future modules must fit into this architecture rather than bypassing it.
+
+
+============================================================
+46. FINAL SYSTEM ARCHITECTURE
+============================================================
+
+                         USER
+                          |
+                          v
+                    +-----------+
+                    |    UI     |
+                    | Popup/UI  |
+                    +-----+-----+
+                          |
+                          v
+                    +-----------+
+                    |    APP    |
+                    | Controller|
+                    +-----+-----+
+                          |
+              +-----------+-----------+
+              |           |           |
+              v           v           v
+           CORE       STORAGE     BROWSER
+              |                    ADAPTER
+       +------+------+
+       |      |      |
+       v      v      v
+      MATH  ALGO  GEOMETRY
+       |      |      |
+       +------+------+
+              |
+              v
+        EXECUTION ENGINE
+              |
+       +------+-------+
+       |              |
+       v              v
+    WORKERS       WASM
+       |
+       v
+   WORKER POOL
+       |
+       v
+  PARALLEL COMPUTATION
+       |
+       v
+     RESULT
+       |
+       v
+      UI
+
+
+The browser layer must remain separate from the computational layer.
+
+The computational layer must be capable of operating independently from
+the popup UI.
+
+The same application must run in Chrome and Edge.
+
+
+============================================================
+47. FINAL INSTRUCTION TO THE AI/DEVELOPER
+============================================================
+
+Treat this document as an architectural contract.
+
+Before implementing application-specific functionality:
+
+1. Establish the complete folder structure.
+2. Establish the single Manifest V3 configuration.
+3. Establish the application layer.
+4. Establish browser-independent Core architecture.
+5. Establish the Worker system.
+6. Establish the task scheduler.
+7. Establish the storage system.
+8. Establish the precision system.
+9. Establish testing and benchmarking.
+10. Verify the same build works in Chrome and Edge.
+
+After the foundation is verified, implement individual features as modular
+components.
+
+The extension is intended to be a POWERFUL COMPUTATIONAL PLATFORM, not a
+simple browser popup.
+
+Therefore:
+
+PERFORMANCE
++
+NUMERICAL CORRECTNESS
++
+MEMORY EFFICIENCY
++
+PARALLEL PROCESSING
++
+MODULAR ALGORITHMS
++
+SAFE EXECUTION
++
+CROSS-BROWSER COMPATIBILITY
++
+EXTENSIBILITY
+
+must be treated as first-class architectural requirements.
+
+Do not sacrifice the architecture for short-term implementation speed.
+
+Do not duplicate Chrome and Edge code unnecessarily.
+
+Do not put complex algorithms into UI files.
+
+Do not block the main UI thread with expensive computation.
+
+Do not silently compromise numerical accuracy.
+
+Do not make future feature development dependent on rewriting the foundation.
+
+Build the foundation correctly first.
+
+END OF SPECIFICATION
+============================================================
