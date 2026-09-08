@@ -258,6 +258,39 @@ export interface CrsRef {
   wkt?: string;
   proj4?: string;
   utm?: { zone: number; south: boolean };
+  /**
+   * Lambert Conformal Conic parameters, in degrees and metres.
+   *
+   * A projected CRS is not identified by its name. Two files can both say
+   * "Lambert_Conformal_Conic" and sit two thousand kilometres apart, because
+   * everything that positions the grid lives in the parameters. Carrying only
+   * the projection's NAME is what made the bundled Lambert maths unreachable:
+   * `transform.ts` could see that a CRS was Lambert and still had nothing to
+   * project with, so every Lambert file was refused by a tool that contained a
+   * working implementation of exactly that projection.
+   *
+   * `lat1 === lat2` is the tangent (1SP) case; the engine collapses it.
+   */
+  lcc?: {
+    lat1: number;
+    lat2: number;
+    lat0: number;
+    lon0: number;
+    falseEasting: number;
+    falseNorthing: number;
+    /** Scale factor at the natural origin (EPSG 9801). 1 when absent. */
+    k0?: number;
+  };
+  /**
+   * The ellipsoid the projection is computed on.
+   *
+   * Structural rather than an imported `Ellipsoid`, to keep `core/` from
+   * depending on `crs/`; the shapes are identical and assign both ways. It has
+   * to travel with the CRS because a projection on Everest 1830 and the same
+   * projection on WGS 84 disagree by hundreds of metres — the Indian grids
+   * this tool exists for are exactly that case.
+   */
+  ellipsoid?: { name: string; a: number; invF: number };
 }
 
 export type VerticalKind = 'unknown' | 'ellipsoidal' | 'orthometric' | 'local';

@@ -25,7 +25,7 @@ export interface EpsgEntry {
   utm?: { zone: number; south: boolean };
   /** Region hint shown in the CRS picker. */
   region?: string;
-  lcc?: { lat1: number; lat2: number; lat0: number; lon0: number; falseEasting: number; falseNorthing: number };
+  lcc?: NonNullable<CrsRef['lcc']>;
 }
 
 const BASE_ENTRIES: EpsgEntry[] = [
@@ -127,6 +127,14 @@ function utmRegionHint(zone: number, south: boolean): string {
   return `Central meridian ${Math.abs(centre)}°${centre < 0 ? 'W' : 'E'} ${south ? 'south' : 'north'}`;
 }
 
+/**
+ * Scale factor at the natural origin, shared by every India zone (EPSG method
+ * 9801). Omitting it is not a rounding matter: it shrinks every distance by
+ * 1.21 m per kilometre, so a point 200 km from the origin lands about 240 m
+ * out with nothing on the face of the file to show it.
+ */
+const INDIA_ZONE_K0 = 0.99878641;
+
 /** Indian legacy grids that still appear in cadastral and mining deliveries. */
 const INDIAN_ENTRIES: EpsgEntry[] = [
   {
@@ -161,7 +169,7 @@ const INDIAN_ENTRIES: EpsgEntry[] = [
     unit: 'metre',
     axisOrder: 'xy',
     region: 'India — north of 28°N',
-    lcc: { lat1: 32.5, lat2: 32.5, lat0: 32.5, lon0: 68, falseEasting: 2743195.5, falseNorthing: 914398.8 },
+    lcc: { lat1: 32.5, lat2: 32.5, lat0: 32.5, lon0: 68, falseEasting: 2743195.5, falseNorthing: 914398.8, k0: INDIA_ZONE_K0 },
   },
   {
     code: 24379,
@@ -173,7 +181,7 @@ const INDIAN_ENTRIES: EpsgEntry[] = [
     unit: 'metre',
     axisOrder: 'xy',
     region: 'India — 21°N to 28°N, west',
-    lcc: { lat1: 26, lat2: 26, lat0: 26, lon0: 74, falseEasting: 2743195.5, falseNorthing: 914398.8 },
+    lcc: { lat1: 26, lat2: 26, lat0: 26, lon0: 74, falseEasting: 2743195.5, falseNorthing: 914398.8, k0: INDIA_ZONE_K0 },
   },
 ];
 
@@ -197,6 +205,11 @@ export function crsFromEpsg(code: number): CrsRef | null {
     unit: entry.unit,
     axisOrder: entry.axisOrder,
     utm: entry.utm,
+    // Both of these used to be dropped here, which is why the bundled Lambert
+    // engine could never be reached: the table knew the parameters and the
+    // CrsRef handed to the transform did not.
+    lcc: entry.lcc,
+    ellipsoid: entry.ellipsoid,
   };
 }
 

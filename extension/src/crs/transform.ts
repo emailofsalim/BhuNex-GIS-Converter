@@ -14,11 +14,16 @@ import { ConversionError } from '../core/errors';
 import { mapPositions } from '../core/geometry';
 import { epsgEntry, WGS84_CRS } from './epsg';
 import {
+  forwardLambertConformalConic,
   geographicToUtm,
   geographicToWebMercator,
+  inverseLambertConformalConic,
   utmToGeographic,
   webMercatorToGeographic,
+  WGS84,
+  type Ellipsoid,
   type GeographicPoint,
+  type LambertConformalConicParams,
 } from './projection';
 
 /** Datums the bundled engine can move between without a shift (they coincide within ~1 m). */
@@ -42,15 +47,33 @@ export function sameCrs(a: CrsRef | null, b: CrsRef | null): boolean {
   return a.name === b.name && a.datum === b.datum && a.projection === b.projection;
 }
 
+/**
+ * The ellipsoid a CRS is computed on.
+ *
+ * Falls back to WGS 84 only when the CRS carries none. That fallback is safe
+ * here and nowhere else: `planTransform` has already refused anything outside
+ * the WGS 84 datum family by the time a projection function runs, so a CRS
+ * reaching this point without a stated ellipsoid is one whose datum is already
+ * known to coincide with WGS 84.
+ */
+function ellipsoidOf(crs: CrsRef): Ellipsoid {
+  return crs.ellipsoid ?? WGS84;
+}
+
+function lccParams(crs: CrsRef, lcc: NonNullable<CrsRef['lcc']>): LambertConformalConicParams {
+  return { ...lcc, ellipsoid: ellipsoidOf(crs) };
+}
+
 /** Converts a coordinate in `crs` to WGS 84 longitude/latitude. */
 function toGeographic(x: number, y: number, crs: CrsRef): GeographicPoint {
   if (crs.kind === 'geographic') return { lon: x, lat: y };
   if (crs.epsg === 3857) return webMercatorToGeographic({ x, y });
-  if (crs.utm) return utmToGeographic({ x, y }, crs.utm.zone, crs.utm.south);
+  if (crs.utm) return utmToGeographic({ x, y }, crs.utm.zone, crs.utm.south, ellipsoidOf(crs));
+  if (crs.lcc) return inverseLambertConformalConic({ x, y }, lccParams(crs, crs.lcc));
   throw new ConversionError({
     code: 'CRS_UNSUPPORTED_SOURCE',
     what: `Coordinates cannot be transformed out of ${crsLabel(crs)}.`,
-    why: 'The bundled projection engine supports geographic CRS, Web Mercator and Transverse Mercator / UTM. This CRS uses a projection that is not implemented.',
+    why: unsupportedReason(crs),
     action: 'Reproject the file in QGIS or GDAL first, or choose a target that keeps the source CRS unchanged.',
   });
 }
@@ -59,13 +82,29 @@ function toGeographic(x: number, y: number, crs: CrsRef): GeographicPoint {
 function fromGeographic(point: GeographicPoint, crs: CrsRef): { x: number; y: number } {
   if (crs.kind === 'geographic') return { x: point.lon, y: point.lat };
   if (crs.epsg === 3857) return geographicToWebMercator(point);
-  if (crs.utm) return geographicToUtm(point, crs.utm.zone, crs.utm.south);
+  if (crs.utm) return geographicToUtm(point, crs.utm.zone, crs.utm.south, ellipsoidOf(crs));
+  if (crs.lcc) return forwardLambertConformalConic(point, lccParams(crs, crs.lcc));
   throw new ConversionError({
     code: 'CRS_UNSUPPORTED_TARGET',
     what: `Coordinates cannot be transformed into ${crsLabel(crs)}.`,
-    why: 'The bundled projection engine supports geographic CRS, Web Mercator and Transverse Mercator / UTM as targets.',
+    why: unsupportedReason(crs),
     action: 'Pick a UTM zone, WGS 84 or Web Mercator, or export in the source CRS and reproject downstream.',
   });
+}
+
+/**
+ * Why a projected CRS could not be used.
+ *
+ * A Lambert CRS with no parameters is a different failure from a projection
+ * that is not implemented at all, and saying "not implemented" for it would
+ * send the user looking for a missing feature instead of a missing .prj. The
+ * engine is there; what is absent is the numbers that position the grid.
+ */
+function unsupportedReason(crs: CrsRef): string {
+  if (/lambert/i.test(crs.projection)) {
+    return 'This CRS names Lambert Conformal Conic but carries no standard parallels, origin or false easting/northing. The projection is implemented; without those parameters there is nothing to position the grid with, and every one of them shifts the result by kilometres.';
+  }
+  return 'The bundled projection engine supports geographic CRS, Web Mercator, Transverse Mercator / UTM and Lambert Conformal Conic. This CRS uses a projection that is not implemented.';
 }
 
 export type CoordinateTransform = (position: Position) => Position;

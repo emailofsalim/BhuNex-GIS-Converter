@@ -249,6 +249,16 @@ export interface LambertConformalConicParams {
   lon0: number;
   falseEasting: number;
   falseNorthing: number;
+  /**
+   * Scale factor at the natural origin (EPSG method 9801, the 1SP variant).
+   *
+   * Defaults to 1, which is the 2SP case (method 9802) where the two standard
+   * parallels fix the scale and no separate factor exists. It is NOT a
+   * refinement that can be skipped: India's zones all carry k0 = 0.99878641,
+   * so ignoring it shrinks every distance by 1.21 m per kilometre — about
+   * 240 m at 200 km from the origin, delivered with no outward sign.
+   */
+  k0?: number;
 }
 
 interface LccConstants {
@@ -263,7 +273,10 @@ function lccConstants(params: LambertConformalConicParams): LccConstants {
   const f = 1 / params.ellipsoid.invF;
   const e2 = 2 * f - f * f;
   const e = Math.sqrt(e2);
-  const a = params.ellipsoid.a;
+  // k0 scales the polar radius, so applying it to `a` scales rho and rho0
+  // together — which is exactly what EPSG 9801 does, and leaves the 2SP case
+  // (k0 = 1) arithmetically untouched.
+  const a = params.ellipsoid.a * (params.k0 ?? 1);
   const phi1 = params.lat1 * DEG;
   const phi2 = params.lat2 * DEG;
   const phi0 = params.lat0 * DEG;
