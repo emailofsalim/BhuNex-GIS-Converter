@@ -18,6 +18,7 @@ import {
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
+import { boundaryRings, describeBoundary } from '../conversion';
 import { host } from '../host';
 
 export function renderSettingsPanel(): void {
@@ -208,8 +209,79 @@ export function renderSettingsPanel(): void {
   // them for a georeference-only read would be offering something that can
   // only refuse.
   if (item?.dataset?.kind === 'raster' && item.dataset.raster?.hasPixelData) {
+    panel.append(clipTools(state.settings, item.id));
     panel.append(contourTools(state.settings, item.dataset.raster));
   }
+}
+
+/**
+ * Clipping a raster to a boundary held in another queued file (spec §16).
+ *
+ * The boundary comes from the queue rather than from a coordinate box, because
+ * that is where it actually is: the site boundary arrives as a shapefile or a
+ * KML alongside the DEM, and typing its corners in by hand is both tedious and
+ * a way to get them wrong.
+ *
+ * Only files that actually contain polygons are offered. A picker listing every
+ * queued file and then refusing most of them is a picker that wastes a click to
+ * deliver an error.
+ */
+function clipTools(settings: AppSettings, rasterItemId: string): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Clip to a boundary' }));
+
+  const candidates = store
+    .get()
+    .items.filter((candidate) => candidate.id !== rasterItemId && boundaryRings(candidate.id).length > 0);
+
+  if (candidates.length === 0) {
+    section.append(
+      element('p', {
+        class: 'small muted',
+        text: 'Add the site boundary to the queue — a shapefile, KML or DXF containing closed polygons — and it can be selected here to clip this raster to it.',
+      })
+    );
+    return section;
+  }
+
+  const options = [
+    { value: '', label: 'Do not clip' },
+    ...candidates.map((candidate) => ({
+      value: candidate.id,
+      label: `${candidate.fileName} — ${describeBoundary(candidate.id)}`,
+    })),
+  ];
+
+  const picker = element('select', { class: 'select', 'aria-label': 'Boundary file' }) as HTMLSelectElement;
+  for (const option of options) {
+    const node = element('option', { value: option.value, text: option.label });
+    if (option.value === settings.clipBoundaryItemId) node.setAttribute('selected', 'selected');
+    picker.append(node);
+  }
+  picker.addEventListener('change', () => void store.patchSettings({ clipBoundaryItemId: picker.value }));
+  section.append(picker);
+
+  if (settings.clipBoundaryItemId) {
+    section.append(
+      checkbox('Shrink the grid to the boundary', settings.clipCrop, (value) =>
+        void store.patchSettings({ clipCrop: value })
+      )
+    );
+    section.append(
+      checkbox('Include partly covered pixels', settings.clipTouched, (value) =>
+        void store.patchSettings({ clipTouched: value }),
+        'A pixel is kept when its centre is inside the boundary. Turn this on to keep any pixel the boundary touches — up to one pixel wider all round instead of narrower.'
+      )
+    );
+    section.append(
+      element('p', {
+        class: 'small faint',
+        text: 'A raster is always a rectangle, so clipping marks the pixels outside the boundary as no-data rather than cutting the shape out. This file needs a no-data value for that; the conversion refuses without one rather than filling with zero, which would put a sea-level plateau around the site.',
+      })
+    );
+  }
+
+  return section;
 }
 
 /**

@@ -1141,6 +1141,84 @@ describe('edits reach the exported file', () => {
     ).rejects.toThrow(ConversionError);
   });
 
+  /**
+   * Clipping a raster to a boundary (spec §16), through to the written bytes.
+   *
+   * The delivery this makes possible: a district-wide DEM arrives, the site
+   * boundary is one of the other queued files, and what goes back to the client
+   * is the site — not a hundred times more land than the job covers.
+   */
+  it('writes a raster clipped to a boundary, with the outside as no-data', async () => {
+    // The fixture is 4x3 at 10 m from 412000E, 2591000N. A box over the
+    // western half keeps roughly half the pixels.
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'asciigrid',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        clip: {
+          polygons: [[[
+            [412000, 2591000], [412020, 2591000], [412020, 2591030], [412000, 2591030], [412000, 2591000],
+          ]]],
+        },
+      },
+    });
+
+    const text = decoder.decode(result.outputs[0].bytes);
+    expect(text).toContain('NODATA_value');
+    // The eastern columns are outside the boundary, so the no-data marker must
+    // appear more often than the single hole the source already had.
+    const holes = (text.match(/-9999/g) ?? []).length;
+    expect(holes).toBeGreaterThan(2);
+  });
+
+  it('reports how many pixels the clip kept and blanked', async () => {
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'asciigrid',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        clip: {
+          polygons: [[[
+            [412000, 2591000], [412020, 2591000], [412020, 2591030], [412000, 2591030], [412000, 2591000],
+          ]]],
+        },
+      },
+    });
+    const applied = result.warnings.find((w) => w.code === 'clip-applied');
+    expect(applied?.message).toContain('pixel(s) kept');
+    expect(applied?.reason).toContain('CENTRE');
+  });
+
+  it('clips before contouring, so no contour hangs outside the boundary', async () => {
+    // Order matters: contouring first and clipping afterwards leaves fragments
+    // outside the boundary that look like a bug in the clip.
+    const result = await convert({
+      input: input('terrain.asc', ASC_SOURCE),
+      targetFormatId: 'geojson',
+      settings: {
+        precision: FULL_PRECISION,
+        runQa: false,
+        contours: { interval: 1 },
+        clip: {
+          polygons: [[[
+            [412000, 2591000], [412020, 2591000], [412020, 2591030], [412000, 2591030], [412000, 2591000],
+          ]]],
+        },
+      },
+    });
+
+    const written = JSON.parse(decoder.decode(result.outputs[0].bytes));
+    for (const feature of written.features) {
+      if (feature.geometry?.type !== 'LineString') continue;
+      for (const [x] of feature.geometry.coordinates) {
+        expect(x).toBeLessThanOrEqual(412020.0001);
+      }
+    }
+  });
+
   it('reports fidelity for the edited data, not the file as it arrived', async () => {
     // The prediction runs after the replay, so a field added in the workspace is
     // counted among the attributes the target has to carry.

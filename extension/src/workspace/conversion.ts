@@ -225,6 +225,16 @@ export function buildSettings(): Partial<ConversionSettings> {
           keepSourceLines: settings.polygonizeKeepLines,
         }
       : undefined,
+    // The boundary rings are collected HERE, at the moment the conversion
+    // starts, rather than when the boundary file was picked — so an edit to
+    // the boundary between picking it and converting is honoured rather than
+    // silently ignored.
+    clip: (() => {
+      if (!settings.clipBoundaryItemId) return undefined;
+      const polygons = boundaryRings(settings.clipBoundaryItemId);
+      if (polygons.length === 0) return undefined;
+      return { polygons, touched: settings.clipTouched, crop: settings.clipCrop };
+    })(),
     // A zero interval is how "do not contour" is expressed, so the whole
     // option is absent rather than present-and-zero: the pipeline treats an
     // interval of 0 as a refusal, and it should never see one.
@@ -247,6 +257,36 @@ export function buildSettings(): Partial<ConversionSettings> {
           }
         : undefined,
   };
+}
+
+/**
+ * Every polygon ring in a queued file, for use as a clip boundary.
+ *
+ * Reads the workspace's PREVIEW, which is capped at 5,000 features per layer.
+ * That cap is the reason `describeBoundary` reports the count: a site boundary
+ * is one polygon and a cadastral sheet is forty thousand, and only one of those
+ * is a sensible thing to clip a raster with.
+ */
+export function boundaryRings(itemId: string): number[][][][] {
+  const item = store.get().items.find((candidate) => candidate.id === itemId);
+  const rings: number[][][][] = [];
+
+  for (const layer of (item?.dataset?.layers ?? []) as any[]) {
+    for (const feature of (layer.preview ?? []) as any[]) {
+      const geometry = feature?.geometry;
+      if (!geometry) continue;
+      if (geometry.type === 'Polygon') rings.push(geometry.coordinates);
+      else if (geometry.type === 'MultiPolygon') rings.push(...geometry.coordinates);
+    }
+  }
+  return rings;
+}
+
+/** How many polygons a candidate boundary file offers, for the picker. */
+export function describeBoundary(itemId: string): string {
+  const count = boundaryRings(itemId).length;
+  if (count === 0) return 'no polygons — this file cannot be used as a boundary';
+  return `${count.toLocaleString()} polygon${count === 1 ? '' : 's'}`;
 }
 
 export async function convertItem(id: string, withQa: boolean): Promise<void> {

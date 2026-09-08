@@ -64,6 +64,7 @@ import { burnIn, describeBurnIn, DEFAULT_BURN_IN_OPTIONS, type BurnInOptions } f
 import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type PolygonizeOptions } from '../qa/polygonize';
 import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
 import { generateContours, groundContours, type ContourOptions } from '../engines/raster/contour';
+import { clipRaster, type ClipOptions } from '../engines/raster/clip';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
@@ -154,6 +155,15 @@ export interface ConversionSettings {
    * converted straight to DXF or KML as line work.
    */
   contours?: Partial<ContourOptions> & { interval: number };
+  /**
+   * Clip a raster to a boundary (spec §16).
+   *
+   * The rings travel in the settings rather than being read from a second file
+   * here, because the pipeline converts one file at a time by design. The
+   * workspace fills them in from whichever queued file the user picked as the
+   * boundary, so a district-wide DEM is delivered as the site and nothing else.
+   */
+  clip?: ClipOptions;
   /** Attach a provenance record to the output package. */
   embedMetadata?: boolean;
   /**
@@ -741,6 +751,24 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
         })
       );
     }
+  }
+
+  // Clip BEFORE contours, so contours are traced from the delivered raster
+  // rather than from the whole district and then thrown away. Doing it the
+  // other way round is slower and produces contour fragments hanging outside
+  // the boundary, which look like a bug in the clip.
+  if (settings.clip?.polygons?.length && working.raster) {
+    const clipped = clipRaster(working.raster, settings.clip);
+    if (clipped.refusal) {
+      throw new ConversionError({
+        code: 'CLIP_REFUSED',
+        what: clipped.refusal.what,
+        why: clipped.refusal.why,
+        action: clipped.refusal.action,
+      });
+    }
+    working = { ...working, raster: clipped.raster };
+    warnings.push(...clipped.warnings);
   }
 
   // Contours (spec §16). Before the burn-in stage, so text can be attached to
