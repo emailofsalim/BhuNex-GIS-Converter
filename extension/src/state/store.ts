@@ -150,7 +150,6 @@ export interface AppSettings {
   sourceCrsEpsg: number | null;
   targetCrsEpsg: number | null;
   recentCrs: number[];
-  favouriteFormats: string[];
   recentFormats: string[];
   parallelJobs: number;
   maxArchiveMb: number;
@@ -286,7 +285,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sourceCrsEpsg: null,
   targetCrsEpsg: null,
   recentCrs: [],
-  favouriteFormats: [],
   recentFormats: [],
   parallelJobs: Math.min(4, navigator.hardwareConcurrency || 4),
   maxArchiveMb: 1024,

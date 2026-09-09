@@ -218,6 +218,21 @@ export function commitEdit(plan: ReturnType<typeof planMoveVertex>): void {
 
   store.updateItem(item.id, {
     dataset,
+    // The command, not just its result. Without this the edit changed the
+    // PREVIEW and nothing else: conversion re-reads the source file in the
+    // worker and replays `item.edits`, so a vertex moved here never reached
+    // the exported bytes. The editor looked like it worked, the canvas showed
+    // the corrected boundary, and the delivered file had the original one.
+    //
+    // `core/edits.ts` has handled `{ kind: 'vertices' }` since it was written,
+    // including the guard for a plan addressing a feature the source no longer
+    // has. It was a complete replay path with nothing constructing its input.
+    //
+    // The plan is stored as computed rather than re-planned, unlike a geometry
+    // operation: a vertex move is a list of exact coordinates the user placed,
+    // and the preview is a PREFIX of the layer, so feature index i means the
+    // same thing in both. Re-planning could only move it somewhere else.
+    edits: [...(item.edits ?? []), { kind: 'vertices', plan }],
     history: recordOperation(historyOf(item), item.dataset, dataset, {
       kind: 'edit',
       label: describeEditPlan(plan),

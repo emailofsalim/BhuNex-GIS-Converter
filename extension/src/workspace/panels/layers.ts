@@ -17,6 +17,7 @@ import {
   planDeleteLayer,
   planMergeLayers,
   planRenameLayer,
+  planReorder,
   planSplitLayer,
   setAllHidden,
   setView as setLayerView,
@@ -280,8 +281,43 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
   rename.addEventListener('click', () => promptRenameLayer(item, entry.name));
   row.append(rename);
 
+  // Reorder ---------------------------------------------------------------
+  // `planReorder` also shipped with the layer manager and NOTHING constructed
+  // its command, so layer order could not be changed at all. Order is not
+  // cosmetic here: it decides draw order on the canvas, the order of the
+  // folders an output tree gets under R16, and the order of the legend.
+  const position = indexOfLayer(item, entry.name);
+  const total = (item.dataset?.layers ?? []).length;
+
+  const up = element('button', {
+    class: 'lm__icon',
+    title: 'Move this layer earlier — drawn first, so later layers sit on top of it',
+    'aria-label': `Move ${entry.name} earlier`,
+    text: '▲',
+  }) as HTMLButtonElement;
+  up.disabled = position <= 0;
+  up.addEventListener('click', () => reorderLayer(item, entry.name, position - 1));
+  row.append(up);
+
+  const down = element('button', {
+    class: 'lm__icon',
+    title: 'Move this layer later — drawn last, so it sits on top of the others',
+    'aria-label': `Move ${entry.name} later`,
+    text: '▼',
+  }) as HTMLButtonElement;
+  down.disabled = position >= total - 1;
+  down.addEventListener('click', () => reorderLayer(item, entry.name, position + 1));
+  row.append(down);
+
   into.append(row);
   for (const child of node.children) renderLayerNode(child, into, item, depth + 1);
+}
+
+/** Moves a layer to a new position, as a replayable command. */
+function reorderLayer(item: QueueItem, name: string, toIndex: number): void {
+  const data = datasetForTools(item);
+  const plan = planReorder(data, name, toIndex);
+  queueEdit(item, { kind: 'layer-reorder', layer: name, toIndex }, plan, describeLayerPlan(plan));
 }
 
 /** A layer's position in the dataset, which is what picks its default colour. */

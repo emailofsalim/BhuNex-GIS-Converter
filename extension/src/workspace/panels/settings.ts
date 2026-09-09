@@ -38,6 +38,14 @@ export function renderSettingsPanel(): void {
     checkbox('Preserve Z (elevations)', state.settings.preserveZ, (value) => void store.patchSettings({ preserveZ: value }))
   );
   common.append(
+    checkbox(
+      'Write attributes',
+      state.settings.preserveAttributes,
+      (value) => void store.patchSettings({ preserveAttributes: value }),
+      'Off writes geometry alone — for a boundary shared with someone who has no business seeing the owner names attached to it. The fields left out are listed in the warnings.'
+    )
+  );
+  common.append(
     checkbox('Run QA after conversion', state.settings.runQa, (value) => void store.patchSettings({ runQa: value }), 'Re-imports the output and compares it with the source.')
   );
   common.append(

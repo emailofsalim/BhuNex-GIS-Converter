@@ -127,6 +127,15 @@ export interface ConversionSettings {
    */
   datumShift?: DatumShift | null;
   preserveZ: boolean;
+  /**
+   * Write the attribute table, or geometry alone.
+   *
+   * Absent means true, so nothing that does not set it changes behaviour.
+   * `false` drops the values AND the field definitions, and says which fields
+   * it left out — a file still advertising "owner" and answering nothing is
+   * worse than one that does not mention it.
+   */
+  preserveAttributes?: boolean;
   naming: NamingOptions;
   repair: RepairOptions;
   runQa: boolean;
@@ -792,6 +801,47 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     const converted = tableToPoints(working);
     working = converted.dataset;
     warnings.push(...converted.warnings);
+  }
+
+  // Attributes, or geometry alone.
+  //
+  // This setting has existed in the store since the first version and reached
+  // NOTHING: it sat beside `preserveZ`, which is honoured, so a reader of the
+  // settings had every reason to think it worked. Found by the reachability
+  // audit; implemented rather than removed because a geometry-only delivery is
+  // a real thing to want — a parcel boundary shared with a contractor who has
+  // no business seeing the owner names attached to it.
+  //
+  // The fields are dropped as well as the values. Leaving the columns behind
+  // empty would produce a file that still advertises "owner" and "khasra" and
+  // answers neither, which is worse than a file that does not mention them.
+  if (settings.preserveAttributes === false && working.layers.length > 0) {
+    let dropped = 0;
+    const names = new Set<string>();
+    for (const layer of working.layers) {
+      for (const field of layer.fields ?? []) names.add(field.name);
+      for (const feature of layer.features) dropped += Object.keys(feature.properties ?? {}).length;
+    }
+
+    working = {
+      ...working,
+      layers: working.layers.map((layer) => ({
+        ...layer,
+        fields: [],
+        features: layer.features.map((feature) => ({ ...feature, properties: {} })),
+      })),
+    };
+
+    if (dropped > 0) {
+      warnings.push(
+        warn('ATTRIBUTES_DROPPED', `Attributes were not written: ${dropped.toLocaleString()} value(s) across ${names.size} field(s).`, {
+          count: dropped,
+          reason: 'The "Write attributes" setting is off, so this delivery carries geometry only.',
+          action: `The fields left out were: ${[...names].sort().join(', ')}. Turn the setting back on to include them.`,
+          detail: { fields: [...names].sort() },
+        })
+      );
+    }
   }
 
   if (working.pointcloud && (settings.decimation || settings.pointFilter)) {

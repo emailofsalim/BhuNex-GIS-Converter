@@ -198,6 +198,7 @@ export function buildSettings(): Partial<ConversionSettings> {
     datumShift: settings.datumShift,
     checkCoverageGaps: settings.checkCoverageGaps,
     preserveZ: settings.preserveZ,
+    preserveAttributes: settings.preserveAttributes,
     naming: { pattern: settings.naming },
     layout: settings.outputLayout,
     runQa: settings.runQa,
