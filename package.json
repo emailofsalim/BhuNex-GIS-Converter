@@ -1,6 +1,6 @@
 {
   "name": "bhunex-gis-converter",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "private": true,
   "description": "BhuNex GIS Converter — GIS / Geomatics / Survey / CAD / Mining conversion suite as a Chrome MV3 extension.",
   "type": "module",
