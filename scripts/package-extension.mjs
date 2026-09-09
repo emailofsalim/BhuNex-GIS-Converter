@@ -3,7 +3,7 @@
  * Node built-ins, so CI needs no zip binary and the produced archive is the same
  * on every runner.
  */
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { deflateRawSync, crc32 } from 'node:zlib';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -182,3 +182,23 @@ mkdirSync(outDir, { recursive: true });
 const target = resolve(outDir, `universal-bhunex-converter-${version}.zip`);
 writeFileSync(target, Buffer.concat([...locals, centralBuf, eocd]));
 console.log(`packaged ${entries.length} entries -> ${relative(root, target)}`);
+
+/**
+ * Removes archives from older versions.
+ *
+ * The release workflow uploads `dist-zip/*.zip`, so anything left in this
+ * directory is attached to the release — and v1.6.0 went out carrying a 1.5.0
+ * archive beside it, because nothing had ever removed the previous one. Two
+ * downloads on a release page, one of them the version the release is not: a
+ * person picking the wrong one gets a build without the current fixes and no
+ * indication anything is wrong.
+ *
+ * The directory is committed too, so this also stops it growing by a version
+ * every release.
+ */
+for (const name of readdirSync(outDir)) {
+  if (!name.endsWith('.zip')) continue;
+  if (name === `universal-bhunex-converter-${version}.zip`) continue;
+  rmSync(resolve(outDir, name));
+  console.log(`removed a stale archive from a previous version: ${name}`);
+}
