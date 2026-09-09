@@ -21,8 +21,8 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 | Owner's master doc | merged into the spec; verbatim copy at `docs/reference/MASTER_INSTRUCTIONS_AS_SUPPLIED.txt` |
 | Runtime deps | **zero** — platform APIs only (CompressionStream, DataView, Workers) |
 | Build | Vite multi-entry → `dist/`, package → `dist-zip/` |
-| Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `vite build` |
-| Tests | 1,087 across 34 suites, all green |
+| Verify | `npm run verify` = `tsc --noEmit` + `vitest run` + `docs:check` + `vite build` + committed-build check |
+| Tests | 1,142 across 36 suites, all green |
 | Install | **The repo root loads as-is** (generated root `manifest.json` → `dist/`), and so does `dist/`. Never `extension/`. On a managed laptop, extract outside OneDrive — `docs/INSTALL.md` |
 | Store | Package + listing ready: `npm run store:package`, `docs/STORE_LISTING.md`, `docs/PRIVACY.md` |
 
