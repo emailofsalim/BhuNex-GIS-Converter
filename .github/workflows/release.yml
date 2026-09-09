@@ -114,3 +114,31 @@ jobs:
             Everything runs locally. No file leaves the machine, and the
             packaged build is checked to contain no remote script, style or
             font before it is published.
+
+      - name: Remove archives from previous versions
+        # v1.6.0 published with a 1.5.0 archive attached beside it. `dist-zip/`
+        # is committed and `files: dist-zip/*.zip` uploads whatever is in it, so
+        # the previous version's archive rode along — two downloads on a release
+        # page, one of them the version the release is not. Someone picking the
+        # wrong one gets a build without the current fixes and nothing to
+        # suggest anything is wrong.
+        #
+        # `package-extension.mjs` now prunes the directory, which stops it
+        # happening again. This step also cleans a release that already has one,
+        # so re-running the workflow for an affected tag repairs it rather than
+        # leaving it to be noticed by whoever downloads next.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          keep="universal-bhunex-converter-$(node -p "require('./extension/manifest.json').version").zip"
+          echo "keeping: $keep"
+          gh release view "$TAG" --json assets --jq '.assets[].name' | while read -r asset; do
+            case "$asset" in
+              "$keep") ;;
+              *.zip)
+                echo "removing a stale archive: $asset"
+                gh release delete-asset "$TAG" "$asset" --yes
+                ;;
+            esac
+          done
