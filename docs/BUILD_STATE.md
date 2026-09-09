@@ -243,14 +243,23 @@ stay until it is made.
    largest remaining gap for LiDAR users, and it is a bundling job, not an
    algorithm one — the CSP already carries `wasm-unsafe-eval` for it, and R15
    means the decoder must be IN the package, never fetched.
-2. **Phase 6 — GeoPackage** via SQLite WASM (same bundling constraint), then a
-   FlatGeobuf reader (pure TypeScript, flatbuffers-shaped, no dependency
-   needed), then DGN and E57. GeoPackage is the one most often asked for.
-3. ~~**Phase 4 remainder**~~ **Phase 4 is done.** Contours
-   (`contour.ts`), clip-by-polygon (`clip.ts`), resampling and reprojection
-   (`warp.ts`) and vectorize (`vectorize.ts`) are all built, tested and
-   reachable. `rasterizePolygons` is engine-only — it needs a target grid the
-   UI does not yet ask for, and that is stated rather than counted as done. The
+2. **Phase 6 — GeoPackage** via SQLite WASM (same bundling constraint), then
+   DGN and E57. GeoPackage is the one most often asked for. ~~FlatGeobuf~~ is
+   DONE — it shipped as a full reader and writer once the `requiresWasm` flag
+   turned out to be wrong, and leaving it listed here as future work was itself
+   a stale claim.
+3. ~~**Phase 4 remainder**~~ **Phase 4 is done, including the last piece.**
+   Contours (`contour.ts`), clip-by-polygon (`clip.ts`), resampling and
+   reprojection (`warp.ts`) and vectorize (`vectorize.ts`) are all built, tested
+   and reachable. `rasterizePolygons` was engine-only for as long as this
+   entry said so, and is now wired: the missing piece was arithmetic, not an
+   engine — a user has a CELL SIZE in mind, never a width, a height and a
+   geotransform, and deriving the grid from the layer's own extent was all it
+   needed. Two things blocked it and only one was known: the second was
+   `checkDataKind`, which refused vector-to-raster with "no engine converts
+   between them" about an engine sitting two stages further down the same
+   pipeline. It now takes a `rasterizing` flag, because the refusal is correct
+   WITHOUT a cell size and wrong with one. The
    one remaining shortcut is the inverse transform, found numerically by
    Newton's method rather than in closed form: exact for the affine case, well
    under a millimetre for the bundled projections, and a closed-form inverse

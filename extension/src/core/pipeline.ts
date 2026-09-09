@@ -33,7 +33,8 @@ import {
 } from './layout';
 import { replayEdits, type EditCommand } from './edits';
 import { ConversionError, asConversionError } from './errors';
-import { featuresBounds } from './geometry';
+import { emptyBounds, featuresBounds, isFiniteBounds } from './geometry';
+import { toMultiPolygon } from './geometry-ops';
 import { sha256Hex } from './hash';
 import { buildOutputName, extensionOf, type NamingOptions } from './naming';
 import { SURVEY_DEFAULT_PRECISION, type PrecisionPolicy } from './precision';
@@ -70,7 +71,7 @@ import { readGeoTiff, rasterFootprint } from '../engines/raster/geotiff';
 import { generateContours, groundContours, type ContourOptions } from '../engines/raster/contour';
 import { clipRaster, type ClipOptions } from '../engines/raster/clip';
 import { planWarpGrid, warpRaster } from '../engines/raster/warp';
-import { vectorizeRaster, type VectorizeOptions } from '../engines/raster/vectorize';
+import { rasterizePolygons, vectorizeRaster, type VectorizeOptions } from '../engines/raster/vectorize';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
@@ -176,6 +177,15 @@ export interface ConversionSettings {
    * converted straight to DXF or KML as line work.
    */
   contours?: Partial<ContourOptions> & { interval: number };
+  /**
+   * Burn a polygon layer into a grid (spec §16, the inverse of vectorize).
+   *
+   * `cellSize` is the only geometry the caller supplies: the extent comes from
+   * the layer itself, so the raster covers the data exactly rather than a box
+   * somebody had to type. `field` names the attribute to burn; without one every
+   * polygon burns `1`, which is what a mask is.
+   */
+  rasterize?: { cellSize: number; field?: string; layer?: string; background?: number; touched?: boolean };
   /**
    * Clip a raster to a boundary (spec §16).
    *
@@ -927,6 +937,36 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     }
   }
 
+  // Rasterize (spec §16, the other direction).
+  //
+  // `rasterizePolygons` has been built, correct and TESTED since the raster
+  // tools landed, and unreachable: nothing outside its own module and test file
+  // called it, because it needs a target grid nothing asked for. The ledger
+  // said so honestly, which is why it is being finished rather than found.
+  //
+  // The grid comes from the layer's own extent and one number — the cell size —
+  // because that is the only parameter a surveyor actually has in mind
+  // ("half-metre cells"). Deriving width and height from the extent means the
+  // result covers the data exactly, and a cell size larger than the extent is
+  // refused by the engine rather than rounded up to a one-pixel raster.
+  if (settings.rasterize?.cellSize && working.layers.length > 0) {
+    const rasterized = rasterizeLayer(working, settings.rasterize);
+    if (rasterized.refusal) {
+      // The user asked for a raster; silently delivering the vectors would be
+      // the wrong file. R18 forbids the silence.
+      throw new ConversionError({
+        code: 'RASTERIZE_REFUSED',
+        what: rasterized.refusal.what,
+        why: rasterized.refusal.why,
+        action: rasterized.refusal.action,
+      });
+    }
+    if (rasterized.dataset) {
+      working = rasterized.dataset;
+      warnings.push(...rasterized.warnings);
+    }
+  }
+
   // Contours (spec §16). Before the burn-in stage, so text can be attached to
   // the contours a DEM produced in the same run if anyone asks for that.
   if (settings.contours?.interval && working.raster) {
@@ -1324,6 +1364,12 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     sourceCrsEpsg: settings.sourceCrs?.epsg ?? null,
     targetCrsEpsg: settings.targetCrs?.epsg ?? null,
     preserveZ: settings.preserveZ,
+    // Vector to raster is impossible WITHOUT a cell size and configured WITH
+    // one, so the prediction has to know which of the two this is. Omitting
+    // this is what made the pre-flight refuse a conversion the pipeline could
+    // perfectly well do — "no engine converts between them", about an engine
+    // sitting two stages further down.
+    rasterizing: Boolean(settings.rasterize?.cellSize),
     precisionDecimals:
       settings.precision.mode === 'fixed'
         ? sourceDataset.crs?.kind === 'geographic'
@@ -1775,3 +1821,137 @@ function warpRasterToCrs(
 export { rasterFootprint };
 export { predictConversion, rankTargets, validateExport, summarisePrediction } from './predict';
 export type { FidelityPrediction, FidelityFinding, FidelityGrade, FidelityAxis } from './predict';
+
+/**
+ * Turns a polygon layer into a raster, deriving the grid from its own extent.
+ *
+ * The engine (`rasterizePolygons`) takes a width, a height and a geotransform.
+ * A user has none of those in mind — they have a cell size ("half-metre
+ * cells"). This is the translation, and it is the reason the engine sat unused:
+ * everything it needed existed except the arithmetic between a cell size and a
+ * grid.
+ *
+ * Rounded UP with `ceil`, so the grid covers the whole extent. Rounding down
+ * would silently crop the last row and column, which on a cadastral sheet is
+ * the boundary of the outermost parcels — the part most likely to matter and
+ * least likely to be noticed.
+ */
+function rasterizeLayer(
+  dataset: CirDataset,
+  options: NonNullable<ConversionSettings['rasterize']>
+): { dataset?: CirDataset; warnings: Warning[]; refusal?: { what: string; why: string; action: string } } {
+  const layer = options.layer
+    ? dataset.layers.find((candidate) => candidate.name === options.layer)
+    : dataset.layers.find((candidate) => candidate.features.some((feature) => toMultiPolygon(feature.geometry).length > 0));
+
+  if (!layer) {
+    return {
+      warnings: [],
+      refusal: {
+        what: 'There is no polygon layer to burn into a grid.',
+        why: options.layer
+          ? `"${options.layer}" is not in this file, or holds no closed rings.`
+          : 'No layer in this file holds closed rings.',
+        action: 'Choose a polygon layer, or run the CAD polygonisation step first to build boundaries from line work.',
+      },
+    };
+  }
+
+  const cellSize = options.cellSize;
+  if (!Number.isFinite(cellSize) || cellSize <= 0) {
+    return {
+      warnings: [],
+      refusal: {
+        what: 'The cell size must be a positive number.',
+        why: `"${cellSize}" is not one.`,
+        action: 'Enter the cell size in the dataset’s own units — 0.5 for half-metre cells in a metric CRS.',
+      },
+    };
+  }
+
+  const polygons: { rings: Position[][]; value: number }[] = [];
+  const bounds = emptyBounds();
+  let missingField = 0;
+
+  for (const feature of layer.features) {
+    for (const rings of toMultiPolygon(feature.geometry)) {
+      let value = 1;
+      if (options.field) {
+        const raw = feature.properties?.[options.field];
+        const parsed = typeof raw === 'number' ? raw : Number(raw);
+        if (Number.isFinite(parsed)) value = parsed;
+        else missingField++;
+      }
+      polygons.push({ rings, value });
+      for (const ring of rings) for (const position of ring) {
+        bounds.minX = Math.min(bounds.minX, position[0]);
+        bounds.maxX = Math.max(bounds.maxX, position[0]);
+        bounds.minY = Math.min(bounds.minY, position[1]);
+        bounds.maxY = Math.max(bounds.maxY, position[1]);
+      }
+    }
+  }
+
+  if (polygons.length === 0 || !isFiniteBounds(bounds)) {
+    return {
+      warnings: [],
+      refusal: {
+        what: `"${layer.name}" holds no closed rings to burn.`,
+        why: 'Rasterizing needs areas; lines and points have none.',
+        action: 'Choose a polygon layer, or polygonise the line work first.',
+      },
+    };
+  }
+
+  // Ceil, per the header: the grid must cover the extent, not most of it.
+  const width = Math.ceil((bounds.maxX - bounds.minX) / cellSize);
+  const height = Math.ceil((bounds.maxY - bounds.minY) / cellSize);
+
+  const result = rasterizePolygons({
+    polygons,
+    width,
+    height,
+    // Origin is the TOP-LEFT and the row step is negative, which is the
+    // convention every georeferenced raster uses. A positive row step here
+    // flips the result vertically, and a flipped cadastral raster still looks
+    // like a plausible map.
+    geotransform: [bounds.minX, cellSize, 0, bounds.maxY, 0, -cellSize],
+    background: options.background,
+    touched: options.touched,
+  });
+
+  if (result.refusal) return { warnings: result.warnings, refusal: result.refusal };
+  if (!result.raster) return { warnings: result.warnings };
+
+  const warnings = [...result.warnings];
+  warnings.push(
+    warn(
+      'RASTERIZED',
+      `${polygons.length.toLocaleString()} polygon(s) from "${layer.name}" burned into a ${width} × ${height} grid at ${cellSize} units per cell.`,
+      {
+        severity: 'info',
+        count: result.burned,
+        reason: options.field
+          ? `Cell values come from "${options.field}". Where polygons overlap, the one later in the layer wins — the convention every GIS uses, and the only predictable one.`
+          : 'No field was named, so every polygon burned the value 1 and the result is a mask.',
+        action: `${result.burned.toLocaleString()} cell(s) were covered; the rest hold the background value.`,
+        detail: { width, height, cellSize, burned: result.burned },
+      }
+    )
+  );
+
+  if (missingField > 0) {
+    warnings.push(
+      warn('RASTERIZE_FIELD_NOT_NUMERIC', `${missingField} polygon(s) had no numeric "${options.field}" and burned the value 1 instead.`, {
+        count: missingField,
+        reason: 'A raster cell holds a number. A missing or non-numeric attribute has no value to burn.',
+        action: 'Check the field, or use the QA scan to find the rows that are blank.',
+      })
+    );
+  }
+
+  // The vectors are REPLACED, not kept alongside. A dataset carrying both would
+  // be written by whichever writer the target format picks, and which one you
+  // got would depend on the format rather than on what was asked for.
+  return { dataset: { ...dataset, kind: 'raster', layers: [], raster: result.raster }, warnings };
+}

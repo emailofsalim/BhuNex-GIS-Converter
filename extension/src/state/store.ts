@@ -211,6 +211,10 @@ export interface AppSettings {
    * silently wrong for one of them.
    */
   contourInterval: number;
+  /** Cell size for burning polygons into a grid. 0 = do not rasterize. */
+  rasterizeCellSize: number;
+  /** Attribute to burn. Empty burns 1 everywhere, which is a mask. */
+  rasterizeField: string;
   /** Every Nth contour is the heavier, labelled one on a plan. */
   contourIndexEvery: number;
   /** Drop contour fragments shorter than this. 0 keeps them all. */
@@ -305,6 +309,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   polygonizeTolerance: 0.01,
   polygonizeKeepLines: false,
   contourInterval: 0,
+  rasterizeCellSize: 0,
+  rasterizeField: '',
   contourIndexEvery: 5,
   contourMinLength: 0,
   clipBoundaryItemId: '',
