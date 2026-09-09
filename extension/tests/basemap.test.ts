@@ -13,8 +13,10 @@
  * decides WHICH tile and WHERE it goes.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  Basemap,
+  isOnline,
   lonLatToTile,
   tilesCovering,
   TILE_PRESETS,
@@ -302,6 +304,125 @@ describe('the key-holding presets', () => {
     // mt0.google.com/vt is what most examples use and what the terms forbid.
     expect(google.template).not.toMatch(/mt\d?\.google\.com/);
     expect(google.template).toContain('session');
+  });
+});
+
+describe('the connectivity gate', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+
+  function setNavigator(value: unknown): void {
+    Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true });
+  }
+
+  afterEach(() => {
+    if (original) Object.defineProperty(globalThis, 'navigator', original);
+    else delete (globalThis as { navigator?: unknown }).navigator;
+  });
+
+  it('is offline only when the browser says so definitively', () => {
+    setNavigator({ onLine: false });
+    expect(isOnline()).toBe(false);
+    setNavigator({ onLine: true });
+    expect(isOnline()).toBe(true);
+  });
+
+  it('assumes online where there is no navigator at all', () => {
+    // The conversion worker and the test runner have none. A false "offline"
+    // would disable a feature that works, which is the worse error of the two.
+    setNavigator(undefined);
+    expect(isOnline()).toBe(true);
+  });
+
+  it('treats an absent onLine property as online', () => {
+    setNavigator({});
+    expect(isOnline()).toBe(true);
+  });
+
+  it('makes a basemap unusable while offline, however good its CRS is', () => {
+    // The owner's requirement stated directly: "internet only be use able when
+    // available if not available then Map tile will remain off".
+    setNavigator({ onLine: false });
+    const basemap = new Basemap({
+      provider: TILE_PROVIDERS[0],
+      toLonLat: (x, y) => ({ lon: x, lat: y }),
+      fromLonLat: (lon, lat) => ({ x: lon, y: lat }),
+      onTileLoaded: () => {},
+    });
+    expect(basemap.usable).toBe(false);
+    expect(basemap.unavailableReason).toContain('No internet connection');
+    basemap.dispose();
+  });
+
+  it('becomes usable again when the connection returns, with no other change', () => {
+    setNavigator({ onLine: false });
+    const basemap = new Basemap({
+      provider: TILE_PROVIDERS[0],
+      toLonLat: (x, y) => ({ lon: x, lat: y }),
+      fromLonLat: (lon, lat) => ({ x: lon, y: lat }),
+      onTileLoaded: () => {},
+    });
+    expect(basemap.usable).toBe(false);
+    setNavigator({ onLine: true });
+    expect(basemap.usable).toBe(true);
+    expect(basemap.unavailableReason).toBeNull();
+    basemap.dispose();
+  });
+
+  it('reports the CRS problem, not the network one, when online', () => {
+    // Two different problems with two different answers. Saying "offline" to
+    // someone whose real problem is an undeclared CRS sends them to check a
+    // router instead of the CRS tab.
+    setNavigator({ onLine: true });
+    const basemap = new Basemap({
+      provider: TILE_PROVIDERS[0],
+      toLonLat: null,
+      fromLonLat: null,
+      onTileLoaded: () => {},
+    });
+    expect(basemap.usable).toBe(false);
+    expect(basemap.unavailableReason).toContain('coordinate system');
+    basemap.dispose();
+  });
+
+  it('attempts no request at all while offline', () => {
+    // The promise, tested directly rather than through the canvas. A failed
+    // request is still a DNS lookup and a connection attempt per tile, sixty-
+    // four of them per pan, which on a metered or captive connection is real
+    // traffic for a layer the user has been told is off.
+    setNavigator({ onLine: false });
+    let constructed = 0;
+    const previousImage = (globalThis as { Image?: unknown }).Image;
+    class CountingImage {
+      crossOrigin = '';
+      src = '';
+      constructor() {
+        constructed++;
+      }
+      addEventListener(): void {}
+    }
+    (globalThis as { Image?: unknown }).Image = CountingImage;
+
+    try {
+      const basemap = new Basemap({
+        provider: TILE_PROVIDERS[0],
+        toLonLat: (x, y) => ({ lon: x, lat: y }),
+        fromLonLat: (lon, lat) => ({ x: lon, y: lat }),
+        onTileLoaded: () => {},
+      });
+      // `tile` is private, so this goes through the public surface: `usable`
+      // is what the canvas consults before it installs the draw hook at all.
+      expect(basemap.usable).toBe(false);
+      expect(constructed).toBe(0);
+
+      // And with the connection back, the same basemap loads again — proving
+      // the gate is the connection and not a one-way disable.
+      setNavigator({ onLine: true });
+      expect(basemap.usable).toBe(true);
+      basemap.dispose();
+    } finally {
+      if (previousImage === undefined) delete (globalThis as { Image?: unknown }).Image;
+      else (globalThis as { Image?: unknown }).Image = previousImage;
+    }
   });
 });
 

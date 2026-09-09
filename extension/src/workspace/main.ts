@@ -32,7 +32,7 @@ import {
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
-import { renderCompare, renderPreview, updateLinkButton } from './panels/canvas';
+import { renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
@@ -438,6 +438,19 @@ function wire(): void {
       renderBottom();
     });
   }
+
+  // The basemap is the only feature here that needs a network, so this is the
+  // only thing a connection change affects. Losing it turns the tiles off and
+  // says so; regaining it turns them back on without the user doing anything.
+  watchConnectivity(() => {
+    store.log(
+      navigator.onLine ? 'ok' : 'warn',
+      navigator.onLine
+        ? 'Back online — map tiles are available again.'
+        : 'Offline. Map tiles are off until the connection returns; everything else runs on this machine and is unaffected.'
+    );
+    render();
+  });
 
   $('fitBtn').addEventListener('click', () => ui.previewCanvas?.fit());
   $('gridBtn').addEventListener('click', () => ui.previewCanvas?.toggleGrid());

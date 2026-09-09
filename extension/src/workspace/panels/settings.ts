@@ -16,7 +16,7 @@ import {
   PRIORITY_LABEL,
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
-import { TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
+import { isOnline, TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
 import { boundaryRings, describeBoundary } from '../conversion';
@@ -789,6 +789,21 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
       host.render();
     })
   );
+
+  // Connectivity, stated where the control is. The basemap is the ONLY part of
+  // this tool that needs a network, so "you are offline" is only ever an answer
+  // to a question asked here — putting it in the top bar would imply the
+  // converter itself was degraded, which it is not.
+  if (!isOnline()) {
+    section.append(
+      messageBlock(
+        'warn',
+        'No internet connection — the map tiles are off.',
+        'Tiles come from a tile service and cannot be drawn without one. Nothing else in this tool needs a network: detection, conversion, QA, measurement, editing and export all run on your machine and are unaffected.',
+        'The basemap switches itself back on when the connection returns. Your choice of provider is remembered.'
+      )
+    );
+  }
 
   section.append(
     messageBlock(

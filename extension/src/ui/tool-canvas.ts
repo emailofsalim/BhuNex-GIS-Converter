@@ -44,6 +44,18 @@
 
 import type { Bounds, CirGeometry, Position } from '../core/cir';
 import {
+  constrainOrtho,
+  DEFAULT_SNAP_SETTINGS,
+  DRAW_HINT,
+  type DrawKind,
+  findSnapTarget,
+  MIN_VERTICES,
+  SNAP_KIND_LABEL,
+  type SnapSettings,
+  type SnapSource,
+  type SnapTarget,
+} from '../core/drawing';
+import {
   type FeatureRef,
   type SelectMode,
   type SelectableLayer,
@@ -59,12 +71,40 @@ import {
 } from '../core/selection';
 import type { PreviewCanvas } from './preview';
 
-export type CanvasTool = 'select' | 'lasso' | 'move';
+export type CanvasTool = 'select' | 'lasso' | 'move' | DrawTool;
+
+/** The drawing tools, named after what they produce. */
+export type DrawTool = 'draw-point' | 'draw-marker' | 'draw-line' | 'draw-polygon' | 'draw-text';
+
+export const DRAW_TOOLS: DrawTool[] = ['draw-point', 'draw-marker', 'draw-line', 'draw-polygon', 'draw-text'];
+
+/** The `DrawKind` a drawing tool produces. */
+export function kindOfTool(tool: CanvasTool): DrawKind | null {
+  switch (tool) {
+    case 'draw-point':
+      return 'point';
+    case 'draw-marker':
+      return 'marker';
+    case 'draw-line':
+      return 'line';
+    case 'draw-polygon':
+      return 'polygon';
+    case 'draw-text':
+      return 'text';
+    default:
+      return null;
+  }
+}
 
 export const TOOL_LABEL: Record<CanvasTool, string> = {
   select: 'Select',
   lasso: 'Lasso',
   move: 'Move',
+  'draw-point': 'Point',
+  'draw-marker': 'Marker',
+  'draw-line': 'Line',
+  'draw-polygon': 'Polygon',
+  'draw-text': 'Text',
 };
 
 export const TOOL_HINT: Record<CanvasTool, string> = {
@@ -72,6 +112,11 @@ export const TOOL_HINT: Record<CanvasTool, string> = {
     'Click a feature to select it, Shift-click to add or remove. Drag from empty space for a rubber band — left to right takes only what is wholly inside, right to left takes anything it touches. Drag from a selected feature to move the whole selection.',
   lasso: 'Draw a freehand outline around the features to select. Shift adds to the selection instead of replacing it.',
   move: 'Drag anywhere to move the current selection. Hold Shift to constrain to one axis.',
+  'draw-point': DRAW_HINT.point,
+  'draw-marker': DRAW_HINT.marker,
+  'draw-line': DRAW_HINT.line,
+  'draw-polygon': DRAW_HINT.polygon,
+  'draw-text': DRAW_HINT.text,
 };
 
 /** Pick radius in screen pixels — constant to the finger at any zoom. */
@@ -84,6 +129,9 @@ const SELECTED_COLOR = '#f5b041';
 const BAND_CONTAIN = '#58a6ff';
 const BAND_INTERSECT = '#3fb950';
 const MOVE_GHOST = '#f5b041';
+const DRAW_COLOR = '#3fb950';
+/** A snapped vertex is a different colour from a free one, deliberately. */
+const SNAP_COLOR = '#58a6ff';
 
 export interface MoveOffset {
   dx: number;
@@ -101,6 +149,12 @@ export interface ToolHost {
   /** A live status line, for the readout while a gesture is in progress. */
   onStatus?: (text: string) => void;
   onToolChange?: (tool: CanvasTool) => void;
+  /** A finished drawing, in world coordinates. Called once, when it closes. */
+  onDraw?: (kind: DrawKind, positions: Position[], usedSnaps: SnapTarget[]) => void;
+  /** Layers a drawn vertex may snap to. Empty means no snapping. */
+  snapSources?: () => SnapSource[];
+  /** Which snap kinds are live. Absent means vertices only. */
+  snapSettings?: () => SnapSettings;
   /**
    * Where a move should actually land.
    *
@@ -115,11 +169,26 @@ type Gesture =
   | { kind: 'lasso'; points: Position[] }
   | { kind: 'move'; from: Position; to: Position; moved: boolean };
 
+/** A drawing in progress: the vertices placed so far, and how each was found. */
+interface Drawing {
+  tool: DrawTool;
+  positions: Position[];
+  /** One per placed vertex, null where the pointer position was taken as-is. */
+  snaps: (SnapTarget | null)[];
+  /** Where the pointer is now, for the rubber-banded segment. */
+  cursor: Position | null;
+  /** The snap the cursor is currently over, for the highlight and the readout. */
+  hoverSnap: SnapTarget | null;
+}
+
 export class ToolCanvas {
   private tool: CanvasTool = 'select';
   private gesture: Gesture | null = null;
+  private drawing: Drawing | null = null;
   private hover: FeatureRef | null = null;
   private enabled = false;
+  /** Ortho is a sticky mode as well as a Shift modifier, as CAD's F8 is. */
+  private ortho = false;
   private readonly onKeyDown: (event: KeyboardEvent) => void;
 
   constructor(
@@ -131,6 +200,7 @@ export class ToolCanvas {
     element.addEventListener('pointermove', this.handlePointerMove, { capture: true });
     element.addEventListener('pointerup', this.handlePointerUp, { capture: true });
     element.addEventListener('pointercancel', this.handlePointerCancel, { capture: true });
+    element.addEventListener('dblclick', this.handleDoubleClick, { capture: true });
 
     this.onKeyDown = (event) => this.handleKey(event);
     window.addEventListener('keydown', this.onKeyDown);
@@ -159,8 +229,10 @@ export class ToolCanvas {
     if (this.tool === tool) return;
     this.tool = tool;
     // An in-flight gesture belongs to the tool that started it. Carrying a
-    // half-drawn lasso into the move tool would apply it as something else.
+    // half-drawn lasso into the move tool would apply it as something else,
+    // and a half-drawn polygon into the point tool would place a stray point.
     this.gesture = null;
+    this.drawing = null;
     this.preview.element.style.cursor = this.cursorFor(tool);
     this.host.onToolChange?.(tool);
     this.host.onStatus?.(TOOL_HINT[tool]);
@@ -171,12 +243,41 @@ export class ToolCanvas {
     return this.tool;
   }
 
+  /** Ortho as a sticky mode, the way F8 works in every CAD package. */
+  setOrtho(on: boolean): void {
+    this.ortho = on;
+    this.preview.render();
+  }
+
+  isOrtho(): boolean {
+    return this.ortho;
+  }
+
+  /** How many vertices the drawing in progress has, for the panel. */
+  drawnCount(): number {
+    return this.drawing?.positions.length ?? 0;
+  }
+
+  /** Abandons a drawing in progress without placing anything. */
+  cancelDrawing(): void {
+    if (!this.drawing) return;
+    this.drawing = null;
+    this.host.onStatus?.('Drawing abandoned.');
+    this.preview.render();
+  }
+
+  /** Closes the drawing in progress, as double-click or Enter does. */
+  finishDrawing(): void {
+    this.completeDrawing();
+  }
+
   dispose(): void {
     const element = this.preview.element;
     element.removeEventListener('pointerdown', this.handlePointerDown, { capture: true });
     element.removeEventListener('pointermove', this.handlePointerMove, { capture: true });
     element.removeEventListener('pointerup', this.handlePointerUp, { capture: true });
     element.removeEventListener('pointercancel', this.handlePointerCancel, { capture: true });
+    element.removeEventListener('dblclick', this.handleDoubleClick, { capture: true });
     window.removeEventListener('keydown', this.onKeyDown);
     if (this.preview.onOverlay) this.preview.onOverlay = undefined;
   }
@@ -196,6 +297,13 @@ export class ToolCanvas {
     if (!this.enabled || event.button !== 0) return;
     const world = this.preview.unproject(event.offsetX, event.offsetY);
     const at: Position = [world.x, world.y];
+
+    const drawKind = kindOfTool(this.tool);
+    if (drawKind) {
+      stop(event);
+      this.placeVertex(drawKind, at, event.shiftKey);
+      return;
+    }
 
     if (this.tool === 'lasso') {
       stop(event);
@@ -251,6 +359,19 @@ export class ToolCanvas {
     if (!this.enabled) return;
     const world = this.preview.unproject(event.offsetX, event.offsetY);
     const at: Position = [world.x, world.y];
+
+    const drawKind = kindOfTool(this.tool);
+    if (drawKind) {
+      const resolved = this.resolveDrawPosition(at, event.shiftKey);
+      if (this.drawing) {
+        this.drawing.cursor = resolved.position;
+        this.drawing.hoverSnap = resolved.snap;
+      }
+      this.preview.element.style.cursor = resolved.snap ? 'cell' : 'crosshair';
+      this.host.onStatus?.(this.describeDrawing(drawKind, resolved.snap));
+      this.preview.render();
+      return;
+    }
 
     if (!this.gesture) {
       if (this.tool !== 'select') return;
@@ -355,18 +476,137 @@ export class ToolCanvas {
     }
   };
 
+  // ------------------------------------------------------------------ drawing
+
+  /**
+   * Where a drawn vertex should actually land.
+   *
+   * Snapping wins over ortho when both apply, and that order matters: ortho is
+   * a convenience for placing a vertex where nothing exists, while a snap puts
+   * it on something that DOES exist. Constraining a snapped vertex to an axis
+   * would move it off the thing it was snapped to, which defeats the snap and
+   * produces a boundary that misses the control point by a metre while looking
+   * exactly right.
+   */
+  private resolveDrawPosition(raw: Position, shift: boolean): { position: Position; snap: SnapTarget | null } {
+    const sources = this.host.snapSources?.() ?? [];
+    const settings = this.host.snapSettings?.() ?? DEFAULT_SNAP_SETTINGS;
+    const snap = sources.length > 0 ? findSnapTarget(sources, raw, this.tolerance, settings) : null;
+    if (snap) return { position: snap.position, snap };
+
+    const previous = this.drawing?.positions[this.drawing.positions.length - 1];
+    if (previous && (shift || this.ortho)) return { position: constrainOrtho(previous, raw), snap: null };
+    return { position: raw, snap: null };
+  }
+
+  private placeVertex(kind: DrawKind, raw: Position, shift: boolean): void {
+    const { position, snap } = this.resolveDrawPosition(raw, shift);
+
+    if (!this.drawing) {
+      this.drawing = { tool: this.tool as DrawTool, positions: [], snaps: [], cursor: position, hoverSnap: snap };
+    }
+    this.drawing.positions.push(position);
+    this.drawing.snaps.push(snap);
+    this.drawing.cursor = position;
+
+    // A point, a marker and a text object are one click each, so they close
+    // immediately rather than waiting for a double-click nobody would make.
+    if (MIN_VERTICES[kind] === 1) {
+      this.completeDrawing();
+      return;
+    }
+
+    this.host.onStatus?.(this.describeDrawing(kind, snap));
+    this.preview.render();
+  }
+
+  private completeDrawing(): void {
+    const drawing = this.drawing;
+    if (!drawing) return;
+    const kind = kindOfTool(drawing.tool);
+    if (!kind) {
+      this.drawing = null;
+      return;
+    }
+
+    this.drawing = null;
+    // The refusals live in `buildDrawnFeature`, so a two-vertex "polygon" is
+    // rejected in one place whether it came from a double-click, from Enter or
+    // from a command. The host reports whatever comes back.
+    this.host.onDraw?.(kind, drawing.positions, drawing.snaps.filter((snap): snap is SnapTarget => snap !== null));
+    this.preview.render();
+  }
+
+  private describeDrawing(kind: DrawKind, snap: SnapTarget | null): string {
+    const placed = this.drawing?.positions.length ?? 0;
+    const needed = MIN_VERTICES[kind];
+    const snapText = snap ? ` · snapping to a ${SNAP_KIND_LABEL[snap.kind]}${snap.layer ? ` in ${snap.layer}` : ''}` : '';
+    if (placed === 0) return `${TOOL_LABEL[this.tool]}: click to start${snapText}`;
+    if (placed < needed) {
+      return `${placed} of ${needed} placed — ${needed - placed} more needed${snapText}`;
+    }
+    return `${placed} placed · double-click or Enter to finish · Backspace undoes one${snapText}`;
+  }
+
   private handlePointerCancel = (): void => {
     // A cancelled pointer — the browser taking over, a palm rejected — must not
-    // commit a half-finished drag as if it were released deliberately.
+    // commit a half-finished drag as if it were released deliberately. A
+    // drawing in progress is left alone: it is a run of deliberate clicks, not
+    // one gesture, and discarding four placed corners because a palm brushed
+    // the screen would be the worse failure.
     if (!this.gesture) return;
     this.gesture = null;
     this.preview.render();
+  };
+
+  /**
+   * Double-click closes a line or a polygon.
+   *
+   * The second click of the double has already placed a vertex on top of the
+   * first, and `buildDrawnFeature` drops consecutive repeats — so the shape
+   * closes on the vertices the user meant rather than one duplicated corner.
+   */
+  private handleDoubleClick = (event: MouseEvent): void => {
+    if (!this.enabled || !this.drawing) return;
+    stop(event);
+    this.completeDrawing();
   };
 
   private handleKey(event: KeyboardEvent): void {
     if (!this.enabled) return;
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
+
+    if (this.drawing) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        this.completeDrawing();
+        return;
+      }
+      if (event.key === 'Backspace') {
+        event.preventDefault();
+        this.drawing.positions.pop();
+        this.drawing.snaps.pop();
+        if (this.drawing.positions.length === 0) this.drawing = null;
+        this.preview.render();
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.cancelDrawing();
+        return;
+      }
+    }
+
+    // F8 toggles ortho, as it does in AutoCAD. The one keyboard convention
+    // worth borrowing verbatim, because a surveyor's hand already knows it.
+    if (event.key === 'F8') {
+      event.preventDefault();
+      this.setOrtho(!this.ortho);
+      this.host.onStatus?.(this.ortho ? 'Ortho on — new segments follow one axis.' : 'Ortho off.');
+      this.host.onToolChange?.(this.tool);
+      return;
+    }
 
     if (event.key === 'Escape') {
       if (this.gesture) {
@@ -456,6 +696,76 @@ export class ToolCanvas {
 
     if (this.gesture?.kind === 'band') this.drawBand(context, project, this.gesture);
     if (this.gesture?.kind === 'lasso') this.drawLasso(context, project, this.gesture.points);
+    if (this.drawing) this.drawInProgress(context, project, this.drawing);
+
+    context.restore();
+  }
+
+  /**
+   * The shape being drawn, with its placed vertices and the live segment.
+   *
+   * A snapped vertex is drawn differently from a free one, on purpose: after
+   * twenty clicks the only way to know the boundary actually landed on the
+   * control points is to be able to see which vertices took a snap.
+   */
+  private drawInProgress(
+    context: CanvasRenderingContext2D,
+    project: (x: number, y: number) => { x: number; y: number },
+    drawing: Drawing
+  ): void {
+    const closing = drawing.tool === 'draw-polygon';
+    context.save();
+    context.strokeStyle = DRAW_COLOR;
+    context.fillStyle = 'rgba(63, 185, 80, 0.14)';
+    context.lineWidth = 2;
+
+    const screens = drawing.positions.map((position) => project(position[0], position[1]));
+    const live = drawing.cursor ? project(drawing.cursor[0], drawing.cursor[1]) : null;
+
+    if (screens.length > 0) {
+      context.beginPath();
+      context.moveTo(screens[0].x, screens[0].y);
+      for (const screen of screens.slice(1)) context.lineTo(screen.x, screen.y);
+      // The rubber-banded segment to the pointer, dashed because it is not
+      // placed yet — a solid one reads as a vertex that has been committed.
+      if (live) {
+        context.stroke();
+        context.save();
+        context.setLineDash([6, 4]);
+        context.beginPath();
+        context.moveTo(screens[screens.length - 1].x, screens[screens.length - 1].y);
+        context.lineTo(live.x, live.y);
+        // A polygon shows the closing edge too, so the shape being committed is
+        // visible rather than inferred from a run of corners.
+        if (closing && screens.length >= 2) context.lineTo(screens[0].x, screens[0].y);
+        context.stroke();
+        context.restore();
+      } else {
+        if (closing && screens.length >= 3) context.closePath();
+        context.stroke();
+      }
+    }
+
+    for (const [index, screen] of screens.entries()) {
+      const snapped = drawing.snaps[index] !== null;
+      context.beginPath();
+      context.arc(screen.x, screen.y, snapped ? 5.5 : 4, 0, Math.PI * 2);
+      context.fillStyle = snapped ? SNAP_COLOR : DRAW_COLOR;
+      context.fill();
+      context.lineWidth = 1.5;
+      context.strokeStyle = '#0d1117';
+      context.stroke();
+    }
+
+    // The snap the pointer is over, marked before the click commits to it.
+    if (drawing.hoverSnap) {
+      const screen = project(drawing.hoverSnap.position[0], drawing.hoverSnap.position[1]);
+      context.beginPath();
+      context.strokeStyle = SNAP_COLOR;
+      context.lineWidth = 2;
+      context.rect(screen.x - 7, screen.y - 7, 14, 14);
+      context.stroke();
+    }
 
     context.restore();
   }

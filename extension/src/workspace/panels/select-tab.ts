@@ -50,7 +50,26 @@ import { crsLabel } from '../../crs/transform';
 import { measureGeometry, METHOD_LABEL } from '../../core/measure';
 import { type QueueItem, store } from '../../state/store';
 import { planGeometryOperation } from '../../core/geometry-ops';
-import { type CanvasTool, TOOL_HINT, TOOL_LABEL, ToolCanvas } from '../../ui/tool-canvas';
+import {
+  type CanvasTool,
+  DRAW_TOOLS,
+  kindOfTool,
+  TOOL_HINT,
+  TOOL_LABEL,
+  ToolCanvas,
+} from '../../ui/tool-canvas';
+import {
+  buildDrawnFeature,
+  DEFAULT_SNAP_SETTINGS,
+  DRAW_LABEL,
+  type DrawKind,
+  pointSnapSources,
+  pointsInsideRing,
+  type SnapSettings,
+  type SnapSource,
+  type SnapTarget,
+} from '../../core/drawing';
+import type { EditCommand } from '../../core/edits';
 import { element, formatValue, ghostButton, keyValues, messageBlock } from '../dom';
 import { host } from '../host';
 import { datasetForTools, protectedFor, viewOf } from './dataset';
@@ -59,6 +78,27 @@ import { ui } from '../ui-state';
 
 /** The tools, in the order a hand reaches for them. */
 const TOOLS: CanvasTool[] = ['select', 'lasso', 'move'];
+
+/**
+ * Where a drawing goes, and what it is called.
+ *
+ * Panel state rather than store state, like the geometry panel's: a
+ * half-configured drawing target is not worth a store round trip per keystroke,
+ * and it must not survive into a project file.
+ */
+const drawState = {
+  itemId: null as string | null,
+  /** Empty means a new layer, named below. */
+  targetLayer: '',
+  newLayerName: 'Drawn',
+  /** For a marker or a text object. */
+  label: '',
+  snapVertex: true,
+  snapMidpoint: false,
+  snapSegment: false,
+  /** Restrict snapping to imported POINT layers — phase K's digitising mode. */
+  snapPointsOnly: false,
+};
 
 export function selectTab(item: QueueItem): HTMLElement[] {
   const layers = selectableLayers(item);
@@ -86,8 +126,40 @@ export function selectTab(item: QueueItem): HTMLElement[] {
     });
     bar.append(button);
   }
+  for (const tool of DRAW_TOOLS) {
+    const active = ui.toolCanvas?.getTool() === tool;
+    const button = element('button', {
+      class: `btn btn--sm${active ? ' btn--on' : ''}`,
+      type: 'button',
+      text: TOOL_LABEL[tool],
+      title: TOOL_HINT[tool],
+    });
+    button.addEventListener('click', () => {
+      ui.toolCanvas?.setTool(tool);
+      host.renderInspector();
+    });
+    bar.append(button);
+  }
+
+  const ortho = element('button', {
+    class: `btn btn--sm${ui.toolCanvas?.isOrtho() ? ' btn--on' : ''}`,
+    type: 'button',
+    text: 'Ortho',
+    title: 'Constrain each new segment to one axis (F8). Holding Shift does the same for one segment.',
+  });
+  ortho.addEventListener('click', () => {
+    ui.toolCanvas?.setOrtho(!ui.toolCanvas.isOrtho());
+    host.renderInspector();
+  });
+  bar.append(ortho);
+
   wrap.append(bar);
   wrap.append(element('p', { class: 'small faint', text: TOOL_HINT[ui.toolCanvas?.getTool() ?? 'select'] }));
+
+  // --- drawing (phases F and K) -------------------------------------------
+  if (kindOfTool(ui.toolCanvas?.getTool() ?? 'select')) {
+    wrap.append(drawingSection(item, layers));
+  }
 
   // --- what is selected ---------------------------------------------------
   const summary = element('div', { class: 'section' });
@@ -179,6 +251,211 @@ export function selectTab(item: QueueItem): HTMLElement[] {
 }
 
 /**
+ * Where a drawing lands, and what it snaps to.
+ *
+ * The snap settings are the phase-K feature in disguise. "Digitise a CSV" is
+ * this panel with vertex snapping on and the sources narrowed to the imported
+ * point layers: click each observed point in order, and every vertex is the
+ * OBSERVED coordinate rather than one within a few pixels of it.
+ *
+ * Midpoint and segment snapping are off by default and stay off in that mode,
+ * because neither is an observed position — a boundary running through the
+ * midpoint between two control points is not the boundary that was surveyed,
+ * and it would look completely deliberate.
+ */
+function drawingSection(item: QueueItem, layers: SelectableLayer[]): HTMLElement {
+  if (drawState.itemId !== item.id) {
+    drawState.itemId = item.id;
+    drawState.targetLayer = '';
+    drawState.label = '';
+  }
+
+  const tool = ui.toolCanvas?.getTool() ?? 'select';
+  const kind = kindOfTool(tool);
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Where it goes' }));
+
+  const target = element('select', { class: 'select', 'aria-label': 'Layer to draw into' }) as HTMLSelectElement;
+  target.append(element('option', { value: '', text: 'A new layer…' }));
+  for (const layer of layers) {
+    const option = element('option', { value: layer.name, text: `${layer.name}${layer.locked ? ' (locked)' : ''}` });
+    if (layer.locked) option.setAttribute('disabled', 'disabled');
+    target.append(option);
+  }
+  target.value = drawState.targetLayer;
+  target.addEventListener('change', () => {
+    drawState.targetLayer = target.value;
+    host.renderInspector();
+  });
+  section.append(target);
+
+  if (drawState.targetLayer === '') {
+    const name = element('input', {
+      class: 'input',
+      type: 'text',
+      value: drawState.newLayerName,
+      'aria-label': 'Name for the new layer',
+    }) as HTMLInputElement;
+    name.addEventListener('change', () => {
+      drawState.newLayerName = name.value.trim() || 'Drawn';
+    });
+    section.append(name);
+  }
+
+  if (kind === 'marker' || kind === 'text') {
+    const label = element('input', {
+      class: 'input',
+      type: 'text',
+      value: drawState.label,
+      placeholder: kind === 'text' ? 'The text to place' : 'Marker name',
+      'aria-label': kind === 'text' ? 'The text to place' : 'Marker name',
+    }) as HTMLInputElement;
+    label.addEventListener('input', () => {
+      drawState.label = label.value;
+    });
+    section.append(label);
+    if (kind === 'text') {
+      section.append(
+        element('p', {
+          class: 'small faint',
+          text: 'Written as a point carrying a "text" attribute. No vector GIS format has a text primitive that survives conversion, so font, height and rotation are not stored.',
+        })
+      );
+    }
+  }
+
+  section.append(element('h3', { class: 'section__title', style: 'margin-top:12px', text: 'Snapping' }));
+  section.append(
+    check('Snap to existing vertices', drawState.snapVertex, (value) => {
+      drawState.snapVertex = value;
+    })
+  );
+  section.append(
+    check('Snap to segment midpoints', drawState.snapMidpoint, (value) => {
+      drawState.snapMidpoint = value;
+    })
+  );
+  section.append(
+    check('Snap anywhere along a segment', drawState.snapSegment, (value) => {
+      drawState.snapSegment = value;
+    })
+  );
+  section.append(
+    check('Only snap to imported points (digitising a survey CSV)', drawState.snapPointsOnly, (value) => {
+      drawState.snapPointsOnly = value;
+      // Digitising means observed coordinates only, so the derived targets go
+      // off with it rather than being left on to quietly beat a real point.
+      if (value) {
+        drawState.snapMidpoint = false;
+        drawState.snapSegment = false;
+        drawState.snapVertex = true;
+      }
+      host.renderInspector();
+    })
+  );
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text: 'A snapped vertex is EXACTLY the stored coordinate, not one near it — snapping that rounds is worse than none, because it looks deliberate. Snapped vertices are drawn in blue so you can see which ones took.',
+    })
+  );
+
+  const placed = ui.toolCanvas?.drawnCount() ?? 0;
+  if (placed > 0 && kind) {
+    const row = element('div', { class: 'row' });
+    row.append(
+      element('button', { class: 'btn btn--primary btn--sm', type: 'button', text: `Finish (${placed} placed)` })
+    );
+    (row.lastChild as HTMLElement).addEventListener('click', () => ui.toolCanvas?.finishDrawing());
+    row.append(ghostButton('Cancel', () => {
+      ui.toolCanvas?.cancelDrawing();
+      host.renderInspector();
+    }));
+    section.append(row);
+  }
+
+  return section;
+}
+
+function check(text: string, value: boolean, onChange: (value: boolean) => void): HTMLElement {
+  const line = element('label', { class: 'check' });
+  const box = element('input', { type: 'checkbox' }) as HTMLInputElement;
+  box.checked = value;
+  box.addEventListener('change', () => onChange(box.checked));
+  line.append(box, element('span', { text }));
+  return line;
+}
+
+/**
+ * Turns a finished drawing into a `draw` command.
+ *
+ * The refusals come from `buildDrawnFeature` rather than from here, so a
+ * two-vertex polygon is rejected in one place whatever produced it.
+ */
+function commitDrawing(kind: DrawKind, positions: Position[], snaps: SnapTarget[]): void {
+  const item = store.selected();
+  if (!item) return;
+
+  const built = buildDrawnFeature(kind, positions, {
+    text: kind === 'text' ? drawState.label : undefined,
+    name: kind === 'marker' ? drawState.label || undefined : undefined,
+  });
+
+  if (built.refusal) {
+    store.log('warn', `${built.refusal.what} ${built.refusal.why} ${built.refusal.action}`);
+    host.render();
+    return;
+  }
+  if (!built.result) return;
+
+  const layerName = drawState.targetLayer || drawState.newLayerName.trim() || 'Drawn';
+  const command: EditCommand = {
+    kind: 'draw',
+    layer: layerName,
+    features: [built.result.feature],
+    createLayer: drawState.targetLayer === '',
+  };
+
+  queueEdit(item, command, {}, `Drew a ${DRAW_LABEL[kind].toLowerCase()} into ${layerName}`);
+
+  for (const note of built.result.notes) store.log('info', note);
+  if (snaps.length > 0) {
+    store.log(
+      'ok',
+      `${snaps.length} of ${positions.length} vertices took a snap and are the exact stored coordinates.`
+    );
+  }
+
+  // The ring check is only meaningful for a closed shape digitised from points.
+  if (kind === 'polygon' && drawState.snapPointsOnly) {
+    const ring = [...positions, positions[0]];
+    const stranded = pointsInsideRing(ring, snapSourcesFor(item), positions);
+    if (stranded > 0) {
+      store.log(
+        'warn',
+        `${stranded} imported point${stranded === 1 ? ' is' : 's are'} inside this boundary but was not clicked. ` +
+          'That usually means a corner was missed and the ring closed early — but a point genuinely inside a parcel is also normal, so nothing was changed.'
+      );
+    }
+  }
+  host.render();
+}
+
+/** The layers a drawn vertex may snap to, honouring the digitising mode. */
+function snapSourcesFor(item: QueueItem): SnapSource[] {
+  const sources: SnapSource[] = selectableLayers(item).map((layer) => ({
+    name: layer.name,
+    features: layer.features,
+    // A hidden layer is not a snap target: snapping to something invisible
+    // moves a vertex somewhere the user cannot see and did not ask for. A
+    // LOCKED one is fine — locking stops it being edited, not being measured
+    // from, and a control layer is usually locked on purpose.
+    usable: layer.visible !== false,
+  }));
+  return drawState.snapPointsOnly ? pointSnapSources(sources) : sources;
+}
+
+/**
  * What one clicked feature is: its area, its perimeter, its vertex count.
  *
  * Phase E. Every number here comes from `core/measure.ts`, which picks geodesic
@@ -257,6 +534,17 @@ export function renderSelect(item: QueueItem): void {
         if (readout) readout.textContent = text;
       },
       onToolChange: () => host.renderInspector(),
+      onDraw: (kind, positions, snaps) => commitDrawing(kind, positions, snaps),
+      snapSources: () => {
+        const current = store.selected();
+        return current ? snapSourcesFor(current) : [];
+      },
+      snapSettings: (): SnapSettings => ({
+        ...DEFAULT_SNAP_SETTINGS,
+        vertex: drawState.snapVertex,
+        midpoint: drawState.snapMidpoint,
+        segment: drawState.snapSegment,
+      }),
     });
   }
 

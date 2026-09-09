@@ -14,7 +14,7 @@ import { crsLabel, planTransform } from '../../crs/transform';
 import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-overlay';
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
-import { Basemap, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
+import { Basemap, isOnline, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
 import { viewOf } from './dataset';
@@ -139,9 +139,36 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   }
 
   const basemap = ui.basemap;
+  // `usable` covers both reasons a basemap cannot draw: no CRS it can place
+  // tiles in, and no network to fetch them over. Offline it is not merely
+  // blank — no request is made at all, which is the promise R15 makes and what
+  // the owner asked for: the tiles stay off until the connection returns.
   canvas.onUnderlay = basemap.usable
     ? (context, project, unproject, size) => basemap.draw(context, size.width, size.height, project, unproject)
     : undefined;
+
+  const badge = document.getElementById('basemapBadge');
+  if (badge) {
+    const reason = basemap.unavailableReason;
+    badge.classList.toggle('hidden', reason === null);
+    if (reason) {
+      badge.textContent = isOnline() ? 'Basemap: no placeable CRS' : 'Basemap off — no internet';
+      badge.title = reason;
+    }
+  }
+}
+
+/**
+ * Re-renders when the connection comes or goes.
+ *
+ * Installed once at boot. Without it the basemap would only notice a restored
+ * connection the next time something else caused a render, which for someone
+ * sitting looking at a blank canvas is never.
+ */
+export function watchConnectivity(onChange: () => void): void {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('online', onChange);
+  window.addEventListener('offline', onChange);
 }
 
 /** The chosen provider, or a custom template the user entered. */

@@ -118,6 +118,11 @@
             <div class="preview__overlay">
               <span class="preview__readout" id="readout">—</span>
               <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
+              <!-- Says why the basemap is not drawing, when it is not. Blank
+                   imagery with no explanation reads as a broken tool; the two
+                   reasons (no network, no placeable CRS) are different problems
+                   with different answers. -->
+              <span class="badge badge--muted hidden" id="basemapBadge"></span>
             </div>
           </div>
 
