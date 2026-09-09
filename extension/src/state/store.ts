@@ -163,6 +163,8 @@ export interface AppSettings {
    * makes deliberately: tile requests tell the tile server which area is being
    * looked at. No file bytes, names or attributes are ever sent.
    */
+  /** Attach an SVG legend of the layers and their colours to the delivery. */
+  includeLegend: boolean;
   basemapEnabled: boolean;
   basemapProviderId: string;
   /** Used when `basemapProviderId` is 'custom'. */
@@ -288,6 +290,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recentFormats: [],
   parallelJobs: Math.min(4, navigator.hardwareConcurrency || 4),
   maxArchiveMb: 1024,
+  includeLegend: false,
   basemapEnabled: false,
   basemapProviderId: 'osm',
   basemapCustomUrl: '',

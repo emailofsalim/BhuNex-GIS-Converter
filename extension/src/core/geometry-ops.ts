@@ -531,6 +531,22 @@ export const GEOMETRY_LABEL: Record<GeometryOperation, string> = {
 /** Operations whose parameter is a length in dataset units. */
 const DISTANCE_OPERATIONS = new Set<GeometryOperation>(['buffer', 'offset']);
 
+/**
+ * Which side of a polygon an offset goes.
+ *
+ * `signed` keeps the sign-of-the-distance behaviour a line offset has always
+ * had, so no stored command changes meaning. The other three are the polygon
+ * forms the owner asked for.
+ */
+export type OffsetSide = 'signed' | 'inside' | 'outside' | 'both';
+
+export const OFFSET_SIDE_LABEL: Record<OffsetSide, string> = {
+  signed: 'By the sign of the distance',
+  inside: 'Inside (a building line or setback)',
+  outside: 'Outside (a right of way)',
+  both: 'Both sides (a corridor)',
+};
+
 export interface GeometryPlan {
   operation: GeometryOperation;
   layer: string;
@@ -582,6 +598,18 @@ export interface GeometryOptions {
 
   /** Clockwise rotation in degrees, for `rotate`. */
   angleDegrees?: number;
+
+  /**
+   * Which side of a POLYGON an offset goes, for `offset`.
+   *
+   * `signed` is the original behaviour and stays the default: the sign of the
+   * distance decides, which is what a line offset means and what every command
+   * already stored expects. `inside`, `outside` and `both` are the polygon
+   * forms — a building line, a right-of-way, a corridor — and use the MAGNITUDE
+   * of the distance rather than its sign, so "3 m inside" cannot be turned
+   * outwards by a stray minus.
+   */
+  side?: OffsetSide;
 
   /**
    * The fixed point of a scale or a rotation.
@@ -772,6 +800,30 @@ function planBuffer(
   return output('buffer', layerName, out, features.length, notes, options);
 }
 
+/**
+ * Offsets lines by the signed distance, and polygons inside, outside or both.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A POLYGON OFFSET IS A DIFFERENT OPERATION FROM A LINE OFFSET
+ *
+ * A line has two sides and the sign of the distance chooses one. A polygon has
+ * an INSIDE and an OUTSIDE, and "offset by −2" does not obviously mean either
+ * of them to the person typing it. The owner asked for exactly the polygon
+ * form — "if user want to make offset inside or outside then user can also able
+ * to do different kind of offset" — which is a building line or a setback, the
+ * commonest thing a cadastral drawing needs.
+ *
+ * So `side` names it. `inside` and `outside` produce the setback boundary as a
+ * LINE, because that is what it is: a parcel with a 3 m building line is one
+ * parcel and one line, not two overlapping parcels. `both` produces both, which
+ * is how a right-of-way corridor is drawn.
+ *
+ * The polygon path runs through `bufferGeometry` rather than through new
+ * offsetting code. That engine already handles the two things that make an
+ * inward offset hard — a shape narrower than twice the distance collapsing
+ * entirely, and rings that merge as they grow — and a second implementation
+ * would only be a second place for those to be got wrong.
+ */
 function planOffset(
   layerName: string,
   features: CirFeature[],
@@ -783,38 +835,99 @@ function planOffset(
     return refuse('offset', layerName, 'An offset needs a distance.', 'The distance is zero.', 'Enter a distance; the sign chooses the side.');
   }
 
+  const side: OffsetSide = options.side ?? 'signed';
   const out: CirFeature[] = [];
   let cusps = 0;
+  let collapsed = 0;
+  let lineFeatures = 0;
+  let polygonFeatures = 0;
 
   for (const feature of features) {
     const lines = linesOf(feature.geometry);
-    if (lines.length === 0) continue;
+    if (lines.length > 0) {
+      lineFeatures++;
+      // A line offset ignores `side`: inside and outside are not defined for
+      // something that encloses nothing, and quietly reinterpreting them as
+      // left and right would put the setback on whichever side the line
+      // happened to be digitised towards.
+      const offsets = lines.map((line) => offsetLine(line, distance, options.buffer));
+      if (offsets.some((result) => result.selfIntersects)) cusps++;
 
-    const offsets = lines.map((line) => offsetLine(line, distance, options.buffer));
-    if (offsets.some((result) => result.selfIntersects)) cusps++;
+      const coordinates = offsets.map((result) => result.positions).filter((positions) => positions.length >= 2);
+      if (coordinates.length === 0) continue;
 
-    const coordinates = offsets.map((result) => result.positions).filter((positions) => positions.length >= 2);
-    if (coordinates.length === 0) continue;
+      out.push({ ...feature, geometry: linesGeometry(coordinates) });
+      continue;
+    }
 
-    out.push({
-      ...feature,
-      geometry:
-        coordinates.length === 1
-          ? { type: 'LineString', coordinates: coordinates[0], dimension: 2 }
-          : { type: 'MultiLineString', coordinates, dimension: 2 },
-    });
+    const rings = toMultiPolygon(feature.geometry);
+    if (rings.length === 0) continue;
+    polygonFeatures++;
+
+    const magnitude = Math.abs(distance);
+    const wanted: number[] =
+      side === 'inside'
+        ? [-magnitude]
+        : side === 'outside'
+          ? [magnitude]
+          : side === 'both'
+            ? [-magnitude, magnitude]
+            : [distance];
+
+    const produced: Position[][] = [];
+    let lostOne = false;
+    for (const signed of wanted) {
+      const result = bufferGeometry(feature.geometry, signed, options.buffer);
+      if (result.erased || result.polygons.length === 0) {
+        lostOne = true;
+        continue;
+      }
+      // The boundary of the buffered shape IS the offset line, including the
+      // boundaries of any holes, which is right: a setback inside a parcel with
+      // a courtyard has a line around the courtyard too.
+      for (const polygon of result.polygons) for (const ring of polygon) produced.push(ring);
+    }
+    if (lostOne) collapsed++;
+    if (produced.length === 0) continue;
+
+    out.push({ ...feature, geometry: linesGeometry(produced) });
   }
 
   if (out.length === 0) {
-    return refuse('offset', layerName, 'Nothing here can be offset.', 'An offset applies to lines, and this selection has none.', 'Select a line layer.');
+    return refuse(
+      'offset',
+      layerName,
+      'Nothing here could be offset.',
+      lineFeatures + polygonFeatures === 0
+        ? 'An offset applies to lines and polygons, and this selection has neither.'
+        : 'Every feature collapsed: an inward offset removes everything within the distance of an edge, and these were narrower than twice it.',
+      lineFeatures + polygonFeatures === 0 ? 'Select a line or polygon layer.' : 'Use a smaller distance.'
+    );
   }
   if (cusps > 0) {
     notes.push(
       `${cusps} offset line(s) cross themselves, because the source turns tighter than the offset distance. The loop is left in rather than removed — which side of a cusp to keep is a drafting decision.`
     );
   }
+  if (collapsed > 0) {
+    notes.push(
+      `${collapsed} polygon(s) produced no inward offset: they are narrower than twice ${Math.abs(distance)}, so a setback that far in leaves nothing.`
+    );
+  }
+  if (polygonFeatures > 0) {
+    notes.push(
+      `${polygonFeatures.toLocaleString()} polygon(s) offset ${side === 'both' ? 'inside and outside' : side === 'signed' ? (distance < 0 ? 'inwards' : 'outwards') : side}, produced as lines — a setback is a line on the parcel, not a second parcel.`
+    );
+  }
 
   return output('offset', layerName, out, features.length, notes, options);
+}
+
+/** One line or several, as the geometry type the count calls for. */
+function linesGeometry(coordinates: Position[][]): CirGeometry {
+  return coordinates.length === 1
+    ? { type: 'LineString', coordinates: coordinates[0], dimension: 2 }
+    : { type: 'MultiLineString', coordinates, dimension: 2 };
 }
 
 function planHull(layerName: string, features: CirFeature[], options: Partial<GeometryOptions>, notes: string[]): GeometryPlan {

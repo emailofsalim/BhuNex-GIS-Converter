@@ -16,7 +16,7 @@ import {
   PRIORITY_LABEL,
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
-import { TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
+import { TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
 import { boundaryRings, describeBoundary } from '../conversion';
@@ -68,6 +68,14 @@ export function renderSettingsPanel(): void {
       state.settings.embedReport,
       (value) => void store.patchSettings({ embedReport: value }),
       'Adds a self-contained HTML and text report to the delivery, for whoever receives it without this tool.'
+    )
+  );
+  common.append(
+    checkbox(
+      'Attach a legend',
+      state.settings.includeLegend,
+      (value) => void store.patchSettings({ includeLegend: value }),
+      'An SVG of the layers, their colours and their line types, built from the file as written — including any renames. The same colours are written into the output itself where the format can carry them, so the legend and the file cannot disagree.'
     )
   );
 
@@ -710,9 +718,12 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
   if (!state.settings.basemapEnabled) return section;
 
   const providers = element('select', { class: 'select' }) as HTMLSelectElement;
+  const open = element('optgroup') as HTMLOptGroupElement;
+  open.label = 'No account needed';
   for (const provider of TILE_PROVIDERS) {
-    providers.append(element('option', { value: provider.id, text: provider.name }));
+    open.append(element('option', { value: provider.id, text: provider.name }));
   }
+  providers.append(open);
   providers.append(element('option', { value: 'custom', text: 'Custom tile service…' }));
   providers.value = state.settings.basemapProviderId;
   providers.addEventListener('change', () => {
@@ -720,6 +731,11 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
     host.render();
   });
   section.append(providers);
+
+  const chosen = TILE_PROVIDERS.find((provider) => provider.id === state.settings.basemapProviderId);
+  if (chosen?.note) {
+    section.append(element('p', { class: 'small faint', text: `${chosen.note} · ${chosen.attribution}` }));
+  }
 
   if (state.settings.basemapProviderId === 'custom') {
     section.append(
@@ -732,6 +748,26 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
     if (!check.ok && state.settings.basemapCustomUrl.trim()) {
       section.append(messageBlock('error', 'This template cannot be used.', check.problem));
     }
+
+    // Presets for the services that need an account. Choosing one fills the
+    // URL shape in and leaves {key} for the user's own — which is the whole
+    // difference between offering a service and shipping somebody's key in a
+    // public repository for every install to spend.
+    section.append(element('h4', { class: 'section__subtitle', text: 'Start from a service that needs your own key' }));
+    const presets = element('div', { class: 'stack' });
+    for (const preset of TILE_PRESETS) {
+      const row = element('div', { class: 'row' });
+      const button = element('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: preset.name });
+      button.addEventListener('click', () => {
+        void store.patchSettings({ basemapCustomUrl: preset.template });
+        host.render();
+      });
+      row.append(button);
+      row.append(element('span', { class: 'small faint', text: `${preset.note} — ${preset.signup}` }));
+      presets.append(row);
+    }
+    section.append(presets);
+
     section.append(
       messageBlock(
         'info',
@@ -739,8 +775,8 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
         // The honest reason Google is not in the list above. Wiring their tile
         // endpoints in directly is what most examples do, and it would put the
         // user in breach of terms they never agreed to.
-        'Google, Bing and Esri imagery are not offered as built-in choices because their tile endpoints are not licensed for direct use outside their own APIs. If you hold a key or a licence for one — a Google Maps Tile API endpoint, an organisational WMTS, a departmental imagery service — paste it here and it will be used under whatever terms you actually hold.',
-        'You are responsible for the terms and the attribution of a service you supply.'
+        'Google and Bing are not built-in choices because their tile endpoints are not licensed for direct use outside their own APIs — a public MIT-licensed extension shipping one would put every person who installs it in breach of terms they never saw. If you hold a Google Maps Tile API key, an organisational WMTS, or a departmental imagery service, start from a preset above or paste your endpoint and it will be used under whatever terms you actually hold. For satellite imagery without any of that, Esri World Imagery in the list above is keyless.',
+        'You are responsible for the terms and the attribution of a service you supply. Replace {key} with your own key before it will load.'
       )
     );
   }

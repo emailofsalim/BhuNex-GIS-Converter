@@ -41,6 +41,8 @@ import {
   GEOMETRY_LABEL,
   type GeometryOperation,
   type GeometryPlan,
+  OFFSET_SIDE_LABEL,
+  type OffsetSide,
   planGeometryOperation,
   toMultiPolygon,
 } from '../../core/geometry-ops';
@@ -84,7 +86,7 @@ const HINT: Record<GeometryOperation, string> = {
   buffer:
     'A zone at a fixed distance around each feature — a setback or a right of way. Negative shrinks a polygon inwards, and features narrower than twice the distance disappear.',
   offset:
-    'A parallel copy of a line at a fixed distance. The sign chooses the side. Inside corners are trimmed to their intersection, as a CAD offset does.',
+    'A parallel copy at a fixed distance. On a LINE the sign chooses the side, and inside corners are trimmed to their intersection as a CAD offset does. On a POLYGON, choose inside for a building line or a setback, outside for a right of way, or both for a corridor — the result is a line on the parcel, not a second parcel.',
   union: 'One shape covering everything the selected features cover. Shared boundaries between them are dissolved.',
   intersection: 'Only the area every selected feature covers — the overlap.',
   difference: 'The first feature with every later one cut out of it.',
@@ -115,6 +117,8 @@ interface PanelState {
   field: string;
   maskLayer: string;
   cut: string;
+  /** Which side a polygon offset goes. */
+  side: OffsetSide;
   toNewLayer: boolean;
   outputLayer: string;
   /** Transform inputs, typed rather than dragged. */
@@ -142,6 +146,7 @@ const panel: PanelState = {
   field: '',
   maskLayer: '',
   cut: '',
+  side: 'signed',
   toNewLayer: true,
   outputLayer: '',
   offsetX: '',
@@ -160,6 +165,7 @@ function reset(item: QueueItem, layers: string[]): void {
   panel.field = '';
   panel.maskLayer = layers.find((name) => name !== panel.layer) ?? '';
   panel.cut = '';
+  panel.side = 'signed';
   panel.toNewLayer = true;
   panel.outputLayer = '';
   panel.offsetX = '';
@@ -205,6 +211,7 @@ function optionsFrom(): { options: StoredGeometryOptions; problem?: string } {
     }
     options.distance = distance;
   }
+  if (panel.operation === 'offset' && panel.side !== 'signed') options.side = panel.side;
   if (panel.operation === 'dissolve' && panel.field) options.field = panel.field;
   if (NEEDS_MASK.has(panel.operation)) {
     if (!panel.maskLayer) return { options, problem: 'Choose the layer to use as the mask.' };
@@ -349,6 +356,23 @@ export function geometryOpsTab(item: QueueItem): HTMLElement[] {
         crs
           ? `In the units of ${crsLabel(crs)}.`
           : 'This dataset declares no CRS, so the operation will be refused until one is set in the CRS tab.'
+      )
+    );
+  }
+
+  if (panel.operation === 'offset') {
+    form.append(
+      labelled(
+        'Which side',
+        select(
+          (Object.keys(OFFSET_SIDE_LABEL) as OffsetSide[]).map((side) => ({ value: side, label: OFFSET_SIDE_LABEL[side] })),
+          panel.side,
+          (value) => {
+            panel.side = value as OffsetSide;
+            host.renderInspector();
+          }
+        ),
+        'Inside, outside and both apply to POLYGONS and use the size of the distance rather than its sign. A line has no inside, so a line offset always follows the sign.'
       )
     );
   }

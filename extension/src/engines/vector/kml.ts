@@ -382,12 +382,51 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
     return descriptionElement(rendered.html);
   };
 
-  const placemark = (feature: CirFeature): string => {
+  /**
+   * Per-layer styles, so a layer coloured in the workspace is that colour in
+   * Google Earth.
+   *
+   * Before this every placemark shared three document-wide styles, which meant
+   * the layer colour controls changed the preview canvas and nothing in the
+   * exported file — and an automatically generated legend beside such a file
+   * would have been a document asserting something false about its companion.
+   *
+   * A layer with no style of its own keeps the document defaults exactly, so
+   * nothing about an unstyled conversion changes.
+   */
+  const layerStyles = new Map<string, { id: string; xml: string }>();
+  for (const [index, layer] of dataset.layers.entries()) {
+    const colour = layer.style?.color;
+    const width = layer.style?.lineWidth;
+    if (!colour && width === undefined) continue;
+    const id = `ugcLayer${index}`;
+    const line = colour ? kmlColor(colour) : kmlColor(options.lineColor);
+    const stroke = width !== undefined && Number.isFinite(width) ? Math.max(0.5, Math.min(8, width)) : options.lineWidth;
+    layerStyles.set(layer.name, {
+      id,
+      xml:
+        `<Style id="${id}">` +
+        `<LineStyle><color>${line}</color><width>${stroke}</width></LineStyle>` +
+        `<PolyStyle><color>${colour ? kmlColor(colour, options.polygonFill ? '80' : '00') : kmlColor(options.polygonColor, options.polygonFill ? '80' : '00')}</color>` +
+        `<fill>${options.polygonFill ? 1 : 0}</fill><outline>1</outline></PolyStyle>` +
+        `<IconStyle><color>${line}</color><scale>0.9</scale></IconStyle>` +
+        `</Style>`,
+    });
+  }
+
+  const placemark = (feature: CirFeature, layerName?: string): string => {
     if (!feature.geometry) return '';
     const label = options.labelField
       ? feature.properties?.[options.labelField]
       : (feature.properties?.name ?? feature.properties?._text ?? feature.id);
-    const styleId = feature.geometry.type.includes('Polygon') ? '#ugcPoly' : feature.geometry.type.includes('Point') ? '#ugcPoint' : '#ugcLine';
+    const own = layerName ? layerStyles.get(layerName) : undefined;
+    const styleId = own
+      ? `#${own.id}`
+      : feature.geometry.type.includes('Polygon')
+        ? '#ugcPoly'
+        : feature.geometry.type.includes('Point')
+          ? '#ugcPoint'
+          : '#ugcLine';
     return (
       `<Placemark>` +
       (label !== undefined && label !== null && String(label) !== '' ? `<name>${xmlEscape(label)}</name>` : '') +
@@ -402,7 +441,8 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
     `<Style id="ugcLine"><LineStyle><color>${kmlColor(options.lineColor)}</color><width>${options.lineWidth}</width></LineStyle></Style>` +
     `<Style id="ugcPoly"><LineStyle><color>${kmlColor(options.lineColor)}</color><width>${options.lineWidth}</width></LineStyle>` +
     `<PolyStyle><color>${kmlColor(options.polygonColor, options.polygonFill ? '80' : '00')}</color><fill>${options.polygonFill ? 1 : 0}</fill><outline>1</outline></PolyStyle></Style>` +
-    `<Style id="ugcPoint"><IconStyle><color>${kmlColor(options.lineColor)}</color><scale>0.9</scale></IconStyle></Style>`;
+    `<Style id="ugcPoint"><IconStyle><color>${kmlColor(options.lineColor)}</color><scale>0.9</scale></IconStyle></Style>` +
+    [...layerStyles.values()].map((style) => style.xml).join('');
 
   /**
    * Rebuilds the source's folder nesting rather than emitting one flat Folder
@@ -423,7 +463,7 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
         node.children.set(segment, next);
         node = next;
       }
-      node.placemarks.push(...layer.features.map(placemark));
+      node.placemarks.push(...layer.features.map((feature) => placemark(feature, layer.name)));
     }
     // Each node emits its own placemarks and then its child folders. Emitting a
     // child's placemarks at the parent level as well would duplicate every one.
@@ -435,7 +475,9 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
     return render(root);
   };
 
-  const body = options.useFolders ? buildFolders() : dataset.layers.flatMap((layer) => layer.features.map(placemark)).join('');
+  const body = options.useFolders
+    ? buildFolders()
+    : dataset.layers.flatMap((layer) => layer.features.map((feature) => placemark(feature, layer.name))).join('');
 
   const text =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +

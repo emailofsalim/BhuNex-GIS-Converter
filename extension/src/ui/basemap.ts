@@ -51,15 +51,23 @@ export interface TileProvider {
   /** Rendered onto the canvas. Every open tile service requires this. */
   attribution: string;
   maxZoom: number;
+  /** One line on what this layer is FOR, shown beside it in the switcher. */
+  note?: string;
 }
 
 /**
- * The built-in providers, both openly licensed.
+ * The built-in providers, all keyless and openly licensed.
  *
  * OpenStreetMap's tile usage policy asks for a valid identifying user agent, no
  * bulk download and no heavy automated use. A person panning a survey around is
  * squarely inside that; a batch job would not be, which is one more reason the
- * basemap is a view-time feature and touches no conversion path.
+ * basemap is a view-time feature and touches no conversion path. The same
+ * reasoning covers every entry here: each has a free tier intended for exactly
+ * this kind of interactive use, and none is being scraped.
+ *
+ * They are ordered by what a surveyor reaches for: the street map to find the
+ * site, the imagery to see what is on it, the topographic layer for relief, and
+ * the two plain styles for when the basemap must not compete with the data.
  */
 export const TILE_PROVIDERS: TileProvider[] = [
   {
@@ -68,6 +76,18 @@ export const TILE_PROVIDERS: TileProvider[] = [
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: '© OpenStreetMap contributors',
     maxZoom: 19,
+    note: 'Streets, buildings and place names. The best layer for finding a site.',
+  },
+  {
+    id: 'esri-imagery',
+    name: 'Esri World Imagery (satellite)',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    // Note the {y}/{x} order: this service is not the usual {x}/{y}, and
+    // getting it the wrong way round produces tiles that load and are in the
+    // wrong place — which reads as a projection bug rather than a URL one.
+    attribution: 'Imagery © Esri, Maxar, Earthstar Geographics and the GIS User Community',
+    maxZoom: 19,
+    note: 'Aerial and satellite imagery — the closest keyless equivalent to Google Earth.',
   },
   {
     id: 'opentopo',
@@ -76,8 +96,106 @@ export const TILE_PROVIDERS: TileProvider[] = [
     subdomains: ['a', 'b', 'c'],
     attribution: '© OpenStreetMap contributors, SRTM · style © OpenTopoMap (CC-BY-SA)',
     maxZoom: 17,
+    note: 'Contours and hill shading, for a site whose relief matters.',
+  },
+  {
+    id: 'carto-positron',
+    name: 'Carto Positron (pale)',
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    subdomains: ['a', 'b', 'c', 'd'],
+    attribution: '© OpenStreetMap contributors © CARTO',
+    maxZoom: 20,
+    note: 'Almost colourless, so survey linework stays the loudest thing on screen.',
+  },
+  {
+    id: 'carto-dark',
+    name: 'Carto Dark Matter',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+    subdomains: ['a', 'b', 'c', 'd'],
+    attribution: '© OpenStreetMap contributors © CARTO',
+    maxZoom: 20,
+    note: 'The pale layer inverted, for working in the dark theme.',
   },
 ];
+
+/**
+ * Services that need an account, offered as templates rather than as providers.
+ *
+ * The owner named Stadia and Jawg. Both are genuinely free for this kind of
+ * use, and both require a key — which means shipping them as built-ins would
+ * mean shipping SOMEBODY's key in a public MIT-licensed repository, and every
+ * install would be spending that person's quota. So they are presets: choosing
+ * one fills in the URL shape and leaves `{key}` for the user's own.
+ *
+ * GOOGLE IS THE SAME MECHANISM, and this is the fourth time it has been asked
+ * for, so the reasoning lives here rather than being re-derived. Google's tile
+ * endpoints are not licensed for direct use outside the Maps JavaScript API and
+ * the Maps Tile API. Wiring `mt0.google.com/vt` in would work, and would put
+ * every person who installs this extension in breach of terms they never saw,
+ * with the owner's name on the repository that did it. A user who holds a Maps
+ * Tile API key can paste their session endpoint into the custom field and use
+ * it under the terms they actually hold — the request, satisfied, without the
+ * liability. Esri World Imagery above is the keyless answer for people who
+ * wanted Google mainly for the satellite view.
+ */
+export interface TilePreset {
+  id: string;
+  name: string;
+  /** A template with `{key}` where the user's own key goes. */
+  template: string;
+  /** Where to get a key. Shown as text, never fetched. */
+  signup: string;
+  attribution: string;
+  maxZoom: number;
+  note: string;
+}
+
+export const TILE_PRESETS: TilePreset[] = [
+  {
+    id: 'stadia-outdoors',
+    name: 'Stadia Maps — Outdoors',
+    template: 'https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}.png?api_key={key}',
+    signup: 'stadiamaps.com — free developer tier, registration required',
+    attribution: '© Stadia Maps © OpenMapTiles © OpenStreetMap contributors',
+    maxZoom: 20,
+    note: 'Terrain-oriented styling with paths and land cover.',
+  },
+  {
+    id: 'stadia-satellite',
+    name: 'Stadia Maps — Satellite',
+    template: 'https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key={key}',
+    signup: 'stadiamaps.com — free developer tier, registration required',
+    attribution: '© Stadia Maps © OpenMapTiles © OpenStreetMap contributors',
+    maxZoom: 20,
+    note: 'Imagery, for when the keyless satellite layer is out of date at your site.',
+  },
+  {
+    id: 'jawg-streets',
+    name: 'Jawg Maps — Streets',
+    template: 'https://tile.jawg.io/jawg-streets/{z}/{x}/{y}.png?access-token={key}',
+    signup: 'jawg.io — free tier, registration required',
+    attribution: '© JawgMaps © OpenStreetMap contributors',
+    maxZoom: 22,
+    note: 'A street map that keeps labels legible at high zoom.',
+  },
+  {
+    id: 'google-tile-api',
+    name: 'Google Maps Tile API (your own key)',
+    // Deliberately the SESSION endpoint, which is the licensed route. It needs
+    // a session token obtained from Google, which is why this is a template a
+    // key-holder completes rather than something that could work out of the box.
+    template: 'https://tile.googleapis.com/v1/2dtiles/{z}/{x}/{y}?session=SESSION_TOKEN&key={key}',
+    signup: 'Google Cloud console — Maps Tile API, billing account required',
+    attribution: 'Map data © Google',
+    maxZoom: 22,
+    note: 'Only usable with your own Maps Tile API key and session token. Google’s tiles are not licensed for direct use without one.',
+  },
+];
+
+/** Fills a preset in with a key, ready to be used as a custom template. */
+export function applyPreset(preset: TilePreset, key: string): string {
+  return preset.template.replace('{key}', key.trim());
+}
 
 export const TILE_SIZE = 256;
 

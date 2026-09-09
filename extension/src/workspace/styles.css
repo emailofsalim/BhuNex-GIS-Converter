@@ -929,6 +929,15 @@ a:hover {
   margin: 0 0 8px;
 }
 
+/* A heading inside a section, for a group that is part of it rather than
+   its own thing — the key-holding tile presets under the custom URL field. */
+.section__subtitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 12px 0 6px;
+}
+
 /* Advanced settings stay collapsed until requested. */
 details.adv {
   border-top: 1px solid var(--border);

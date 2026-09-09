@@ -47,10 +47,11 @@ import {
   truncationWarnings,
 } from '../../core/selection';
 import { crsLabel } from '../../crs/transform';
+import { measureGeometry, METHOD_LABEL } from '../../core/measure';
 import { type QueueItem, store } from '../../state/store';
 import { planGeometryOperation } from '../../core/geometry-ops';
 import { type CanvasTool, TOOL_HINT, TOOL_LABEL, ToolCanvas } from '../../ui/tool-canvas';
-import { element, ghostButton, messageBlock } from '../dom';
+import { element, formatValue, ghostButton, keyValues, messageBlock } from '../dom';
 import { host } from '../host';
 import { datasetForTools, protectedFor, viewOf } from './dataset';
 import { pendingEditsPanel, queueEdit } from './edits';
@@ -119,6 +120,10 @@ export function selectTab(item: QueueItem): HTMLElement[] {
   summary.append(actions);
   wrap.append(summary);
 
+  // --- what the clicked feature IS (phase E) -------------------------------
+  const info = featureInfo(item, selection);
+  if (info) wrap.append(info);
+
   for (const warning of truncationWarnings(selection, layers)) {
     wrap.append(messageBlock('warn', 'Part of a layer cannot be reached by hand.', warning, 'Take the whole layer below if you meant all of it.'));
   }
@@ -171,6 +176,61 @@ export function selectTab(item: QueueItem): HTMLElement[] {
   nodes.push(wrap);
   if ((item.edits ?? []).length > 0) nodes.push(pendingEditsPanel(item, item.edits ?? []));
   return nodes;
+}
+
+/**
+ * What one clicked feature is: its area, its perimeter, its vertex count.
+ *
+ * Phase E. Every number here comes from `core/measure.ts`, which picks geodesic
+ * or planar arithmetic from the CRS and SAYS WHICH — the same engine the
+ * measuring tool and the vertex readout use. A second area calculation living
+ * in a panel is how two parts of one tool come to disagree about the same
+ * parcel, and the one the user believes is whichever they saw last.
+ *
+ * Shown only for a single feature. An aggregate over a selection would be a
+ * different measurement with the same name: the "area" of forty parcels is
+ * their sum only if none of them overlap, and this cannot know that.
+ */
+function featureInfo(item: QueueItem, selection: Selection): HTMLElement | null {
+  if (selection.wholeLayers.length > 0 || selection.refs.length !== 1) return null;
+
+  const ref = selection.refs[0];
+  const layer = ((item.dataset?.layers ?? []) as any[]).find((candidate) => candidate.name === ref.layer);
+  const feature = (layer?.preview ?? [])[ref.index];
+  if (!feature) return null;
+
+  const measured = measureGeometry(feature.geometry ?? null, {
+    crs: item.dataset?.crs ?? null,
+    units: item.dataset?.units ?? null,
+  });
+
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'This feature' }));
+
+  const rows: [string, string][] = [
+    ['Layer', ref.layer],
+    ['Geometry', feature.geometry?.type ?? 'none'],
+  ];
+  if (feature.id !== undefined) rows.push(['Id', String(feature.id)]);
+  if (measured.area) rows.push(['Area', measured.area.text]);
+  if (measured.perimeter) rows.push(['Perimeter', measured.perimeter.text]);
+  if (measured.length) rows.push(['Length', measured.length.text]);
+  rows.push(['Vertices', measured.vertices.toLocaleString()]);
+  section.append(keyValues(rows));
+
+  // The method, always. A planar area on an undeclared CRS is a number in
+  // unknown units, and it looks exactly like a correct one.
+  section.append(element('p', { class: 'small faint', style: 'margin-top:6px', text: METHOD_LABEL[measured.method] }));
+
+  const properties = Object.entries(feature.properties ?? {});
+  if (properties.length > 0) {
+    const attributes = element('details', { class: 'small', style: 'margin-top:8px' });
+    attributes.append(element('summary', { text: `${properties.length} attribute${properties.length === 1 ? '' : 's'}` }));
+    attributes.append(keyValues(properties.map(([key, value]) => [key, formatValue(value)] as [string, string])));
+    section.append(attributes);
+  }
+
+  return section;
 }
 
 /**

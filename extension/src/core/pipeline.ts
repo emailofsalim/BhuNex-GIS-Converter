@@ -62,6 +62,7 @@ import { predictConversion, type FidelityPrediction } from './predict';
 import { diffDatasets, type DiffReport } from '../qa/diff';
 import { buildGeometryOverlay, type GeometryOverlay } from '../qa/geometry-overlay';
 import { assessHealth, type ProjectHealth } from '../qa/health';
+import { buildLegend, legendSvg } from './legend';
 import { buildReport, reportFiles, type ConversionReport } from './report';
 import { burnIn, describeBurnIn, DEFAULT_BURN_IN_OPTIONS, type BurnInOptions } from '../qa/burn-in';
 import { polygonize, describePolygonize, DEFAULT_POLYGONIZE_OPTIONS, type PolygonizeOptions } from '../qa/polygonize';
@@ -193,6 +194,17 @@ export interface ConversionSettings {
    * a cluttered one.
    */
   embedReport?: boolean;
+  /**
+   * Attach an SVG legend of the layers and their colours.
+   *
+   * Off by default for the same reason the report is: an extra file in every
+   * delivery that nobody asked for is clutter, and a legend is only useful when
+   * the delivery is going to somebody who will look at it as a drawing.
+   *
+   * The colours come from each layer's own `style`, which is what the writers
+   * use too — so the legend and the file it describes cannot disagree.
+   */
+  includeLegend?: boolean;
   /**
    * Assess project health while converting (spec §29.2).
    *
@@ -1436,6 +1448,24 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
     : undefined;
 
   if (report) outputs.push(...reportFiles(report, baseName));
+
+  // ---- Legend: the layers and their colours, as a file the recipient can open.
+  //
+  // Built from `prepared.dataset` — the dataset as WRITTEN, after every edit,
+  // rename and style — so the legend describes the delivery rather than the
+  // source. A legend naming a layer by its old name would be wrong in the one
+  // way a legend cannot afford.
+  if (settings.includeLegend && prepared.dataset.layers?.length) {
+    const legend = buildLegend(prepared.dataset, {
+      title: baseName,
+      crsLabel: crsLabel(prepared.dataset.crs),
+    });
+    outputs.push({
+      name: `${baseName}.legend.svg`,
+      bytes: encodeText(legendSvg(legend)),
+      mimeType: 'image/svg+xml',
+    });
+  }
 
   return {
     input,

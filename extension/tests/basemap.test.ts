@@ -17,7 +17,9 @@ import { describe, expect, it } from 'vitest';
 import {
   lonLatToTile,
   tilesCovering,
+  TILE_PRESETS,
   TILE_PROVIDERS,
+  applyPreset,
   TILE_SIZE,
   tileToLonLat,
   tileUrl,
@@ -211,6 +213,95 @@ describe('a custom tile template', () => {
 
   it('refuses an empty template', () => {
     expect(validateTemplate('   ').ok).toBe(false);
+  });
+});
+
+describe('the provider switcher', () => {
+  it('offers a street map, imagery, relief and a pale style', () => {
+    // Not a count: these are the four things a surveyor actually switches
+    // between, and a list that lost one of them would still pass a count.
+    const ids = TILE_PROVIDERS.map((provider) => provider.id);
+    expect(ids).toContain('osm');
+    expect(ids).toContain('esri-imagery');
+    expect(ids).toContain('opentopo');
+    expect(ids).toContain('carto-positron');
+  });
+
+  it('gives every provider a unique id, or the switcher selects the wrong one', () => {
+    const ids = TILE_PROVIDERS.map((provider) => provider.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('says what each layer is for, so the choice is not four names', () => {
+    for (const provider of TILE_PROVIDERS) {
+      expect(provider.note, `${provider.id} has no note`).toBeTruthy();
+    }
+  });
+
+  it('builds Esri’s reversed row and column order correctly', () => {
+    // This service is {z}/{y}/{x}, not the usual {z}/{x}/{y}. Getting it the
+    // wrong way round yields tiles that load and are in the wrong place, which
+    // reads as a projection bug rather than a URL one.
+    const esri = TILE_PROVIDERS.find((provider) => provider.id === 'esri-imagery')!;
+    expect(tileUrl(esri, { x: 3018, y: 1774, z: 12 })).toBe(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1774/3018'
+    );
+  });
+
+  it('gives every provider a plausible maximum zoom', () => {
+    for (const provider of TILE_PROVIDERS) {
+      expect(provider.maxZoom, `${provider.id}`).toBeGreaterThanOrEqual(15);
+      expect(provider.maxZoom, `${provider.id}`).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it('passes its own template validator for every built-in', () => {
+    // The validator is what a custom URL is held to; a built-in that could not
+    // pass it would be a rule the shipped list exempts itself from.
+    for (const provider of TILE_PROVIDERS) {
+      expect(validateTemplate(provider.url).ok, `${provider.id}: ${validateTemplate(provider.url).problem}`).toBe(true);
+    }
+  });
+});
+
+describe('the key-holding presets', () => {
+  it('offers the services the owner named, plus the licensed Google route', () => {
+    const ids = TILE_PRESETS.map((preset) => preset.id);
+    expect(ids.some((id) => id.startsWith('stadia'))).toBe(true);
+    expect(ids.some((id) => id.startsWith('jawg'))).toBe(true);
+    expect(ids).toContain('google-tile-api');
+  });
+
+  it('leaves a {key} placeholder in every template, and nothing usable without it', () => {
+    for (const preset of TILE_PRESETS) {
+      expect(preset.template, `${preset.id} has no {key}`).toContain('{key}');
+      // The one thing that must never happen: a real key shipped in a public
+      // repository, spending somebody's quota on every install.
+      expect(preset.template).not.toMatch(/(api_key|access-token|key)=[A-Za-z0-9]{8,}/);
+    }
+  });
+
+  it('says where to get a key rather than leaving the user to search', () => {
+    for (const preset of TILE_PRESETS) {
+      expect(preset.signup.length, `${preset.id}`).toBeGreaterThan(10);
+      expect(preset.attribution.length, `${preset.id}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('becomes a valid template once a key is supplied', () => {
+    for (const preset of TILE_PRESETS) {
+      const filled = applyPreset(preset, 'THE-USERS-OWN-KEY');
+      expect(filled).not.toContain('{key}');
+      expect(validateTemplate(filled).ok, `${preset.id}: ${validateTemplate(filled).problem}`).toBe(true);
+    }
+  });
+
+  it('uses Google’s licensed session endpoint, not the scraped one', () => {
+    const google = TILE_PRESETS.find((preset) => preset.id === 'google-tile-api')!;
+    expect(google.template).toContain('tile.googleapis.com');
+    // mt0.google.com/vt is what most examples use and what the terms forbid.
+    expect(google.template).not.toMatch(/mt\d?\.google\.com/);
+    expect(google.template).toContain('session');
   });
 });
 
