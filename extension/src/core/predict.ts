@@ -540,13 +540,27 @@ function predictAttributes(profile: DatasetProfile, format: FormatDef): Fidelity
   if (fields.length === 0) return findings;
 
   if (!format.supportsAttributes) {
+    // The remedy is format-aware, because "use GeoJSON instead" is not an
+    // answer for someone who needs a DXF. CAD and mining formats have a real
+    // route for carrying a field — as drawing text rather than a table — and
+    // sending that user to a different format entirely would be telling them to
+    // abandon the deliverable they were asked for.
+    const CARRIES_ONE_FIELD: Record<string, string> = {
+      dxf: 'DXF has no attribute table. To carry one field into the drawing, set a label field or use Burn-in (Attributes → CAD) to write it as TEXT beside each feature. For the full table, deliver a Shapefile or GeoJSON alongside the DXF.',
+      dwg: 'DWG has no attribute table this tool can write. Carry one field as drawing TEXT with Burn-in (Attributes → CAD), or deliver a Shapefile alongside it.',
+      landxml: 'LandXML carries geometry and surface names, not an attribute table. Deliver a Shapefile or GeoJSON alongside it for the fields.',
+      gpx: 'GPX has a fixed schema — name, description, comment and symbol. Map one field to the waypoint/track name in the GPX options; the rest need a Shapefile, GeoJSON or CSV alongside.',
+      'surpac-str': 'A Surpac string row holds one description field: name it in the Surpac options to choose which field survives. The rest need a Shapefile or CSV alongside.',
+    };
     findings.push({
       axis: 'attributes',
       grade: 'red',
       code: 'ATTR_UNSUPPORTED',
-      statement: `${fields.length} attribute field(s) will be dropped: ${format.name} stores geometry only.`,
+      statement:
+        `${fields.length} attribute field(s) will be dropped: ${format.name} ` +
+        `${CARRIES_ONE_FIELD[format.id] ? 'has no attribute table' : 'stores geometry only'}.`,
       count: fields.length,
-      remedy: 'Use GeoJSON, Shapefile, KML or CSV to keep the attribute table.',
+      remedy: CARRIES_ONE_FIELD[format.id] ?? 'Use GeoJSON, Shapefile, KML or CSV to keep the attribute table.',
       detail: { fields: fields.slice(0, 20) },
     });
     return findings;

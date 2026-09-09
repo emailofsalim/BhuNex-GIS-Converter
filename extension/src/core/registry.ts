@@ -269,7 +269,11 @@ export const FORMATS: FormatDef[] = [
     supports3D: T,
     supportsZ: T,
     supportsM: F,
-    supportsAttributes: T,
+    // FALSE UNTIL THE WRITER CARRIES THEM. GPX has a fixed schema — <name>,
+    // <desc>, <cmt>, <sym> — and no attribute table, so a custom field like
+    // `plot_no` has nowhere to go. Claiming otherwise graded the attributes
+    // axis green on a conversion that drops every survey field.
+    supportsAttributes: F,
     supportsCRS: F,
     supportsMultiGeometry: F,
     supportsCurves: F,
@@ -417,7 +421,10 @@ export const FORMATS: FormatDef[] = [
     supports3D: T,
     supportsZ: T,
     supportsM: F,
-    supportsAttributes: T,
+    // FALSE UNTIL THE WRITER CARRIES THEM. The LandXML reader builds
+    // `properties`; the writer emits geometry and surface names only. Same
+    // false-green as DXF.
+    supportsAttributes: F,
     supportsCRS: T,
     supportsMultiGeometry: F,
     supportsCurves: F,
@@ -490,7 +497,14 @@ export const FORMATS: FormatDef[] = [
     supports3D: T,
     supportsZ: T,
     supportsM: F,
-    supportsAttributes: T,
+    // FALSE UNTIL THE WRITER CARRIES THEM. `dxf-write.ts` reads `properties`
+    // only to pick a layer, an ACI colour and one optional label field; every
+    // other field is dropped. This flag was T, so the fidelity prediction
+    // showed "attributes: green" and no warning was raised — a surveyor sent
+    // parcels to AutoCAD and the plot numbers and owner names were simply gone,
+    // with the tool having said they were safe. One field can still be carried
+    // as TEXT via the label field or the burn-in tool.
+    supportsAttributes: F,
     supportsCRS: F,
     supportsMultiGeometry: F,
     supportsCurves: T,
@@ -813,7 +827,10 @@ export const FORMATS: FormatDef[] = [
     supports3D: T,
     supportsZ: T,
     supportsM: F,
-    supportsAttributes: T,
+    // FALSE UNTIL THE WRITER CARRIES THEM. A Surpac string row holds a
+    // description field and nothing else, so only the field named in
+    // `descriptionField` survives; the rest are dropped.
+    supportsAttributes: F,
     supportsCRS: F,
     supportsMultiGeometry: F,
     supportsCurves: F,
