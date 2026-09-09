@@ -27,7 +27,7 @@ import { assertWithinBuffer, ConversionError } from '../../core/errors';
 import { featuresBounds3, orientRing, pointInRing, signedArea, simpleKind } from '../../core/geometry';
 import { coordinateFormatter, type PrecisionPolicy } from '../../core/precision';
 import { buildPrj, parsePrj } from '../../crs/wkt';
-import { writeZip, type ZipInput } from '../archives/zip';
+import { type ZipInput } from '../archives/zip';
 import { deriveFields } from '../shared';
 import { planDbfFields, readDbf, writeDbf } from './dbf';
 
@@ -429,20 +429,6 @@ export function buildShapefile(dataset: CirDataset, options: WriteShapefileOptio
   }
 
   return { packages, warnings, renames };
-}
-
-export async function writeShapefileZip(dataset: CirDataset, options: WriteShapefileOptions): Promise<{ bytes: Uint8Array; warnings: Warning[]; renames: Record<string, string> }> {
-  const built = buildShapefile(dataset, options);
-  const files = built.packages.flatMap((entry) => entry.files);
-  if (files.length === 0) {
-    throw new ConversionError({
-      code: 'SHP_NO_GEOMETRY',
-      what: 'No features with geometry were available to write.',
-      why: 'Every feature in the dataset has a null geometry.',
-      action: 'Check the source file in the inspector — the geometry may have failed to parse.',
-    });
-  }
-  return { bytes: await writeZip(files), warnings: built.warnings, renames: built.renames };
 }
 
 interface BuiltPackage {
