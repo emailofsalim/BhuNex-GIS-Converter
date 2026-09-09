@@ -199,6 +199,8 @@ export interface ConversionSettings {
    * opt-in rather than charged to every conversion.
    */
   assessHealth?: boolean;
+  /** Look for whole missing parcels inside a coverage (spec §23.1). */
+  checkCoverageGaps?: boolean;
   /**
    * Edits the user made in the workspace, replayed onto the full dataset.
    *
@@ -1364,7 +1366,12 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   // ---- Health: assessed on the SOURCE, since that is what the user can fix.
   // Assessing the output would report the conversion's own compromises back as
   // defects in the data, which is the opposite of useful.
-  const health = settings.assessHealth ? assessHealth(prepared.dataset, { prediction }) : undefined;
+  const health = settings.assessHealth
+    ? assessHealth(prepared.dataset, {
+        prediction,
+        defects: { checkCoverageGaps: settings.checkCoverageGaps ?? false },
+      })
+    : undefined;
 
   // ---- Package: one file stays loose, a tree becomes a ZIP that *is* the tree.
   phase('packaging');

@@ -193,6 +193,7 @@ export function buildSettings(): Partial<ConversionSettings> {
     sourceCrs,
     targetCrs,
     datumShift: settings.datumShift,
+    checkCoverageGaps: settings.checkCoverageGaps,
     preserveZ: settings.preserveZ,
     naming: { pattern: settings.naming },
     layout: settings.outputLayout,

@@ -24,6 +24,7 @@
 
 import type { Bounds, CirDataset, CirFeature, Position } from '../core/cir';
 import { geometryBounds, pointInRing, segmentsIntersect, signedArea } from '../core/geometry';
+import { unionAll, type MultiPoly } from '../core/polygon-boolean';
 import { SpatialIndex, expandBounds, type IndexedItem } from '../core/spatial-index';
 
 export type DefectType =
@@ -40,7 +41,9 @@ export type DefectType =
   | 'nested-polygon'
   | 'near-duplicate-geometry'
   | 'crossing-lines'
-  | 'dangling-endpoint';
+  | 'dangling-endpoint'
+  // --- the coverage as a whole ---
+  | 'coverage-gap';
 
 export interface Defect {
   type: DefectType;
@@ -91,6 +94,24 @@ export interface DefectScanOptions {
   checkSlivers: boolean;
   checkSpikes: boolean;
   checkZAnomalies: boolean;
+  /**
+   * Find whole missing parcels inside a coverage, not just gaps along a
+   * shared edge.
+   *
+   * Off by default and it is the one check here with a real cost: it unions
+   * every polygon in the layer, which is O(n log n) sweeps rather than a
+   * bounded pairwise scan. On a 40,000-parcel sheet that is seconds, not
+   * milliseconds, so it is asked for rather than assumed.
+   */
+  checkCoverageGaps: boolean;
+  /**
+   * Holes smaller than this are not reported, in squared dataset units.
+   *
+   * Without it every rounding-level crack between two parcels comes back as a
+   * missing parcel and the real one is lost in the noise. The default is one
+   * square metre: smaller than any plot and larger than any sliver.
+   */
+  coverageGapMinArea: number;
 }
 
 export const DEFAULT_DEFECT_OPTIONS: DefectScanOptions = {
@@ -110,6 +131,8 @@ export const DEFAULT_DEFECT_OPTIONS: DefectScanOptions = {
   checkSlivers: true,
   checkSpikes: true,
   checkZAnomalies: true,
+  checkCoverageGaps: false,
+  coverageGapMinArea: 1,
 };
 
 export interface DefectReport {
@@ -164,6 +187,12 @@ export function scanDefects(dataset: CirDataset, options: Partial<DefectScanOpti
       candidates.map((candidate): IndexedItem<Candidate> => ({ bounds: candidate.bounds, value: candidate }))
     );
     defects.push(...findPairwiseDefects(index, settings));
+  }
+
+  if (settings.checkCoverageGaps) {
+    const coverage = findCoverageGaps(candidates, settings);
+    defects.push(...coverage.defects);
+    skipped.push(...coverage.skipped);
   }
 
   const counts: Record<string, number> = {};
@@ -706,3 +735,134 @@ function linesCross(left: Position[][], right: Position[][], tolerance: number):
   }
   return null;
 }
+
+// ------------------------------------------------------------- coverage gaps
+
+/**
+ * Finds whole missing parcels inside a coverage.
+ *
+ * The pairwise checks above compare features two at a time, which finds a gap
+ * along a SHARED EDGE and cannot find the other kind: a parcel that was never
+ * digitised at all, surrounded by four neighbours that are each perfectly
+ * consistent with the three they touch. Nothing pairwise sees it, because the
+ * defect is not in any pair — it is in the coverage.
+ *
+ * Union every polygon in the layer and the answer falls out: a hole in the
+ * union is a hole in the coverage. That union has been available in
+ * `core/polygon-boolean.ts` since the geometry operations landed, and the
+ * README said this check needed "a boolean union this build does not have"
+ * for as long as it has had one.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO is decide whether a hole is a mistake.
+ * A courtyard, a tank, a road reserve and a village pond are all legitimate
+ * holes in a cadastral coverage, and telling them apart from an un-digitised
+ * plot needs knowledge this tool does not have. So every hole above the area
+ * threshold is REPORTED with its area and where to look, and it is reported as
+ * a warning rather than an error — the surveyor knows which of them is a pond.
+ */
+function findCoverageGaps(
+  candidates: Candidate[],
+  settings: DefectScanOptions
+): { defects: Defect[]; skipped: string[] } {
+  const defects: Defect[] = [];
+  const skipped: string[] = [];
+
+  const byLayer = new Map<string, Position[][][]>();
+  for (const candidate of candidates) {
+    const polygons = polygonsOf(candidate.feature);
+    if (polygons.length === 0) continue;
+    const list = byLayer.get(candidate.layer) ?? [];
+    for (const polygon of polygons) list.push(polygon);
+    byLayer.set(candidate.layer, list);
+  }
+
+  for (const [layer, polygons] of byLayer) {
+    // One polygon cannot have a coverage gap: any hole in it is its own hole,
+    // already reported by the shape checks if it is malformed.
+    if (polygons.length < 2) continue;
+
+    if (polygons.length > COVERAGE_UNION_LIMIT) {
+      skipped.push(
+        `Coverage gaps were not checked on "${layer}": ${polygons.length.toLocaleString()} polygons exceed the ${COVERAGE_UNION_LIMIT.toLocaleString()} limit for a union. Check it one block at a time.`
+      );
+      continue;
+    }
+
+    let united;
+    try {
+      united = unionAll(polygons.map((polygon) => [polygon] as MultiPoly));
+    } catch {
+      // A union that fails on degenerate input must not take the whole scan
+      // with it — every other defect found is still worth reporting.
+      skipped.push(`Coverage gaps could not be computed on "${layer}": the polygons could not be unioned.`);
+      continue;
+    }
+
+    for (const polygon of united.polygons) {
+      // Ring 0 is the shell; everything after it is a hole in the coverage.
+      for (let index = 1; index < polygon.length; index++) {
+        const hole = polygon[index];
+        const area = Math.abs(signedArea(hole));
+        if (area < settings.coverageGapMinArea) continue;
+
+        defects.push({
+          type: 'coverage-gap',
+          // A warning, not an error: a courtyard and a missing plot are the
+          // same shape, and only the surveyor knows which this is.
+          severity: 'warning',
+          layer,
+          location: representativePoint(hole),
+          description: `Coverage gap of ${area.toFixed(2)} square units enclosed by the parcels in "${layer}" — an area no polygon covers.`,
+          suggestedRepair:
+            'Check whether a parcel is missing here. A courtyard, tank, road reserve or pond is a legitimate hole and needs no action; an un-digitised plot does.',
+          detail: { area, vertices: hole.length },
+        });
+      }
+    }
+  }
+
+  return { defects, skipped };
+}
+
+/**
+ * A point guaranteed to be inside the ring, for "where to look".
+ *
+ * The centroid is not good enough — the centroid of a C-shaped or crescent gap
+ * falls outside it, which sends the user to a neighbouring parcel. This walks
+ * the horizontal line through the ring's mid-latitude and takes the midpoint of
+ * its widest interior span, which is inside by construction.
+ */
+function representativePoint(ring: Position[]): Position {
+  const ys = ring.map((position) => position[1]);
+  const y = (Math.min(...ys) + Math.max(...ys)) / 2;
+
+  const crossings: number[] = [];
+  for (let index = 1; index < ring.length; index++) {
+    const [x1, y1] = ring[index - 1];
+    const [x2, y2] = ring[index];
+    if (y1 === y2) continue;
+    if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) {
+      crossings.push(x1 + ((y - y1) / (y2 - y1)) * (x2 - x1));
+    }
+  }
+  crossings.sort((a, b) => a - b);
+
+  let bestX = ring[0][0];
+  let widest = -1;
+  for (let index = 0; index + 1 < crossings.length; index += 2) {
+    const span = crossings[index + 1] - crossings[index];
+    if (span > widest) {
+      widest = span;
+      bestX = (crossings[index] + crossings[index + 1]) / 2;
+    }
+  }
+  return [bestX, y];
+}
+
+/**
+ * Above this many polygons the union is refused rather than attempted.
+ *
+ * A sweep over a very large coverage is minutes, not seconds, and a check that
+ * appears to hang is worse than one that says it will not run.
+ */
+const COVERAGE_UNION_LIMIT = 5000;

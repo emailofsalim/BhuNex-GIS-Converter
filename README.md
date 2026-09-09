@@ -341,10 +341,11 @@ specification is
    records both.
 5. **Geoid conversions** are refused rather than approximated. Ellipsoidal and
    orthometric heights differ by tens of metres and no geoid model is bundled.
-6. **Gap detection finds gaps along adjacent boundaries**, not a whole missing
-   parcel inside a coverage. The boolean union that would find one now exists in
-   `core/polygon-boolean.ts`; wiring it into the coverage check is outstanding,
-   and the violation text says what is and is not being checked.
+6. **Coverage-gap detection is opt-in and does not judge.** It unions every
+   polygon in a layer and reports each enclosed area nothing covers — the
+   un-digitised plot no pairwise check can see. It cannot tell a missing parcel
+   from a courtyard, a tank or a village pond, which are the same shape, so it
+   reports the area and the place and leaves the call to you.
 7. **The basemap needs a CRS it can place.** A file with no declared coordinate
    system, a local site grid, or a datum with no supplied shift shows no tiles
    at all rather than tiles in the wrong place.
