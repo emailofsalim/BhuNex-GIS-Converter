@@ -36,7 +36,7 @@ import { ConversionError, asConversionError } from './errors';
 import { emptyBounds, featuresBounds, isFiniteBounds } from './geometry';
 import { toMultiPolygon } from './geometry-ops';
 import { sha256Hex } from './hash';
-import { buildOutputName, extensionOf, type NamingOptions } from './naming';
+import { baseName as baseNameOf, buildOutputName, extensionOf, sanitizeFileName, type NamingOptions } from './naming';
 import { SURVEY_DEFAULT_PRECISION, type PrecisionPolicy } from './precision';
 import { getFormat, type FormatDef } from './registry';
 import { readDwg } from '../adapters/native-messaging/client';
@@ -73,7 +73,7 @@ import { clipRaster, type ClipOptions } from '../engines/raster/clip';
 import { planWarpGrid, warpRaster } from '../engines/raster/warp';
 import { rasterizePolygons, vectorizeRaster, type VectorizeOptions } from '../engines/raster/vectorize';
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
-import { buildWorldFile, readGcpPoints, writeGcpPoints } from '../engines/raster/worldfile';
+import { buildWorldFile, readGcpPoints, worldFileExtensionFor, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
 import { DEFAULT_CSV_OPTIONS, readCsvTable, tableToPoints, writeCsv, type WriteCsvOptions } from '../engines/vector/csv';
 import { readGeoJson, writeGeoJson } from '../engines/vector/geojson';
@@ -367,6 +367,18 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 };
 
 /** Extension a writer produces for a format id. */
+/**
+ * The source file's name without its extension.
+ *
+ * Used for sidecar outputs, whose name must match the file they describe rather
+ * than follow the user's naming convention. Falls back to the dataset name when
+ * a source file name is somehow absent, which is better than an empty base.
+ */
+function sourceBaseName(dataset: CirDataset): string {
+  const fromSource = baseNameOf(dataset.source?.fileName ?? '');
+  return fromSource || sanitizeFileName(dataset.name, 'output');
+}
+
 export function outputExtensionFor(formatId: string): string {
   const format = getFormat(formatId);
   if (!format) return 'dat';
@@ -575,9 +587,26 @@ interface WriteOutcome {
   grouped?: boolean;
 }
 
-async function writeTarget(dataset: CirDataset, targetId: string, baseName: string, settings: ConversionSettings): Promise<WriteOutcome> {
+async function writeTarget(dataset: CirDataset, targetId: string, requestedBaseName: string, settings: ConversionSettings): Promise<WriteOutcome> {
   const precision = settings.precision;
   const extension = outputExtensionFor(targetId);
+
+  // A SIDECAR IGNORES THE NAMING CONVENTION, because its name is not a label —
+  // it is the whole binding mechanism.
+  //
+  // `parcels.prj` georeferences `parcels.shp`, and `scan.jgw` georeferences
+  // `scan.jpg`, purely by sharing a base name. The default convention produces
+  // `scan_converted_to_worldfile.jgw`, which is a correct affine transform in a
+  // file no GIS will ever associate with the image — it loads as an unreferenced
+  // picture, and nothing reports a problem, because nothing went wrong as far as
+  // this tool could tell.
+  //
+  // Keyed on the registry's own `dataKind`, so `worldfile`, `prj` and
+  // `gcp-points` are all covered and a future sidecar is covered on the day it
+  // is added.
+  const format = getFormat(targetId);
+  const baseName = format?.dataKind === 'sidecar' ? sourceBaseName(dataset) : requestedBaseName;
+
   const name = `${baseName}.${extension}`;
   const mime = MIME_BY_EXTENSION[extension] ?? 'application/octet-stream';
   const text = (body: string): OutputFile => ({ name, bytes: encodeText(body), mimeType: mime });
@@ -717,7 +746,31 @@ async function writeTarget(dataset: CirDataset, targetId: string, baseName: stri
           action: 'Georeference the image in QGIS first, or supply ground control points.',
         });
       }
-      return { files: [text(buildWorldFile(geotransform))], warnings: [] };
+      // The extension is derived from the SOURCE IMAGE, not taken from the
+      // registry's first entry.
+      //
+      // A world file is bound to its image by FILENAME and nothing else:
+      // `photo.jpg` is georeferenced by `photo.jgw`, and QGIS and ArcGIS will
+      // not look at a `photo.tfw` sitting beside it. `outputExtensionFor`
+      // returns `extensions[0]`, which is 'tfw' — so every world file this tool
+      // wrote for a JPEG, PNG or BMP source was named for a TIFF and silently
+      // did nothing, while the registry note promised it was "bound
+      // automatically to a matching image file".
+      //
+      // `worldFileExtensionFor` has computed the correct answer since the
+      // module was written, and nothing called it.
+      const sourceExtension = extensionOf(dataset.source.fileName);
+      const worldExtension = worldFileExtensionFor(sourceExtension);
+      return {
+        files: [
+          {
+            name: `${baseName}.${worldExtension}`,
+            bytes: encodeText(buildWorldFile(geotransform)),
+            mimeType: 'text/plain',
+          },
+        ],
+        warnings: [],
+      };
     }
     case 'gcp-points': {
       const gcps = dataset.layers

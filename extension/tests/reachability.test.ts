@@ -664,3 +664,90 @@ describe('a writer that produced no file refuses instead of delivering nothing',
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// A world file is bound to its image by filename alone
+// ---------------------------------------------------------------------------
+
+describe('a world file is named for the image it georeferences', () => {
+  // `outputExtensionFor` returns `extensions[0]`, which for the world-file
+  // format is 'tfw'. So every world file written for a JPEG, PNG or BMP source
+  // was named for a TIFF — and a world file binds to its image by FILENAME and
+  // nothing else, so QGIS and ArcGIS ignored it completely. The registry note
+  // promised it was "bound automatically to a matching image file".
+  //
+  // `worldFileExtensionFor` has computed the correct answer since the module was
+  // written, and nothing called it.
+  async function worldFileNameFor(imageName: string): Promise<string> {
+    const { convert } = await import('@core/pipeline');
+    const { SURVEY_DEFAULT_PRECISION } = await import('@core/precision');
+    const { writeGeoTiff } = await import('@engines/raster/geotiff-write');
+
+    // A real georeferenced GeoTIFF, so the reader produces a dataset carrying a
+    // geotransform. The shape mirrors `raster.test.ts`'s own DEM fixture.
+    const width = 2;
+    const height = 2;
+    const source: any = {
+      name: 'grid',
+      kind: 'raster',
+      layers: [],
+      source: { fileName: imageName, size: 0, formatId: 'geotiff', formatName: 'GeoTIFF', detectionConfidence: 1 },
+      crs: { kind: 'projected', epsg: 32644, name: 'WGS 84 / UTM 44N' },
+      warnings: [],
+      raster: {
+        width,
+        height,
+        bandCount: 1,
+        pixelType: 'float64',
+        noData: null,
+        geotransform: [412000, 10, 0, 2591300, 0, -10],
+        extent: { minX: 412000, minY: 2591300 - height * 10, maxX: 412000 + width * 10, maxY: 2591300 },
+        bands: [Float64Array.from([1, 2, 3, 4])],
+        hasPixelData: true,
+        isElevation: true,
+      },
+    };
+    const tiff = await writeGeoTiff(source);
+
+    const result = await convert({
+      input: { fileName: imageName, bytes: tiff.bytes },
+      targetFormatId: 'worldfile',
+      settings: { precision: SURVEY_DEFAULT_PRECISION, runQa: false },
+    });
+    return result.outputs[0].name;
+  }
+
+  it('writes .tfw beside a TIFF', async () => {
+    expect(await worldFileNameFor('sheet.tif')).toMatch(/\.tfw$/);
+  });
+
+  it('writes .jgw beside a JPEG, not .tfw', async () => {
+    expect(await worldFileNameFor('scan.jpg')).toMatch(/\.jgw$/);
+  });
+
+  it('writes .pgw beside a PNG', async () => {
+    expect(await worldFileNameFor('plan.png')).toMatch(/\.pgw$/);
+  });
+
+  it('keeps the image’s base name, which is the half that does the binding', async () => {
+    expect(await worldFileNameFor('village_42.jpg')).toBe('village_42.jgw');
+  });
+});
+
+describe('every sidecar keeps the base name of the file it describes', () => {
+  // The naming convention is right for every format whose name is a label, and
+  // wrong for the three whose name IS the binding. `parcels.prj` georeferences
+  // `parcels.shp` by sharing a base name; `parcels_converted_to_prj.prj` is a
+  // correct projection definition that no GIS will ever associate with anything.
+  it('is keyed on the registry dataKind, not on a list of format ids', async () => {
+    const { getFormat } = await import('@core/registry');
+    const sidecars = ['worldfile', 'prj', 'gcp-points'];
+    for (const id of sidecars) {
+      expect(getFormat(id)?.dataKind, id).toBe('sidecar');
+    }
+    // The pipeline must branch on that flag, so a sidecar added later is
+    // covered on the day it is added rather than the day someone notices.
+    const PIPELINE = read('extension', 'src', 'core', 'pipeline.ts');
+    expect(PIPELINE).toMatch(/dataKind === 'sidecar'/);
+  });
+});
