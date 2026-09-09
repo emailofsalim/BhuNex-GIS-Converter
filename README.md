@@ -328,8 +328,13 @@ specification is
    read — overviews and multi-IFD pyramids are not.
 2. **LAZ has no bundled decoder.** The header is reported and the points are
    refused, never read as uncompressed LAS.
-3. **DGN, E57, GeoPackage, FlatGeobuf, GeoParquet, File Geodatabase and vendor
-   mining formats** are adapter contracts only.
+3. **DGN, E57, GeoPackage, GeoParquet, File Geodatabase and vendor mining
+   formats** are adapter contracts only. Each genuinely needs something this
+   build does not have: LAZ an arithmetic decoder, GeoPackage and File
+   Geodatabase an SQLite engine, GeoParquet Thrift and the Parquet page
+   formats, DWG, DGN and E57 libraries with no pure-TypeScript equivalent.
+   FlatGeobuf used to be on this list by mistake — it is FlatBuffers over a
+   DataView and never needed WebAssembly at all.
 4. **No datum shift parameters are bundled.** The seven-parameter Helmert
    transformation itself is implemented and tested, and the CRS panel accepts a
    parameter set — but nothing ships with values for Kalianpur 1975, Everest

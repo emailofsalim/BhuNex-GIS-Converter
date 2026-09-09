@@ -207,12 +207,16 @@ describe('the claims of NO support, which must refuse rather than fail quietly',
   const adapters = FORMATS.filter((format) => format.support.export === 'adapter');
 
   it('covers the formats waiting on an engine that is not bundled', () => {
+    // FlatGeobuf left this list when it turned out never to have needed the
+    // WebAssembly its registry entry claimed. What remains genuinely does:
+    // LAZ needs an arithmetic decoder, GeoPackage and FileGDB need SQLite,
+    // GeoParquet needs Thrift and the Parquet page formats, and DWG, DGN and
+    // E57 need libraries with no pure-TypeScript equivalent.
     expect(adapters.map((format) => format.id).sort()).toEqual([
       'dgn',
       'dwg',
       'e57',
       'filegdb',
-      'flatgeobuf',
       'geopackage',
       'geoparquet',
       'laz',

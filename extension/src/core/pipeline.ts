@@ -76,6 +76,7 @@ import { decodeText, encodeText, sourceInfo } from '../engines/shared';
 import { DEFAULT_CSV_OPTIONS, readCsvTable, tableToPoints, writeCsv, type WriteCsvOptions } from '../engines/vector/csv';
 import { readGeoJson, writeGeoJson } from '../engines/vector/geojson';
 import { readGml, writeGml } from '../engines/vector/gml';
+import { readFlatGeobuf, writeFlatGeobuf } from '../engines/vector/flatgeobuf';
 import { DEFAULT_GPX_OPTIONS, readGpx, writeGpx, type WriteGpxOptions } from '../engines/vector/gpx';
 import { DEFAULT_KML_OPTIONS, readKml, readKmz, writeKml, writeKmz, type WriteKmlOptions } from '../engines/vector/kml';
 import { readLandXml, writeLandXml } from '../engines/vector/landxml';
@@ -387,6 +388,8 @@ function dispatchReader(
       return readGeoJson(decodeText(input.bytes), info, { sequence: true });
     case 'topojson':
       return readTopoJson(decodeText(input.bytes), info);
+    case 'flatgeobuf':
+      return readFlatGeobuf(input.bytes, info);
     case 'kml':
       return readKml(decodeText(input.bytes), info);
     case 'kmz':
@@ -562,6 +565,12 @@ async function writeTarget(dataset: CirDataset, targetId: string, baseName: stri
     case 'topojson': {
       const { text: body, warnings } = writeTopoJson(dataset, { precision });
       return { files: [text(body)], warnings };
+    }
+    case 'flatgeobuf': {
+      // No precision option: FlatGeobuf stores IEEE doubles, so there is no
+      // text representation to round and nothing a decimal count could change.
+      const { bytes, warnings } = writeFlatGeobuf(dataset);
+      return { files: [binary(bytes)], warnings };
     }
     case 'kml': {
       const { text: body, warnings } = writeKml(dataset, { ...DEFAULT_KML_OPTIONS, ...settings.kml, precision });
