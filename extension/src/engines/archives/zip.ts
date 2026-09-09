@@ -405,7 +405,3 @@ export async function writeZip(files: ZipInput[], now = new Date()): Promise<Uin
   return concat([...locals, centralBlock, eocd]);
 }
 
-/** Case-insensitive lookup, because archive casing is never consistent. */
-export function findEntry(entries: ZipEntry[], predicate: (name: string) => boolean): ZipEntry | undefined {
-  return entries.find((entry) => predicate(entry.name.toLowerCase()));
-}

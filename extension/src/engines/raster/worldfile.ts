@@ -10,6 +10,7 @@
 
 import { warn, type Warning } from '../../core/cir';
 import { ConversionError } from '../../core/errors';
+import { fitGcps } from '../../core/georeference';
 import { formatFixed } from '../../core/precision';
 
 export interface WorldFileTerms {
@@ -194,95 +195,50 @@ export function writeGcpPoints(gcps: Gcp[]): string {
 /**
  * Least-squares affine fit through the enabled control points.
  *
- * Three points define an affine transform exactly; more are fitted. Fewer cannot
- * be solved, and guessing one would georeference the image to nowhere in
- * particular.
+ * DELEGATES to `core/georeference.ts`, which does the same arithmetic — normal
+ * equations, Gaussian elimination with partial pivoting, three unknowns per
+ * axis. Two copies of that lived here and there for a while, and the audit
+ * found this one dead: nothing called it, not even this module.
+ *
+ * A dead duplicate of geodetic maths is the worse half of the problem, not the
+ * better one. Whoever eventually needed it would have got an implementation
+ * nobody had exercised, and a fix applied to one copy would have left the other
+ * quietly wrong. One implementation, exercised by the backdrop georeferencer on
+ * every use, is what makes the answer trustworthy here too.
+ *
+ * The conversion is a reordering: this returns a GDAL geotransform,
+ * `[c, a, b, f, d, e]`, while the fitter returns the coefficients by name.
  */
 export function affineFromGcps(gcps: Gcp[]): { geotransform: Geotransform; residual: number } {
   const usable = gcps.filter((gcp) => gcp.enabled);
-  if (usable.length < 3) {
+  const { fit, refusal } = fitGcps(
+    usable.map((gcp) => ({
+      pixel: { u: gcp.pixelX, v: gcp.pixelY },
+      ground: [gcp.mapX, gcp.mapY],
+      name: gcp.id,
+    }))
+  );
+
+  // An affine needs three; the fitter accepts two and produces a SIMILARITY,
+  // which is a different and weaker transform. A world file records six
+  // coefficients, so accepting a similarity here would write a file claiming
+  // an affine fit that was never made.
+  if (refusal || !fit || fit.kind !== 'affine') {
     throw new ConversionError({
-      code: 'GCP_TOO_FEW',
-      what: `Only ${usable.length} enabled control point(s) are available.`,
-      why: 'An affine transform has six unknowns and needs at least three non-collinear points.',
-      action: 'Add more control points in the QGIS Georeferencer, or supply a world file instead.',
+      code: usable.length < 3 ? 'GCP_TOO_FEW' : 'GCP_COLLINEAR',
+      what:
+        usable.length < 3
+          ? `Only ${usable.length} enabled control point(s) are available.`
+          : 'The control points do not define an affine transform.',
+      why:
+        refusal?.why ??
+        (usable.length < 3
+          ? 'An affine transform has six unknowns and needs at least three non-collinear points.'
+          : 'They are collinear or coincident, so the normal equations are singular.'),
+      action: refusal?.action ?? 'Spread the control points across the image, avoiding a single line.',
     });
   }
 
-  // Solve the normal equations for [a b c] and [d e f] separately; both share
-  // the same design matrix, so it is accumulated once.
-  let sumX = 0;
-  let sumY = 0;
-  let sumXX = 0;
-  let sumXY = 0;
-  let sumYY = 0;
-  let sumU = 0;
-  let sumV = 0;
-  let sumXU = 0;
-  let sumYU = 0;
-  let sumXV = 0;
-  let sumYV = 0;
-  const n = usable.length;
-
-  for (const gcp of usable) {
-    const x = gcp.pixelX;
-    const y = gcp.pixelY;
-    sumX += x;
-    sumY += y;
-    sumXX += x * x;
-    sumXY += x * y;
-    sumYY += y * y;
-    sumU += gcp.mapX;
-    sumV += gcp.mapY;
-    sumXU += x * gcp.mapX;
-    sumYU += y * gcp.mapX;
-    sumXV += x * gcp.mapY;
-    sumYV += y * gcp.mapY;
-  }
-
-  const solve = (rhs: [number, number, number]): [number, number, number] => {
-    const matrix: number[][] = [
-      [sumXX, sumXY, sumX, rhs[0]],
-      [sumXY, sumYY, sumY, rhs[1]],
-      [sumX, sumY, n, rhs[2]],
-    ];
-    // Gaussian elimination with partial pivoting — three unknowns, so the cost
-    // is negligible and the stability is worth it for near-collinear points.
-    for (let column = 0; column < 3; column++) {
-      let pivot = column;
-      for (let row = column + 1; row < 3; row++) if (Math.abs(matrix[row][column]) > Math.abs(matrix[pivot][column])) pivot = row;
-      if (Math.abs(matrix[pivot][column]) < 1e-12) {
-        throw new ConversionError({
-          code: 'GCP_COLLINEAR',
-          what: 'The control points do not define an affine transform.',
-          why: 'They are collinear or coincident, so the normal equations are singular.',
-          action: 'Spread the control points across the image, avoiding a single line.',
-        });
-      }
-      [matrix[column], matrix[pivot]] = [matrix[pivot], matrix[column]];
-      for (let row = column + 1; row < 3; row++) {
-        const factor = matrix[row][column] / matrix[column][column];
-        for (let k = column; k < 4; k++) matrix[row][k] -= factor * matrix[column][k];
-      }
-    }
-    const solution: [number, number, number] = [0, 0, 0];
-    for (let row = 2; row >= 0; row--) {
-      let value = matrix[row][3];
-      for (let column = row + 1; column < 3; column++) value -= matrix[row][column] * solution[column];
-      solution[row] = value / matrix[row][row];
-    }
-    return solution;
-  };
-
-  const [a, b, c] = solve([sumXU, sumYU, sumU]);
-  const [d, e, f] = solve([sumXV, sumYV, sumV]);
-
-  let residual = 0;
-  for (const gcp of usable) {
-    const predictedX = a * gcp.pixelX + b * gcp.pixelY + c;
-    const predictedY = d * gcp.pixelX + e * gcp.pixelY + f;
-    residual += (predictedX - gcp.mapX) ** 2 + (predictedY - gcp.mapY) ** 2;
-  }
-
-  return { geotransform: [c, a, b, f, d, e], residual: Math.sqrt(residual / usable.length) };
+  const { a, b, c, d, e, f } = fit.affine;
+  return { geotransform: [c, a, b, f, d, e], residual: fit.rms };
 }

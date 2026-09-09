@@ -287,3 +287,72 @@ describe('two points and a distance', () => {
     expect(fit!.notes.join(' ')).toContain('keeps its own orientation');
   });
 });
+
+describe('the world-file writer shares this fitter, rather than repeating it', () => {
+  // `worldfile.ts` had its OWN least-squares affine — the same normal
+  // equations, the same Gaussian elimination with partial pivoting — and the
+  // audit found it dead: nothing called it, not even its own module.
+  //
+  // A dead duplicate of geodetic maths is the worse half of the problem. Whoever
+  // eventually needed it would have got an implementation nobody had exercised,
+  // and a fix applied to one copy would have left the other quietly wrong. It
+  // delegates here now, and these tests hold the conversion between the two
+  // shapes — which is the only place the collapse could have gone wrong.
+  it('returns the coefficients in GDAL geotransform order', async () => {
+    const { affineFromGcps } = await import('@engines/raster/worldfile');
+    const { geotransform, residual } = affineFromGcps(
+      scaledGcps(2).map((gcp, index) => ({
+        pixelX: gcp.pixel.u,
+        pixelY: gcp.pixel.v,
+        mapX: gcp.ground[0],
+        mapY: gcp.ground[1],
+        enabled: true,
+        id: `p${index}`,
+      }))
+    );
+
+    // GDAL order is [originX, pixelWidth, rowRotation, originY, columnRotation,
+    // pixelHeight] — that is [c, a, b, f, d, e] of the fitted affine. Getting
+    // this reordering wrong writes a world file that places the image somewhere
+    // else entirely while looking perfectly well-formed.
+    const [originX, pixelWidth, rowRotation, originY, columnRotation, pixelHeight] = geotransform;
+    expect(originX).toBeCloseTo(412000, 6);
+    expect(originY).toBeCloseTo(2591000, 6);
+    expect(pixelWidth).toBeCloseTo(2, 6);
+    expect(pixelHeight).toBeCloseTo(-2, 6);
+    expect(rowRotation).toBeCloseTo(0, 6);
+    expect(columnRotation).toBeCloseTo(0, 6);
+    expect(residual).toBeCloseTo(0, 6);
+  });
+
+  it('still refuses fewer than three points, because a world file is an affine', async () => {
+    // The fitter accepts two and produces a SIMILARITY, which is weaker. A
+    // world file records six coefficients, so accepting one here would write a
+    // file claiming an affine fit that was never made.
+    const { affineFromGcps } = await import('@engines/raster/worldfile');
+    const two = scaledGcps(2)
+      .slice(0, 2)
+      .map((gcp) => ({
+        pixelX: gcp.pixel.u,
+        pixelY: gcp.pixel.v,
+        mapX: gcp.ground[0],
+        mapY: gcp.ground[1],
+        enabled: true,
+      }));
+    expect(() => affineFromGcps(two)).toThrow(/control point/i);
+  });
+
+  it('ignores control points the user disabled', async () => {
+    const { affineFromGcps } = await import('@engines/raster/worldfile');
+    const gcps = scaledGcps(2).map((gcp) => ({
+      pixelX: gcp.pixel.u,
+      pixelY: gcp.pixel.v,
+      mapX: gcp.ground[0],
+      mapY: gcp.ground[1],
+      enabled: true,
+    }));
+    // A deliberately wrong point, switched off: the fit must be unaffected.
+    gcps.push({ pixelX: 500, pixelY: 400, mapX: 0, mapY: 0, enabled: false });
+    expect(affineFromGcps(gcps).residual).toBeCloseTo(0, 6);
+  });
+});
