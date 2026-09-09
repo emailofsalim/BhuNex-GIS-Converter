@@ -59,11 +59,19 @@ const GROUPS: { label: string; operations: GeometryOperation[] }[] = [
   { label: 'Against another layer', operations: ['clip', 'erase'] },
   { label: 'Derive', operations: ['convex-hull', 'centroid', 'envelope'] },
   { label: 'Restructure', operations: ['explode', 'multipart', 'line-merge', 'split-by-line'] },
+  // Placed last and grouped together because they are the only operations that
+  // MOVE geometry rather than reshape it — the georeferencing correction.
+  { label: 'Move and resize', operations: ['translate', 'scale', 'rotate'] },
 ];
 
 const NEEDS_DISTANCE = new Set<GeometryOperation>(['buffer', 'offset']);
 const NEEDS_MASK = new Set<GeometryOperation>(['clip', 'erase']);
 const NEEDS_CUT = new Set<GeometryOperation>(['split-by-line']);
+/** Transforms take their own parameters rather than a distance. */
+const NEEDS_OFFSET = new Set<GeometryOperation>(['translate']);
+const NEEDS_FACTOR = new Set<GeometryOperation>(['scale']);
+const NEEDS_ANGLE = new Set<GeometryOperation>(['rotate']);
+const NEEDS_ANCHOR = new Set<GeometryOperation>(['scale', 'rotate']);
 
 /**
  * What each operation is for, in the terms the person choosing it is thinking in.
@@ -91,6 +99,12 @@ const HINT: Record<GeometryOperation, string> = {
   multipart: 'Combines the selected features into one multipart feature. Only the first feature’s attributes survive.',
   'line-merge': 'Joins lines that meet end to end into continuous runs.',
   'split-by-line': 'Cuts polygons along a line you supply, as a subdivision does.',
+  translate:
+    'Moves the selection without changing its shape — the correction for a survey that sits beside the basemap rather than on it. The offset applied is recorded, because a shift against a basemap can equally mean the CRS is wrong or the basemap is imprecise, and only you can tell which.',
+  scale:
+    'Resizes about a fixed point. Two factors give a non-uniform scale, for a sheet a scanner stretched along one axis. A negative factor mirrors as well as scaling.',
+  rotate:
+    'Turns about a fixed point. Positive is clockwise, matching a survey bearing rather than the mathematical convention.',
 };
 
 interface PanelState {
@@ -103,6 +117,13 @@ interface PanelState {
   cut: string;
   toNewLayer: boolean;
   outputLayer: string;
+  /** Transform inputs, typed rather than dragged. */
+  offsetX: string;
+  offsetY: string;
+  factorX: string;
+  factorY: string;
+  angle: string;
+  anchor: string;
 }
 
 /**
@@ -123,6 +144,12 @@ const panel: PanelState = {
   cut: '',
   toNewLayer: true,
   outputLayer: '',
+  offsetX: '',
+  offsetY: '',
+  factorX: '',
+  factorY: '',
+  angle: '',
+  anchor: '',
 };
 
 function reset(item: QueueItem, layers: string[]): void {
@@ -135,6 +162,12 @@ function reset(item: QueueItem, layers: string[]): void {
   panel.cut = '';
   panel.toNewLayer = true;
   panel.outputLayer = '';
+  panel.offsetX = '';
+  panel.offsetY = '';
+  panel.factorX = '';
+  panel.factorY = '';
+  panel.angle = '';
+  panel.anchor = '';
 }
 
 /** The default name for a derived layer: readable, and unlikely to collide. */
@@ -181,6 +214,51 @@ function optionsFrom(): { options: StoredGeometryOptions; problem?: string } {
     const cut = parseCut(panel.cut);
     if (cut.problem) return { options, problem: cut.problem };
     options.cut = cut.positions;
+  }
+  if (NEEDS_OFFSET.has(panel.operation)) {
+    const dx = Number(panel.offsetX);
+    const dy = Number(panel.offsetY);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (panel.offsetX.trim() === '' && panel.offsetY.trim() === '')) {
+      return { options, problem: 'Enter how far to move, in the dataset’s own units. One axis may be left at zero.' };
+    }
+    options.offset = [panel.offsetX.trim() === '' ? 0 : dx, panel.offsetY.trim() === '' ? 0 : dy];
+  }
+  if (NEEDS_FACTOR.has(panel.operation)) {
+    const fx = Number(panel.factorX);
+    if (panel.factorX.trim() === '' || !Number.isFinite(fx)) {
+      return { options, problem: 'Enter a scale factor. 2 doubles the size, 0.5 halves it.' };
+    }
+    // A blank second factor means uniform, which is the common case and must
+    // not be mistaken for "scale the other axis by zero".
+    if (panel.factorY.trim() === '') options.factor = fx;
+    else {
+      const fy = Number(panel.factorY);
+      if (!Number.isFinite(fy)) return { options, problem: 'The second scale factor is not a number.' };
+      options.factor = [fx, fy];
+    }
+  }
+  if (NEEDS_ANGLE.has(panel.operation)) {
+    const angle = Number(panel.angle);
+    if (panel.angle.trim() === '' || !Number.isFinite(angle)) {
+      return { options, problem: 'Enter an angle in degrees. Positive is clockwise, as a survey bearing is.' };
+    }
+    options.angleDegrees = angle;
+  }
+  if (NEEDS_ANCHOR.has(panel.operation) && panel.anchor.trim() !== '') {
+    const anchor = parseCut(panel.anchor);
+    if (anchor.problem || anchor.positions.length !== 1) {
+      // parseCut wants two points; one is what an anchor is, so the specific
+      // message matters more than reusing its generic one.
+      const parts = panel.anchor.split(',');
+      const x = Number(parts[0]);
+      const y = Number(parts[1]);
+      if (parts.length !== 2 || !Number.isFinite(x) || !Number.isFinite(y)) {
+        return { options, problem: 'The anchor must be one x,y pair — or leave it blank to use the centre of the selection.' };
+      }
+      options.anchor = [x, y];
+    } else {
+      options.anchor = anchor.positions[0];
+    }
   }
   if (panel.toNewLayer) options.outputLayer = panel.outputLayer.trim() || defaultOutputName();
 
@@ -271,6 +349,92 @@ export function geometryOpsTab(item: QueueItem): HTMLElement[] {
         crs
           ? `In the units of ${crsLabel(crs)}.`
           : 'This dataset declares no CRS, so the operation will be refused until one is set in the CRS tab.'
+      )
+    );
+  }
+
+  if (NEEDS_OFFSET.has(panel.operation)) {
+    const crs = item.dataset?.crs ?? null;
+    const geographic = crs?.kind === 'geographic';
+    const pair = element('div', { class: 'row' });
+    pair.append(
+      labelled('East (+) / west (−)', input('text', panel.offsetX, (value) => {
+        panel.offsetX = value;
+        host.renderInspector();
+      }))
+    );
+    pair.append(
+      labelled('North (+) / south (−)', input('text', panel.offsetY, (value) => {
+        panel.offsetY = value;
+        host.renderInspector();
+      }))
+    );
+    form.append(pair);
+    form.append(
+      element('p', {
+        class: 'small faint',
+        text: geographic
+          ? `In degrees, because ${crsLabel(crs)} is a geographic system. 0.0001° is roughly 11 m.`
+          : crs
+            ? `In the units of ${crsLabel(crs)}.`
+            : 'This dataset declares no CRS, so these numbers have no stated unit. Set one in the CRS tab.',
+      })
+    );
+    form.append(
+      messageBlock(
+        'info',
+        'A shift against a basemap has three possible causes and only one is fixed by moving.',
+        'A wrong or missing datum shift (fix the CRS instead), a local grid with no relationship to WGS 84 (moving is right), or a basemap that is simply imprecise (the survey is right and moving it makes it wrong).',
+        'The offset you apply is recorded in the conversion report, so whichever it was can be seen later.'
+      )
+    );
+  }
+
+  if (NEEDS_FACTOR.has(panel.operation)) {
+    const pair = element('div', { class: 'row' });
+    pair.append(
+      labelled('Factor', input('text', panel.factorX, (value) => {
+        panel.factorX = value;
+        host.renderInspector();
+      }))
+    );
+    pair.append(
+      labelled('Second factor (optional)', input('text', panel.factorY, (value) => {
+        panel.factorY = value;
+        host.renderInspector();
+      }))
+    );
+    form.append(pair);
+    form.append(
+      element('p', {
+        class: 'small faint',
+        text: '2 doubles the size, 0.5 halves it. Leave the second blank for a uniform scale; fill it in for a sheet a scanner stretched along one axis. A negative factor mirrors as well as scaling.',
+      })
+    );
+  }
+
+  if (NEEDS_ANGLE.has(panel.operation)) {
+    form.append(
+      labelled(
+        'Angle (degrees)',
+        input('text', panel.angle, (value) => {
+          panel.angle = value;
+          host.renderInspector();
+        }),
+        'Positive turns clockwise, matching a survey bearing rather than the mathematical convention.'
+      )
+    );
+  }
+
+  if (NEEDS_ANCHOR.has(panel.operation)) {
+    form.append(
+      labelled(
+        'Anchor point (optional)',
+        input('text', panel.anchor, (value) => {
+          panel.anchor = value;
+          host.renderInspector();
+        }),
+        'One x,y pair that stays exactly still. Leave blank to use the centre of the selection — whichever is used is recorded, because the same transform about a different point gives a different result.'
       )
     );
   }

@@ -38,7 +38,7 @@
 import type { CirDataset, CirFeature, CirGeometry, CirLayer, CrsRef, Position } from './cir';
 import { collectGeometryTypes } from './cir';
 import { bufferGeometry, offsetLine, type BufferOptions } from './buffer';
-import { geometryBounds, isFiniteBounds, signedArea } from './geometry';
+import { eachPosition, geometryBounds, isFiniteBounds, mapPositions, signedArea } from './geometry';
 import { booleanOperation, unionAll, type BooleanOp, type MultiPoly } from './polygon-boolean';
 
 // ===========================================================================
@@ -499,7 +499,12 @@ export type GeometryOperation =
   | 'split-by-line'
   | 'line-merge'
   | 'explode'
-  | 'multipart';
+  | 'multipart'
+  // Rigid transforms. These move geometry without changing its shape, which is
+  // what a georeferencing correction is.
+  | 'translate'
+  | 'scale'
+  | 'rotate';
 
 export const GEOMETRY_LABEL: Record<GeometryOperation, string> = {
   buffer: 'Buffer',
@@ -518,6 +523,9 @@ export const GEOMETRY_LABEL: Record<GeometryOperation, string> = {
   'line-merge': 'Merge lines',
   explode: 'Explode multipart',
   multipart: 'Combine into multipart',
+  translate: 'Move',
+  scale: 'Scale',
+  rotate: 'Rotate',
 };
 
 /** Operations whose parameter is a length in dataset units. */
@@ -551,6 +559,39 @@ export interface GeometryOptions {
   cut?: Position[];
   /** Write the result to a new layer rather than replacing the source. */
   outputLayer?: string;
+
+  /**
+   * How far to move, in DATASET UNITS, for `translate`.
+   *
+   * Dataset units and not metres, deliberately: a drag on the canvas is
+   * measured in the coordinates the canvas is drawing, and converting to metres
+   * and back would introduce a rounding the user never asked for. What the
+   * units MEAN is stated in the plan's notes instead, which is where it
+   * matters — 0.0001 is a hundred metres in UTM and eleven metres in degrees.
+   */
+  offset?: [number, number];
+
+  /**
+   * Scale factors for `scale`. A single number scales both axes equally.
+   *
+   * Non-uniform scaling is offered because a scanned sheet stretched by its
+   * scanner is stretched along one axis, and forcing a uniform factor would
+   * make that uncorrectable.
+   */
+  factor?: number | [number, number];
+
+  /** Clockwise rotation in degrees, for `rotate`. */
+  angleDegrees?: number;
+
+  /**
+   * The fixed point of a scale or a rotation.
+   *
+   * Absent means the centre of the affected features' bounding box, which is
+   * computed and then RECORDED in the notes rather than left implicit: the
+   * same rotation about two different anchors produces two different results,
+   * and a report that does not say which was used cannot be checked.
+   */
+  anchor?: Position;
 }
 
 function refuse(
@@ -662,6 +703,10 @@ export function planGeometryOperation(
       return planMultipart(layerName, features, options, notes);
     case 'line-merge':
       return planLineMerge(layerName, features, options, notes);
+    case 'translate':
+    case 'scale':
+    case 'rotate':
+      return planTransform(layerName, features, operation, options, notes);
     case 'union':
     case 'intersection':
     case 'difference':
@@ -1138,4 +1183,228 @@ export function planArea(plan: GeometryPlan): number {
     }
   }
   return total;
+}
+
+// ------------------------------------------------------------------ transforms
+
+/**
+ * Moves, scales or rotates features without changing their shape.
+ *
+ * WHY THESE ARE OPERATIONS AND NOT CANVAS MUTATIONS. Dragging a selection over
+ * a basemap to correct a georeferencing shift is the motivating case, and the
+ * workspace only holds a 5,000-feature preview of each layer. A drag that
+ * edited the preview would export an eighth of a 40,000-parcel correction and
+ * look completely right on screen while doing it. Recording the INTENT —
+ * "translate by (dx, dy)" — and replaying it against the full dataset at
+ * conversion time is the same reasoning that makes a buffer store its distance
+ * rather than its result.
+ *
+ * WHAT A TRANSFORM DOES NOT DO IS DECIDE WHETHER IT SHOULD HAVE HAPPENED. A
+ * survey that looks shifted against OpenStreetMap has three possible causes: a
+ * wrong or missing datum shift, a local grid with no relationship to WGS 84, or
+ * a basemap that is simply imprecise. Only the middle one is fixed by dragging;
+ * in the first the CRS is wrong and in the third the survey is right. This tool
+ * cannot tell them apart, so it applies what it was asked for and RECORDS the
+ * exact offset, and the conversion report carries it.
+ */
+function planTransform(
+  layerName: string,
+  features: CirFeature[],
+  operation: GeometryOperation,
+  options: Partial<GeometryOptions>,
+  notes: string[]
+): GeometryPlan {
+  // No empty-scope guard here: `planGeometryOperation` already refuses an empty
+  // selection for every operation, before the switch reaches this function. A
+  // second check would be unreachable, and unreachable code that looks like a
+  // safety net is worse than none — it invites the next reader to trust it.
+  const transform = transformFor(operation, features, options, notes);
+  if ('refusal' in transform) {
+    return refuse(operation, layerName, transform.refusal.what, transform.refusal.why, transform.refusal.action);
+  }
+
+  describeUnits(operation, options, notes);
+
+  const moved = features.map((feature) => ({
+    ...feature,
+    geometry: feature.geometry ? mapPositions(feature.geometry, transform.apply) : null,
+  }));
+
+  return {
+    operation,
+    layer: layerName,
+    outputLayer: options.outputLayer,
+    features: moved,
+    consumed: features.length,
+    notes,
+  };
+}
+
+type PlannedTransform = { apply: (position: Position) => Position } | { refusal: { what: string; why: string; action: string } };
+
+function transformFor(
+  operation: GeometryOperation,
+  features: CirFeature[],
+  options: Partial<GeometryOptions>,
+  notes: string[]
+): PlannedTransform {
+  if (operation === 'translate') {
+    const offset = options.offset;
+    if (!offset || !Number.isFinite(offset[0]) || !Number.isFinite(offset[1])) {
+      return {
+        refusal: {
+          what: 'No offset was given, so nothing was moved.',
+          why: 'A move needs a distance in each axis, in the dataset’s own units.',
+          action: 'Drag the selection on the canvas, or type an easting and northing shift.',
+        },
+      };
+    }
+    if (offset[0] === 0 && offset[1] === 0) {
+      return {
+        refusal: {
+          what: 'The offset is zero, so nothing would move.',
+          why: 'A transform that changes nothing is recorded in the history as though it did, which makes the record harder to read rather than easier.',
+          action: 'Drag further, or cancel.',
+        },
+      };
+    }
+    // Z is left alone. A horizontal correction says nothing about elevation,
+    // and silently moving heights would corrupt a levelling run.
+    return { apply: (position) => withZ(position, position[0] + offset[0], position[1] + offset[1]) };
+  }
+
+  const anchor = options.anchor ?? centreOf(features);
+  if (!anchor || !Number.isFinite(anchor[0]) || !Number.isFinite(anchor[1])) {
+    return {
+      refusal: {
+        what: 'The features have no finite extent, so there is no point to transform about.',
+        why: 'Every selected feature is empty or carries non-finite coordinates.',
+        action: 'Check the selection.',
+      },
+    };
+  }
+  notes.push(
+    options.anchor
+      ? `About the anchor given: ${anchor[0].toFixed(3)}, ${anchor[1].toFixed(3)}.`
+      : `About the centre of the selection: ${anchor[0].toFixed(3)}, ${anchor[1].toFixed(3)}. The same transform about a different point gives a different result, so the point used is recorded here.`
+  );
+
+  if (operation === 'scale') {
+    const raw = options.factor;
+    const [fx, fy] = typeof raw === 'number' ? [raw, raw] : Array.isArray(raw) ? raw : [Number.NaN, Number.NaN];
+    if (!Number.isFinite(fx) || !Number.isFinite(fy)) {
+      return {
+        refusal: {
+          what: 'No scale factor was given.',
+          why: 'A scale needs a factor — 2 doubles the size, 0.5 halves it.',
+          action: 'Enter a factor, or two for a non-uniform scale.',
+        },
+      };
+    }
+    if (fx === 0 || fy === 0) {
+      return {
+        refusal: {
+          what: 'A scale factor of zero would collapse every feature to a point.',
+          why: 'The result would have no area and no length, and the original coordinates would be unrecoverable.',
+          action: 'Use a non-zero factor. To remove features, delete them instead.',
+        },
+      };
+    }
+    if (fx < 0 || fy < 0) {
+      // A negative factor is a mirror. That is a real operation and a
+      // catastrophic accident, so it is named rather than silently performed.
+      notes.push(
+        `A negative factor mirrors the geometry as well as scaling it${fx < 0 && fy < 0 ? '' : fx < 0 ? ', about the vertical axis' : ', about the horizontal axis'}. Ring winding is reversed by this and is not corrected.`
+      );
+    }
+    if (fx !== fy) notes.push(`Non-uniform scale: ${fx} across, ${fy} up. Angles are not preserved and a circle becomes an ellipse.`);
+    return {
+      apply: (position) =>
+        withZ(position, anchor[0] + (position[0] - anchor[0]) * fx, anchor[1] + (position[1] - anchor[1]) * fy),
+    };
+  }
+
+  const degrees = options.angleDegrees;
+  if (typeof degrees !== 'number' || !Number.isFinite(degrees)) {
+    return {
+      refusal: {
+        what: 'No rotation angle was given.',
+        why: 'A rotation needs an angle in degrees.',
+        action: 'Enter an angle. Positive is clockwise, matching a survey bearing.',
+      },
+    };
+  }
+  if (degrees % 360 === 0) {
+    return {
+      refusal: {
+        what: `A rotation of ${degrees}° leaves every coordinate where it is.`,
+        why: 'The transform would be recorded in the history without changing anything.',
+        action: 'Enter a different angle, or cancel.',
+      },
+    };
+  }
+  // Clockwise, because that is how a survey bearing is measured — the opposite
+  // of the mathematical convention, and worth being explicit about.
+  const radians = (-degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return {
+    apply: (position) => {
+      const dx = position[0] - anchor[0];
+      const dy = position[1] - anchor[1];
+      return withZ(position, anchor[0] + dx * cos - dy * sin, anchor[1] + dx * sin + dy * cos);
+    },
+  };
+}
+
+/** Replaces x and y, keeping Z and M exactly as they were. */
+function withZ(position: Position, x: number, y: number): Position {
+  const out: Position = [x, y];
+  if (position.length > 2) out.push(position[2]);
+  if (position.length > 3) out.push(position[3]);
+  return out;
+}
+
+/** The centre of the bounding box of everything in scope. */
+function centreOf(features: CirFeature[]): Position | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const feature of features) {
+    if (!feature.geometry) continue;
+    eachPosition(feature.geometry, (position) => {
+      if (position[0] < minX) minX = position[0];
+      if (position[1] < minY) minY = position[1];
+      if (position[0] > maxX) maxX = position[0];
+      if (position[1] > maxY) maxY = position[1];
+    });
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+  return [(minX + maxX) / 2, (minY + maxY) / 2];
+}
+
+/**
+ * Says what the numbers mean, which for a translate is the whole story.
+ *
+ * An offset of 0.0001 is 11 metres in degrees and a tenth of a millimetre in
+ * UTM. A note that repeats the number back without its units tells the user
+ * nothing they did not already type.
+ */
+function describeUnits(operation: GeometryOperation, options: Partial<GeometryOptions>, notes: string[]): void {
+  if (operation !== 'translate' || !options.offset) return;
+  const [dx, dy] = options.offset;
+  const crs = options.crs;
+
+  if (crs?.kind === 'geographic') {
+    // A rough ground distance, and said to be rough. A degree of longitude
+    // shortens with latitude, and this does not know the latitude.
+    const metresPerDegree = 111320;
+    notes.push(
+      `Moved ${dx} ° east and ${dy} ° north — roughly ${(dx * metresPerDegree).toFixed(1)} m and ${(dy * metresPerDegree).toFixed(1)} m on the ground, though a degree of longitude shortens away from the equator.`
+    );
+    return;
+  }
+  const unit = crs?.unit ?? 'dataset units';
+  notes.push(`Moved ${dx} ${unit} east and ${dy} ${unit} north.`);
 }

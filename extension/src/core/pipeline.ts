@@ -508,7 +508,6 @@ function dispatchReader(
       return readDwg(input.bytes, info, settings.arcTolerance);
     case 'dgn':
     case 'geopackage':
-    case 'flatgeobuf':
     case 'geoparquet':
     case 'filegdb':
     case 'e57': {
