@@ -601,3 +601,14 @@ describe('the Help dialog does not describe an older tool', () => {
     expect(help.toLowerCase()).toContain('backdrop');
   });
 });
+
+describe('a preset pressed with no key stays visibly unfinished', () => {
+  const SETTINGS = read('extension', 'src', 'workspace', 'panels', 'settings.ts');
+
+  it('leaves {key} in rather than substituting it away to nothing', () => {
+    // `applyPreset(preset, '')` yields `?api_key=` — a URL that looks finished
+    // and cannot load. The placeholder is the honest state, and the note beside
+    // the field already explains it.
+    expect(SETTINGS).toMatch(/pendingKey\.trim\(\)\s*\?\s*applyPreset\(preset, pendingKey\)\s*:\s*preset\.template/);
+  });
+});

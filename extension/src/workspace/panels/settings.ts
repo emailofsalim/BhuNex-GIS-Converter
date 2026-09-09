@@ -909,7 +909,11 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
       const button = element('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: preset.name });
       button.addEventListener('click', () => {
         void store.patchSettings({
-          basemapCustomUrl: applyPreset(preset, pendingKey),
+          // With no key typed, the `{key}` placeholder is LEFT IN rather than
+          // substituted away to nothing. `?api_key=` with an empty value is a
+          // URL that looks finished and cannot load; `{key}` is a URL that
+          // visibly is not finished, and the note below already says so.
+          basemapCustomUrl: pendingKey.trim() ? applyPreset(preset, pendingKey) : preset.template,
           // Remembered so the canvas can credit this service and stop at the
           // zoom it actually serves.
           basemapPresetId: preset.id,
