@@ -177,6 +177,14 @@ export interface AppSettings {
    * worse than a refusal.
    */
   datumShift: DatumShift | null;
+
+  /**
+   * Look for whole missing parcels inside a coverage, during the health scan.
+   *
+   * Off by default because it unions every polygon in the layer — seconds on a
+   * full cadastral sheet rather than the milliseconds every other check costs.
+   */
+  checkCoverageGaps: boolean;
   decimationMode: 'none' | 'nth' | 'grid' | 'voxel';
   decimationFactor: number;
   decimationCell: number;
@@ -285,6 +293,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   basemapCustomUrl: '',
   basemapOpacity: 0.7,
   datumShift: null,
+  checkCoverageGaps: false,
   decimationMode: 'none',
   decimationFactor: 10,
   decimationCell: 1,

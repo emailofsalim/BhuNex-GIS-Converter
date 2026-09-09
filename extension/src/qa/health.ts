@@ -423,6 +423,10 @@ const RELATIONAL_DEFECTS = new Set([
   'nested-polygon',
   'crossing-lines',
   'dangling-endpoint',
+  // A coverage gap is the most relational defect there is — it belongs to no
+  // feature at all, only to the set of them — so it scores with topology
+  // rather than with the shape of any one polygon.
+  'coverage-gap',
 ]);
 
 const SHAPE_DEFECTS = new Set(['sliver-polygon', 'spike', 'bow-tie', 'hole-outside-shell', 'z-anomaly', 'coordinate-outlier']);

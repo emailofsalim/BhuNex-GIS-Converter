@@ -48,6 +48,20 @@ export function renderSettingsPanel(): void {
       'Scores CRS, geometry, topology, duplicates, attributes, conversion risk and warnings, each expandable into the items behind it.'
     )
   );
+  // Sits directly under "Assess project health" because it is a part of that
+  // scan rather than a separate feature, and it only means anything when the
+  // scan runs at all.
+  if (state.settings.assessHealth) {
+    common.append(
+      checkbox(
+        'Look for missing parcels inside the coverage',
+        state.settings.checkCoverageGaps,
+        (value) => void store.patchSettings({ checkCoverageGaps: value }),
+        'Unions every polygon in a layer and reports each enclosed area nothing covers — the un-digitised plot that no pairwise check can see, because it is consistent with all four of its neighbours. Slower than the other checks: seconds on a full sheet rather than milliseconds.'
+      )
+    );
+  }
+
   common.append(
     checkbox(
       'Attach a conversion report',

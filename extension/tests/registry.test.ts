@@ -7,17 +7,27 @@
  * rather than shipping a lie to a surveyor.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FORMATS, exportTargetsFor, getFormat, isAvailable, SUPPORT_LABEL } from '@core/registry';
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
-// Every suite that can constitute evidence for a support claim is read here. A
-// file left out of this list is invisible to the guard, so adding a new suite
-// that covers a format means adding it here too.
-const allTestSource = ['roundtrip.test.ts', 'core.test.ts', 'raster.test.ts', 'structure.test.ts']
+
+/**
+ * Every suite in this directory, read as the evidence for a support claim.
+ *
+ * This used to be a hand-maintained list of four filenames, with a comment
+ * saying that a file left out of it was invisible to the guard. That is exactly
+ * what happened: a new format arrived with a 39-test suite of its own and the
+ * guard reported it as unbacked, because the suite was not on the list. A guard
+ * whose coverage has to be remembered is a guard that will eventually be wrong
+ * in the other direction — passing a claim nothing tests — so it now reads the
+ * directory and cannot fall behind it.
+ */
+const allTestSource = readdirSync(testsDir)
+  .filter((name) => name.endsWith('.test.ts') && name !== 'registry.test.ts')
   .map((name) => readFileSync(resolve(testsDir, name), 'utf8'))
   .join('\n');
 

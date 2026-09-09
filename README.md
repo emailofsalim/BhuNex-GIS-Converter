@@ -328,8 +328,13 @@ specification is
    read — overviews and multi-IFD pyramids are not.
 2. **LAZ has no bundled decoder.** The header is reported and the points are
    refused, never read as uncompressed LAS.
-3. **DGN, E57, GeoPackage, FlatGeobuf, GeoParquet, File Geodatabase and vendor
-   mining formats** are adapter contracts only.
+3. **DGN, E57, GeoPackage, GeoParquet, File Geodatabase and vendor mining
+   formats** are adapter contracts only. Each genuinely needs something this
+   build does not have: LAZ an arithmetic decoder, GeoPackage and File
+   Geodatabase an SQLite engine, GeoParquet Thrift and the Parquet page
+   formats, DWG, DGN and E57 libraries with no pure-TypeScript equivalent.
+   FlatGeobuf used to be on this list by mistake — it is FlatBuffers over a
+   DataView and never needed WebAssembly at all.
 4. **No datum shift parameters are bundled.** The seven-parameter Helmert
    transformation itself is implemented and tested, and the CRS panel accepts a
    parameter set — but nothing ships with values for Kalianpur 1975, Everest
@@ -341,10 +346,11 @@ specification is
    records both.
 5. **Geoid conversions** are refused rather than approximated. Ellipsoidal and
    orthometric heights differ by tens of metres and no geoid model is bundled.
-6. **Gap detection finds gaps along adjacent boundaries**, not a whole missing
-   parcel inside a coverage. The boolean union that would find one now exists in
-   `core/polygon-boolean.ts`; wiring it into the coverage check is outstanding,
-   and the violation text says what is and is not being checked.
+6. **Coverage-gap detection is opt-in and does not judge.** It unions every
+   polygon in a layer and reports each enclosed area nothing covers — the
+   un-digitised plot no pairwise check can see. It cannot tell a missing parcel
+   from a courtyard, a tank or a village pond, which are the same shape, so it
+   reports the area and the place and leaves the call to you.
 7. **The basemap needs a CRS it can place.** A file with no declared coordinate
    system, a local site grid, or a datum with no supplied shift shows no tiles
    at all rather than tiles in the wrong place.

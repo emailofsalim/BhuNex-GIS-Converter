@@ -878,19 +878,33 @@ export const FORMATS: FormatDef[] = [
     magic: [{ offset: 0, bytes: [0x66, 0x67, 0x62, 0x03] }],
     category: 'gis',
     dataKind: 'vector',
-    support: { import: 'adapter', export: 'adapter' },
-    // FlatGeobuf is FlatBuffers-encoded; decoding it needs a generated schema
-    // reader that is not part of this build.
-    requiresWasm: T,
+    support: { import: 'full', export: 'full' },
+    // This entry used to read `requiresWasm: true`, with the note "decoding it
+    // needs a generated schema reader that is not part of this build". The
+    // second half was true and the first was not: FlatBuffers is a plain
+    // little-endian layout over a DataView, so unlike LAZ and GeoPackage this
+    // never needed WebAssembly — only the codec in engines/vector/flatbuffers.ts.
+    // The wrong flag is what kept it off the export list.
     supports2D: T,
     supports3D: T,
     supportsZ: T,
-    supportsM: T,
+    // The format carries M, and this reader and writer do not: the CIR holds M
+    // only alongside Z, and inventing that pairing would be a fidelity claim
+    // the engine cannot keep. Declared false so the predictor says so up front.
+    supportsM: F,
     supportsAttributes: T,
     supportsCRS: T,
     supportsMultiGeometry: T,
     supportsCurves: F,
-    notes: 'Adapter contract only.',
+    packaging: 'single',
+    limits: { layerModel: 'none' },
+    readerEngine: 'vector/flatgeobuf',
+    writerEngine: 'vector/flatgeobuf',
+    warnings: [
+      'A FlatGeobuf file holds one feature collection, so multiple layers are merged on export.',
+      'has_z is a property of the whole file: if any feature is 3D, every 2D feature is written with Z = 0, and that is reported.',
+    ],
+    notes: 'Written without the optional spatial index, so feature order is preserved rather than sorted into Hilbert order.',
   },
   {
     id: 'geoparquet',

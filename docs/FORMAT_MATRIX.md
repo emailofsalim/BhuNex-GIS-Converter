@@ -23,7 +23,7 @@ here exactly as its engines actually behave.
 A format is never listed above what its engine has earned: a `full` claim without a
 covering test fails the build (`extension/tests/registry.test.ts`).
 
-**22 formats read directly**, 5 partially, 0 metadata-only, 8 through adapters that are not bundled.
+**23 formats read directly**, 5 partially, 0 metadata-only, 7 through adapters that are not bundled.
 
 ## GIS
 
@@ -31,7 +31,7 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 |---|---|---|---|---|
 | ESRI Shapefile | `.shp` | **Supported** | **Supported** | 3D, Z, M, attributes, CRS |
 | File Geodatabase | `.gdb` | Adapter required | Adapter required | 3D, Z, M, attributes, CRS, curves |
-| FlatGeobuf | `.fgb` | Adapter required | Adapter required | 3D, Z, M, attributes, CRS |
+| FlatGeobuf | `.fgb` | **Supported** | **Supported** | 3D, Z, attributes, CRS |
 | GeoJSON | `.geojson` `.json` | **Supported** | **Supported** | 3D, Z, attributes, CRS |
 | GeoJSON Sequence | `.geojsonl` `.jsonl` `.ndjson` | **Supported** | **Supported** | 3D, Z, attributes |
 | GeoPackage | `.gpkg` | Adapter required | Adapter required | 3D, Z, M, attributes, CRS |
@@ -59,7 +59,9 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 
 **FlatGeobuf**
 
-- Adapter contract only.
+- Written without the optional spatial index, so feature order is preserved rather than sorted into Hilbert order.
+- A FlatGeobuf file holds one feature collection, so multiple layers are merged on export.
+- has_z is a property of the whole file: if any feature is 3D, every 2D feature is written with Z = 0, and that is reported.
 
 **GeoJSON**
 
@@ -258,7 +260,6 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 | LAZ compressed point cloud | Needs a WebAssembly engine that is not part of this build. |
 | E57 point cloud | Needs a WebAssembly engine that is not part of this build. |
 | GeoPackage | Needs a WebAssembly engine that is not part of this build. |
-| FlatGeobuf | Needs a WebAssembly engine that is not part of this build. |
 | GeoParquet | Needs a WebAssembly engine that is not part of this build. |
 | File Geodatabase | Needs a native helper or licensed SDK on your machine. |
 
