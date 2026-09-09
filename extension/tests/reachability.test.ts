@@ -122,6 +122,30 @@ describe('every control is bound to an element that exists', () => {
     expect(missing, `bindings to ids that do not exist:\n${missing.join('\n')}`).toEqual([]);
   });
 
+  it('has no control in the markup that nothing drives', () => {
+    // The mirror of the check above, and it found two. `#folderPicker` was an
+    // `<input webkitdirectory>` sitting in the page with nothing opening it,
+    // while the dropzone said "Drop files or folders" — so a folder could only
+    // be added by dragging. That matters here more than in a generic tool: a
+    // shapefile is .shp/.shx/.dbf/.prj and the companion grouper exists for
+    // exactly that, so "choose a folder" is the common case.
+    //
+    // Purely presentational ids are exempted by name, with the reason.
+    const presentational = new Map([
+      ['app', 'the root layout element, styled only'],
+      ['dropFormats', 'filled by renderFormats through a different reference'],
+    ]);
+
+    const orphans: string[] = [];
+    const sources = workspaceSources();
+    for (const id of ids) {
+      if (presentational.has(id)) continue;
+      const referenced = sources.some(({ text }) => text.includes(`'${id}'`));
+      if (!referenced) orphans.push(id);
+    }
+    expect(orphans, `controls in the markup that nothing drives: ${orphans.join(', ')}`).toEqual([]);
+  });
+
   it('accounts for every runtime id it exempts', () => {
     // The exemption list must not outlive what it exempts. Each entry has to
     // be created somewhere, or it is a stale excuse for a real gap.

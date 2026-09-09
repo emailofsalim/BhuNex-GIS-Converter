@@ -88,6 +88,8 @@ function render(): void {
   $('targetBadge').textContent = target ? (getFormat(target)?.name ?? target) : 'none selected';
   $('targetBadge').className = target ? 'badge badge--accent' : 'badge badge--muted';
 
+  updateLocalBadge(state);
+
   const dropzone = $('dropzone');
   dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
   $('inspectorTabs').classList.toggle('hidden', !selected);
@@ -112,6 +114,32 @@ function render(): void {
   updateSelectBar();
   updateMeasureBar(selected ?? undefined);
   $('compareWrap').classList.toggle('hidden', state.inspectorTab !== 'compare' || !selected);
+}
+
+/**
+ * Keeps the "Local only" badge honest.
+ *
+ * The badge is the strongest promise this tool makes, and it was static text:
+ * "Local only — no file leaves this machine. There is no network path in any
+ * conversion." Both sentences are still literally true with the basemap on —
+ * tiles are a view-time layer and touch no conversion path — but a badge
+ * reading "Local only" while the tool is fetching map tiles overclaims, and a
+ * user weighing whether to open a survey under NDA deserves to see the
+ * difference rather than read the title attribute for it.
+ *
+ * So it says which it is. What never changes is the part that matters: no file
+ * bytes, no attribute values and no file names are ever sent anywhere. Tiles
+ * carry COORDINATES, which discloses the area being looked at and nothing else.
+ */
+function updateLocalBadge(state: { settings: AppSettings }): void {
+  const badge = $('localBadge');
+  const tiles = state.settings.basemapEnabled && navigator.onLine !== false;
+
+  badge.textContent = tiles ? 'Local + map tiles' : 'Local only';
+  badge.className = tiles ? 'badge badge--warn' : 'badge badge--ok';
+  badge.title = tiles
+    ? 'Conversions are local — no file, attribute or file name is ever sent anywhere. The map basemap is the one exception and it is on: it requests TILE COORDINATES from the provider you chose, which discloses the area you are looking at. Turn it off in Settings to make no network request at all.'
+    : 'No file leaves this machine. There is no network path in any conversion, and no request of any kind is being made.';
 }
 
 /** Keeps the canvas toolbar's active tool in step with the tool layer. */
@@ -394,6 +422,23 @@ function wire(): void {
   filePicker.addEventListener('change', async () => {
     const files = await Promise.all(Array.from(filePicker.files ?? []).map((file) => toIngestFile(file)));
     filePicker.value = '';
+    await addFiles(files);
+  });
+
+  // Picking a folder. `toIngestFile` already reads `webkitRelativePath`, so the
+  // tree arrives with its paths intact and the companion grouper pairs each
+  // .shp with the .dbf beside it rather than with one from a sibling folder.
+  const folderPicker = $('folderPicker') as HTMLInputElement;
+  const browseFolder = () => folderPicker.click();
+  $('dropFolderBtn').addEventListener('click', (event) => {
+    // The dropzone itself is a click target, so a button inside it has to stop
+    // the event or choosing a folder opens the file picker straight after.
+    event.stopPropagation();
+    browseFolder();
+  });
+  folderPicker.addEventListener('change', async () => {
+    const files = await Promise.all(Array.from(folderPicker.files ?? []).map((file) => toIngestFile(file)));
+    folderPicker.value = '';
     await addFiles(files);
   });
 

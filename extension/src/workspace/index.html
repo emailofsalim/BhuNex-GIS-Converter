@@ -55,6 +55,12 @@
             <div class="dropzone__title">Drop files or folders here</div>
             <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
             <button class="btn btn--primary" id="dropBrowseBtn" type="button">Choose files</button>
+            <!-- A shapefile is .shp/.shx/.dbf/.prj and a delivery is usually a
+                 tree of them, so picking a FOLDER is the common case rather
+                 than the advanced one. `folderPicker` sat in this markup with
+                 nothing opening it: the zone offered folders and the only way
+                 to use one was to drag it. -->
+            <button class="btn btn--ghost" id="dropFolderBtn" type="button">Choose folder</button>
             <div class="dropzone__formats" id="dropFormats"></div>
           </div>
 

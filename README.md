@@ -253,6 +253,72 @@ minimal.
 
 ---
 
+## Editing before you export
+
+The canvas is not a preview you look at — it is where the survey gets fixed.
+
+**Correct a shift against the basemap.** Turn the tiles on, see that your
+parcels sit six metres east of where the road is, select them — click,
+Shift-click, a rubber band, or a lasso — and drag them onto place. The tool
+records the *offset*, not the moved coordinates, and re-applies it to every
+feature when you convert. That distinction is the whole design: the canvas
+holds at most 5,000 features per layer, so a drag that recorded coordinates
+would move an eighth of a 40,000-parcel sheet and leave the rest behind.
+
+A rubber band dragged left to right takes only what is wholly inside; right to
+left takes anything it touches — the CAD convention, drawn solid and dashed so
+you can see which you are getting before you release. Shift while dragging
+constrains to one axis.
+
+The tool also says, every time, what a shift against a basemap can mean: a
+wrong or missing datum shift (fix the CRS instead), an old local grid with no
+relationship to WGS 84 (dragging is right), or a basemap that is simply
+imprecise (your survey is right and moving it makes it wrong). It cannot tell
+these apart, so it records exactly what it moved and by how much.
+
+**Draw and digitise.** Point, marker, line, polygon and text, with snapping to
+vertices, endpoints, midpoints, segments or a grid, and ortho on Shift or F8.
+Snapping beats ortho when both apply — constraining a snapped vertex to an axis
+would move it off the thing it was snapped to.
+
+Digitising a survey CSV has its own mode: snap only to the imported points, and
+every vertex you place is the **observed coordinate, bit for bit**. Snapping
+that rounds is worse than no snapping, because it looks deliberate and nobody
+re-checks a boundary that looks right. Snapped vertices are drawn in a different
+colour, so after twenty clicks you can still see which ones took. Close a ring
+with an imported point left inside it and the tool says so — that usually means
+a corner was missed.
+
+**Put an old sheet underneath.** When the tiles are years out of date, import a
+scan and trace from it. Two ways to place it, and the difference matters:
+
+- **Ground control points** give a least-squares affine — scale, rotation,
+  shear and translation. Georeferenced. The per-point residuals are reported,
+  and three points are flagged as *exactly determined*: three points always fit
+  an affine perfectly, so a zero RMS there is arithmetic, not accuracy. A fourth
+  point is what makes the residuals mean something.
+- **Two points and a distance**, for a local grid with no control at all. This
+  fixes scale and rotation and **nothing about position**. The result is drawn
+  with a dashed border and labelled not georeferenced, because a scanned sheet
+  with a title block and a signature is a persuasive object and coordinates read
+  off one placed this way mean nothing.
+
+PDF pages that are scans are supported. A *vector* PDF is refused by name, with
+the better alternative: if it came from CAD or GIS, convert the source instead —
+a vector backdrop traced by hand is worse than the vectors you already have.
+
+**Layer control and a legend that is true.** Colour, line width, line type,
+rename, reorder, lock, hide and opacity, per layer, on the row. The colours
+reach the *output* where the format can carry them, and the optional SVG legend
+is built from the file as written — including any renames — so the legend and
+the file it describes cannot disagree.
+
+**Everything else you would expect.** Click a feature for its area, perimeter
+and vertex count with the method stated; offset a polygon inside, outside or
+both, for a building line, a right of way or a corridor; buffer, clip, erase,
+dissolve, hull, centroid, envelope, split and merge. Every one is drawn over
+your data before it is applied, and every one is undoable.
+
 ## Layout
 
 ```
@@ -351,9 +417,25 @@ specification is
    un-digitised plot no pairwise check can see. It cannot tell a missing parcel
    from a courtyard, a tank or a village pond, which are the same shape, so it
    reports the area and the place and leaves the call to you.
-7. **The basemap needs a CRS it can place.** A file with no declared coordinate
-   system, a local site grid, or a datum with no supplied shift shows no tiles
-   at all rather than tiles in the wrong place.
+7. **The basemap needs a CRS it can place, and a network.** A file with no
+   declared coordinate system, a local site grid, or a datum with no supplied
+   shift shows no tiles at all rather than tiles in the wrong place. Offline the
+   basemap turns itself off and makes *no request at all* — not a request that
+   fails — and switches back on by itself when the connection returns. The panel
+   says which of the two reasons applies, because they need different fixes.
+   Everything else in the tool runs with the network disabled, exactly as it
+   always has.
+8. **Map tiles are the one network feature, and Google is not among them.**
+   Google's and Bing's tile endpoints are not licensed for direct use outside
+   their own APIs, so shipping one here would put everyone who installs this in
+   breach of terms they never saw. OpenStreetMap, Esri World Imagery, OpenTopoMap
+   and the two Carto styles need no account; Stadia, Jawg and Google's *licensed*
+   Tile API endpoint are offered as presets you complete with your own key. For
+   satellite imagery without an account, Esri World Imagery is the answer.
+9. **A scanned PDF page is supported; a vector PDF is not.** Rendering vector
+   PDF needs a content-stream interpreter with font handling — about a megabyte
+   of engine, downloaded at runtime, which the offline rule forbids. Refused by
+   name with two ways forward rather than half-rendered.
 
 ## Licence
 
