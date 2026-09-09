@@ -77,26 +77,36 @@ styles, locks or renames a layer depends on it.
 
 | # | Phase | Delivers | Status |
 |---|---|---|---|
-| A | Transform operations | translate / scale / rotate as replayable `EditCommand`s, with the CRS and lock gates every other operation honours | ⬜ |
-| B | Selection model | select one, select many, lasso, select-by-layer — the thing a transform is applied *to* | ⬜ |
-| C | Canvas tool modes | one active tool, escape to select, shared hit-testing; drag-to-move wired to Phase A | ⬜ |
-| D | Layer control | line width, line type, rename, extending the existing colour/opacity/lock/visibility | ⬜ |
-| E | Feature info on click | area, perimeter, vertex count, through `core/measure.ts` so the method is stated | ⬜ |
-| F | Drawing tools | polygon, line, point, marker, text, with snap and ortho | ⬜ |
-| G | Backdrop layer | image and PDF under the canvas, georeferenced | ⬜ |
-| H | Legend on export | generated from layer names and colours | ⬜ |
-| I | Offset variants | inside, outside, both, per-side | ⬜ |
-| J | More basemap providers | a switcher across the open providers, plus key-holding services | ⬜ |
-| K | Digitise from a CSV | build lines and polygons by snapping to imported survey points | ⬜ |
+| A | Transform operations | translate / scale / rotate as replayable `EditCommand`s, with the CRS and lock gates every other operation honours | ✅ |
+| B | Selection model | select one, select many, lasso, select-by-layer — the thing a transform is applied *to* | ✅ |
+| C | Canvas tool modes | one active tool, escape to select, shared hit-testing; drag-to-move wired to Phase A | ✅ |
+| D | Layer control | line width, line type, rename, extending the existing colour/opacity/lock/visibility | ✅ |
+| E | Feature info on click | area, perimeter, vertex count, through `core/measure.ts` so the method is stated | ✅ |
+| F | Drawing tools | polygon, line, point, marker, text, with snap and ortho | ✅ |
+| G | Backdrop layer | image and PDF under the canvas, georeferenced | ✅ |
+| H | Legend on export | generated from layer names and colours | ✅ |
+| I | Offset variants | inside, outside, both, per-side | ✅ |
+| J | More basemap providers | a switcher across the open providers, plus key-holding services | ✅ |
+| K | Digitise from a CSV | build lines and polygons by snapping to imported survey points | ✅ |
 
 Phases A–C are the shift-correction feature. They ship together or the feature
-does not exist.
+does not exist — and they did.
 
-**Phase A is done.** `translate`, `scale` and `rotate` exist as operations, are
-replayed against the full dataset at conversion time, reach the exported bytes,
-and are reachable from the Geometry tools tab as typed parameters. What is
-missing is the gesture: selecting features on the canvas and dragging them,
-which is what B and C add.
+**All eleven phases are built.** Where each lives:
+
+| Phase | Engine | Interface |
+|---|---|---|
+| A | `core/geometry-ops.ts` (`translate`, `scale`, `rotate`) | Geometry tools tab |
+| B | `core/selection.ts` | Select & move tab |
+| C | `ui/tool-canvas.ts` | Select & move tab, canvas toolbar |
+| D | `core/layers.ts` (`lineWidthOf`, `lineTypeOf`, `colourOf`) | Layers tab, per row |
+| E | `core/measure.ts` (`measureGeometry`) | Select & move tab, "This feature" |
+| F | `core/drawing.ts` | Select & move tab, draw tools |
+| G | `core/georeference.ts`, `engines/raster/pdf-image.ts`, `ui/backdrop.ts` | Backdrop tab |
+| H | `core/legend.ts` | Settings → "Attach a legend" |
+| I | `core/geometry-ops.ts` (`OffsetSide`) | Geometry tools → Offset → "Which side" |
+| J | `ui/basemap.ts` (`TILE_PROVIDERS`, `TILE_PRESETS`) | Settings → basemap |
+| K | `core/drawing.ts` (`pointSnapSources`) | Select & move → "Only snap to imported points" |
 
 ---
 
@@ -189,6 +199,27 @@ are the imported points rather than the geometry being drawn — the important
 part being that a digitised vertex is EXACTLY the observed coordinate, not one
 within a few pixels of it. Snapping that rounds is worse than no snapping,
 because it looks deliberate.
+
+### The basemap needs a network, and says so
+
+Added after the owner wrote: "internet only be use able when available if not
+available then Map tile will remain off since it requires internet".
+
+`isOnline()` in `ui/basemap.ts` wraps `navigator.onLine`, which is honest in one
+direction and optimistic in the other — false means there is definitively no
+route, true only means an interface is up. That asymmetry suits a gate used to
+SUPPRESS requests rather than to promise they will succeed.
+
+Offline, `Basemap.usable` is false, the canvas never installs the draw hook, and
+no tile request is made at all. Not a request that fails: a failed request is
+still a DNS lookup and a connection attempt per tile, sixty-four per pan, which
+on a metered or captive connection is real traffic for a layer the user has been
+told is off. The `online` event drops the failed tiles and redraws, so it comes
+back by itself.
+
+This strengthens R15 rather than qualifying it. Everything except the basemap
+already worked with the network disabled; now the basemap does not pretend
+otherwise.
 
 ## Rules this work must not break
 

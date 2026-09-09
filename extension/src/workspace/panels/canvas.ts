@@ -14,6 +14,7 @@ import { crsLabel, planTransform } from '../../crs/transform';
 import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-overlay';
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
+import { Backdrop } from '../../ui/backdrop';
 import { Basemap, isOnline, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
@@ -94,7 +95,11 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   const settings = store.get().settings;
   if (!settings.basemapEnabled) {
     ui.basemap = undefined;
-    canvas.onUnderlay = undefined;
+    // NOT `onUnderlay = undefined`: the backdrop is a separate layer and the
+    // basemap being off says nothing about it. Clearing the hook here is how
+    // an imported sheet would silently vanish the moment the tiles were
+    // switched off.
+    setUnderlay(canvas, null);
     return;
   }
 
@@ -143,9 +148,11 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   // tiles in, and no network to fetch them over. Offline it is not merely
   // blank — no request is made at all, which is the promise R15 makes and what
   // the owner asked for: the tiles stay off until the connection returns.
-  canvas.onUnderlay = basemap.usable
-    ? (context, project, unproject, size) => basemap.draw(context, size.width, size.height, project, unproject)
-    : undefined;
+  //
+  // The backdrop goes on TOP of the tiles and under the data, which is the only
+  // order that makes sense: the whole reason for importing a sheet is that the
+  // imagery beneath it is out of date.
+  setUnderlay(canvas, basemap.usable ? basemap : null);
 
   const badge = document.getElementById('basemapBadge');
   if (badge) {
@@ -156,6 +163,43 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
       badge.title = reason;
     }
   }
+}
+
+/**
+ * Installs the one underlay hook, which two layers share.
+ *
+ * `PreviewCanvas` has ONE `onUnderlay` for the same reason it has one
+ * `onOverlay`: a list would let a layer keep drawing after the thing that owns
+ * it has gone. So the composition happens here, in the order that matters —
+ * tiles first, then the imported sheet on top of them, then the data on top of
+ * both. A backdrop under the tiles would be invisible, which is the opposite of
+ * why someone imports one.
+ */
+function setUnderlay(canvas: PreviewCanvas, basemap: Basemap | null): void {
+  const backdrop = ui.backdrop;
+  const drawsBackdrop = backdrop?.usable ?? false;
+
+  if (!basemap && !drawsBackdrop) {
+    canvas.onUnderlay = undefined;
+    return;
+  }
+
+  canvas.onUnderlay = (context, project, unproject, size) => {
+    basemap?.draw(context, size.width, size.height, project, unproject);
+    if (drawsBackdrop) backdrop!.draw(context, project);
+  };
+}
+
+/**
+ * Creates the backdrop layer on first use.
+ *
+ * Called from the render path rather than at boot, so a session that never
+ * opens the tab never allocates one.
+ */
+export function ensureBackdrop(): Backdrop | null {
+  if (!ui.previewCanvas) return null;
+  if (!ui.backdrop) ui.backdrop = new Backdrop(ui.previewCanvas);
+  return ui.backdrop;
 }
 
 /**

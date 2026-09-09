@@ -32,7 +32,8 @@ import {
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
-import { renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
+import { backdropTab } from './panels/backdrop-tab';
+import { ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
@@ -94,6 +95,7 @@ function render(): void {
     state.inspectorTab === 'preview' ||
     state.inspectorTab === 'edit' ||
     state.inspectorTab === 'select' ||
+    state.inspectorTab === 'backdrop' ||
     state.inspectorTab === 'geometry-ops';
   $('previewWrap').classList.toggle('hidden', !usesCanvas || !selected);
   $('editBar').classList.toggle('hidden', state.inspectorTab !== 'edit' || !selected);
@@ -168,6 +170,17 @@ function renderInspector(): void {
       // giving it a tab of its own would mean two canvases showing the same
       // data with different tools on them.
       renderMeasure(item);
+      break;
+    case 'backdrop':
+      // The canvas has to exist before the backdrop can attach to it, so the
+      // preview is rendered first and the panel built against the layer that
+      // results.
+      renderPreview(item);
+      ensureBackdrop();
+      body.append(...backdropTab(item));
+      // A georeference is checked by LOOKING at whether the sheet lines up,
+      // not by reading a residual table — so the canvas is not optional here.
+      renderPreview(item);
       break;
     case 'select':
       body.append(...selectTab(item));

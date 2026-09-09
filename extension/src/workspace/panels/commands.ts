@@ -337,6 +337,7 @@ export function buildCommands(): Command[] {
     ['geometry-ops', 'Geometry tools'],
     ['preview', 'Preview'],
     ['select', 'Select & move'],
+    ['backdrop', 'Backdrop'],
     ['fidelity', 'What will be lost'],
     ['compare', 'Compare source and output'],
     ['warnings', 'Warnings'],
