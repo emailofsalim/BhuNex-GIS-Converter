@@ -1,14 +1,24 @@
 /** Drawing: the single-dataset canvas, the dual canvas and the overlay legend. */
 
 import type { CrsRef } from '../../core/cir';
+import {
+  colourOf,
+  dashPattern,
+  isVisible,
+  lineTypeOf,
+  lineWidthOf,
+  opacityOf,
+} from '../../core/layers';
 import { WGS84_CRS } from '../../crs/epsg';
 import { crsLabel, planTransform } from '../../crs/transform';
 import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-overlay';
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
-import { Basemap, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
+import { Backdrop } from '../../ui/backdrop';
+import { Basemap, isOnline, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
+import { viewOf } from './dataset';
 import { geometryPlanOverlay } from './geometry-ops';
 import { ui } from '../ui-state';
 
@@ -20,12 +30,20 @@ export function renderPreview(item: QueueItem): void {
   const data: PreviewData = { layers: [], truncated: false };
 
   if (dataset?.layers?.length) {
+    const view = viewOf(item);
     dataset.layers.forEach((layer: any, index: number) => {
       data.layers.push({
         name: layer.name,
-        visible: true,
-        color: LAYER_COLORS[index % LAYER_COLORS.length],
+        // Was hardcoded true, which made the eye and the padlock in the layer
+        // list decorative on this canvas. Visibility, colour, width, line type
+        // and opacity all come from the layer view now, so a control the user
+        // moves is a control that changes the picture.
+        visible: isVisible(view, layer.name),
+        color: colourOf(view, layer.name) ?? LAYER_COLORS[index % LAYER_COLORS.length],
         features: layer.preview ?? [],
+        lineWidth: lineWidthOf(view, layer.name),
+        lineDash: dashPattern(lineTypeOf(view, layer.name)),
+        opacity: opacityOf(view, layer.name),
       });
       if (layer.previewTruncated) data.truncated = true;
     });
@@ -77,7 +95,11 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   const settings = store.get().settings;
   if (!settings.basemapEnabled) {
     ui.basemap = undefined;
-    canvas.onUnderlay = undefined;
+    // NOT `onUnderlay = undefined`: the backdrop is a separate layer and the
+    // basemap being off says nothing about it. Clearing the hook here is how
+    // an imported sheet would silently vanish the moment the tiles were
+    // switched off.
+    setUnderlay(canvas, null);
     return;
   }
 
@@ -122,9 +144,75 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   }
 
   const basemap = ui.basemap;
-  canvas.onUnderlay = basemap.usable
-    ? (context, project, unproject, size) => basemap.draw(context, size.width, size.height, project, unproject)
-    : undefined;
+  // `usable` covers both reasons a basemap cannot draw: no CRS it can place
+  // tiles in, and no network to fetch them over. Offline it is not merely
+  // blank — no request is made at all, which is the promise R15 makes and what
+  // the owner asked for: the tiles stay off until the connection returns.
+  //
+  // The backdrop goes on TOP of the tiles and under the data, which is the only
+  // order that makes sense: the whole reason for importing a sheet is that the
+  // imagery beneath it is out of date.
+  setUnderlay(canvas, basemap.usable ? basemap : null);
+
+  const badge = document.getElementById('basemapBadge');
+  if (badge) {
+    const reason = basemap.unavailableReason;
+    badge.classList.toggle('hidden', reason === null);
+    if (reason) {
+      badge.textContent = isOnline() ? 'Basemap: no placeable CRS' : 'Basemap off — no internet';
+      badge.title = reason;
+    }
+  }
+}
+
+/**
+ * Installs the one underlay hook, which two layers share.
+ *
+ * `PreviewCanvas` has ONE `onUnderlay` for the same reason it has one
+ * `onOverlay`: a list would let a layer keep drawing after the thing that owns
+ * it has gone. So the composition happens here, in the order that matters —
+ * tiles first, then the imported sheet on top of them, then the data on top of
+ * both. A backdrop under the tiles would be invisible, which is the opposite of
+ * why someone imports one.
+ */
+function setUnderlay(canvas: PreviewCanvas, basemap: Basemap | null): void {
+  const backdrop = ui.backdrop;
+  const drawsBackdrop = backdrop?.usable ?? false;
+
+  if (!basemap && !drawsBackdrop) {
+    canvas.onUnderlay = undefined;
+    return;
+  }
+
+  canvas.onUnderlay = (context, project, unproject, size) => {
+    basemap?.draw(context, size.width, size.height, project, unproject);
+    if (drawsBackdrop) backdrop!.draw(context, project);
+  };
+}
+
+/**
+ * Creates the backdrop layer on first use.
+ *
+ * Called from the render path rather than at boot, so a session that never
+ * opens the tab never allocates one.
+ */
+export function ensureBackdrop(): Backdrop | null {
+  if (!ui.previewCanvas) return null;
+  if (!ui.backdrop) ui.backdrop = new Backdrop(ui.previewCanvas);
+  return ui.backdrop;
+}
+
+/**
+ * Re-renders when the connection comes or goes.
+ *
+ * Installed once at boot. Without it the basemap would only notice a restored
+ * connection the next time something else caused a render, which for someone
+ * sitting looking at a blank canvas is never.
+ */
+export function watchConnectivity(onChange: () => void): void {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('online', onChange);
+  window.addEventListener('offline', onChange);
 }
 
 /** The chosen provider, or a custom template the user entered. */

@@ -46,7 +46,7 @@
  * file matching no state the user ever saw.
  */
 
-import type { CirDataset, FieldDef, StyleHint } from './cir';
+import type { CirDataset, CirFeature, CirLayer, FieldDef, StyleHint } from './cir';
 import {
   applyAttributes,
   planAddField,
@@ -99,7 +99,28 @@ export type EditCommand =
   // and only re-planning gets that right. `crs` is deliberately NOT stored —
   // the replay reads it from the dataset, so a command saved in a project file
   // is re-gated against whatever CRS the file actually has when it reopens.
-  | { kind: 'geometry'; layer: string; operation: GeometryOperation; options: StoredGeometryOptions };
+  | { kind: 'geometry'; layer: string; operation: GeometryOperation; options: StoredGeometryOptions }
+  // Drawing (docs/EDITING_WORKSTATION.md phase F). The ONE command that stores
+  // a result rather than an intent, and the asymmetry is deliberate: every
+  // other command describes something to re-derive against the full file,
+  // because a buffer previewed over 5,000 parcels must cover 40,000. A drawn
+  // polygon has nothing to re-derive — the user placed those exact vertices,
+  // and re-planning could only move them.
+  | { kind: 'draw'; layer: string; features: CirFeature[]; createLayer?: boolean };
+
+/**
+ * The fields a drawn layer declares, from the attributes the drawings carry.
+ *
+ * A new layer with no fields is one that every writer emits with an empty
+ * attribute table, so a marker's name and a text object's string would be
+ * dropped on the way out — silently, because the features are there and only
+ * the columns are missing.
+ */
+function deriveDrawnFields(features: CirFeature[]): FieldDef[] {
+  const names = new Set<string>();
+  for (const feature of features) for (const key of Object.keys(feature.properties ?? {})) names.add(key);
+  return [...names].map((name) => ({ name, type: 'string' as const }));
+}
 
 /**
  * The part of `GeometryOptions` a command may carry.
@@ -222,6 +243,55 @@ function applyOne(dataset: CirDataset, command: EditCommand, protectedLayers: st
     case 'layer-style':
       return fromLayers(dataset, planStyleLayer(dataset, command.layer, command.style, options), `Restyled ${command.layer}`);
 
+    // ---------------------------------------------------------- drawing
+    case 'draw': {
+      const protectedLayers = options.protectedLayers ?? [];
+      if (protectedLayers.includes(command.layer)) {
+        return {
+          dataset,
+          description: '',
+          refusal: {
+            what: `${command.layer} is protected, so nothing was added to it.`,
+            why: 'The layer is marked legally operative — its contents are part of a record, not a working file.',
+            action: 'Draw into a new layer, or remove the layer from the protected list if you genuinely intend to change it.',
+          },
+        };
+      }
+
+      const existing = dataset.layers.find((layer) => layer.name === command.layer);
+      if (!existing && !command.createLayer) {
+        return {
+          dataset,
+          description: '',
+          refusal: {
+            what: `The layer "${command.layer}" is not in this file.`,
+            why: 'It may have been renamed, merged or deleted by an earlier edit in this list.',
+            action: 'Draw again into a layer that exists, or discard this edit.',
+          },
+        };
+      }
+
+      const layers = existing
+        ? dataset.layers.map((layer) =>
+            layer.name === command.layer ? { ...layer, features: [...layer.features, ...command.features] } : layer
+          )
+        : [
+            ...dataset.layers,
+            {
+              name: command.layer,
+              path: [command.layer],
+              features: [...command.features],
+              fields: deriveDrawnFields(command.features),
+              geometryTypes: [...new Set(command.features.map((feature) => feature.geometry?.type).filter(Boolean))],
+            } as CirLayer,
+          ];
+
+      return {
+        dataset: { ...dataset, layers },
+        description: `Added ${command.features.length} drawn feature${command.features.length === 1 ? '' : 's'} to ${command.layer}`,
+      };
+    }
+
     // ---------------------------------------------------------- vertices
     case 'vertices': {
       const plan = command.plan;
@@ -315,6 +385,8 @@ export function describeCommand(command: EditCommand): string {
       return `Delete layer "${command.layer}"`;
     case 'layer-style':
       return `Restyle "${command.layer}"`;
+    case 'draw':
+      return `Draw ${command.features.length} feature${command.features.length === 1 ? '' : 's'} into "${command.layer}"`;
     case 'vertices':
       return `${command.plan.operation} ${command.plan.changes.length} vertex/vertices`;
     case 'geometry': {
@@ -340,6 +412,11 @@ export function isWholeLayer(command: EditCommand): boolean {
     case 'calculate':
       return command.scope === undefined;
     case 'vertices':
+      return false;
+    // Drawing ADDS features rather than changing existing ones, so how many the
+    // layer already holds is irrelevant to it — and saying "applied to all
+    // 40,000" of a drawn polygon would be nonsense.
+    case 'draw':
       return false;
     case 'geometry':
       // A scoped operation names its features by index and touches only those.

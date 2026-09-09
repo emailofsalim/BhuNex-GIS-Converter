@@ -189,6 +189,18 @@ export function buildCommands(): Command[] {
   });
 
   commands.push({
+    id: 'open-select-move',
+    title: 'Correct a shift against the basemap',
+    group: 'Edit',
+    keywords: ['shift', 'move', 'drag', 'select', 'lasso', 'offset', 'georeference', 'basemap', 'align'],
+    detail:
+      'Select features on the canvas and drag them onto the basemap. The offset is recorded and re-applied to every feature on conversion.',
+    enabled: Boolean(item?.dataset?.layers?.length),
+    disabledReason: item ? 'This file has no vector layers to move.' : 'Select a queued file first.',
+    run: () => host.showInspectorTab('select'),
+  });
+
+  commands.push({
     id: 'toggle-edit-snap',
     title: state.settings.editSnapEnabled ? 'Turn editing snap off' : 'Turn editing snap on',
     group: 'Edit',
@@ -324,6 +336,9 @@ export function buildCommands(): Command[] {
     ['attributes', 'Attributes'],
     ['geometry-ops', 'Geometry tools'],
     ['preview', 'Preview'],
+    ['metadata', 'Source metadata'],
+    ['select', 'Select & move'],
+    ['backdrop', 'Backdrop'],
     ['fidelity', 'What will be lost'],
     ['compare', 'Compare source and output'],
     ['warnings', 'Warnings'],

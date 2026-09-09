@@ -56,6 +56,12 @@
             <div class="dropzone__title">Drop files or folders here</div>
             <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
             <button class="btn btn--primary" id="dropBrowseBtn" type="button">Choose files</button>
+            <!-- A shapefile is .shp/.shx/.dbf/.prj and a delivery is usually a
+                 tree of them, so picking a FOLDER is the common case rather
+                 than the advanced one. `folderPicker` sat in this markup with
+                 nothing opening it: the zone offered folders and the only way
+                 to use one was to drag it. -->
+            <button class="btn btn--ghost" id="dropFolderBtn" type="button">Choose folder</button>
             <div class="dropzone__formats" id="dropFormats"></div>
           </div>
 
@@ -67,6 +73,8 @@
             <button class="tab" data-tab="attributes" role="tab" aria-selected="false">Attributes</button>
             <button class="tab" data-tab="geometry-ops" role="tab" aria-selected="false">Geometry tools</button>
             <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
+            <button class="tab" data-tab="select" role="tab" aria-selected="false">Select &amp; move</button>
+            <button class="tab" data-tab="backdrop" role="tab" aria-selected="false">Backdrop</button>
             <button class="tab" data-tab="edit" role="tab" aria-selected="false">Edit</button>
             <button class="tab" data-tab="metadata" role="tab" aria-selected="false">Source metadata</button>
             <button class="tab" data-tab="fidelity" role="tab" aria-selected="false">What will be lost</button>
@@ -102,9 +110,26 @@
               <span class="topbar__spacer"></span>
               <span class="edit__readout" id="measureReadout"></span>
             </div>
+            <!-- Selecting and moving (docs/EDITING_WORKSTATION.md phases B-C).
+                 The status line is written by the tool layer while a gesture is
+                 in progress, so the offset is visible before the pointer is
+                 released rather than only after the edit is recorded. -->
+            <div class="edit__bar hidden" id="selectBar">
+              <button class="btn btn--ghost" id="selectToolSelect" title="Click to select, drag from empty space for a rubber band, drag a selected feature to move it">Select</button>
+              <button class="btn btn--ghost" id="selectToolLasso" title="Draw a freehand outline around what to select">Lasso</button>
+              <button class="btn btn--ghost" id="selectToolMove" title="Drag anywhere to move the current selection">Move</button>
+              <span class="edit__hint">Shift adds to the selection · Shift while dragging constrains to one axis · Esc clears</span>
+              <span class="topbar__spacer"></span>
+              <span class="edit__readout" id="selectStatus">Nothing selected</span>
+            </div>
             <div class="preview__overlay">
               <span class="preview__readout" id="readout">—</span>
               <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
+              <!-- Says why the basemap is not drawing, when it is not. Blank
+                   imagery with no explanation reads as a broken tool; the two
+                   reasons (no network, no placeable CRS) are different problems
+                   with different answers. -->
+              <span class="badge badge--muted hidden" id="basemapBadge"></span>
             </div>
           </div>
 

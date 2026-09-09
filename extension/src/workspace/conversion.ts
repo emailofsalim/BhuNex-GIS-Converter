@@ -16,8 +16,11 @@ import {
   hasNativePermission,
   requestNativePermission,
 } from '../adapters/native-messaging/client';
+import type { StyleHint } from '../core/cir';
 import { groupCompanions, type IngestFile } from '../core/companions';
+import type { EditCommand } from '../core/edits';
 import { ConversionError } from '../core/errors';
+import { colourOf, lineTypeOf, lineWidthOf } from '../core/layers';
 import { type ConversionSettings, packageBatch } from '../core/pipeline';
 import { fixedPrecision, FULL_PRECISION } from '../core/precision';
 import { getFormat } from '../core/registry';
@@ -195,12 +198,17 @@ export function buildSettings(): Partial<ConversionSettings> {
     datumShift: settings.datumShift,
     checkCoverageGaps: settings.checkCoverageGaps,
     preserveZ: settings.preserveZ,
+    preserveAttributes: settings.preserveAttributes,
     naming: { pattern: settings.naming },
     layout: settings.outputLayout,
     runQa: settings.runQa,
     arcTolerance: settings.arcTolerance,
     embedMetadata: settings.embedMetadata,
     embedReport: settings.embedReport,
+    includeLegend: settings.includeLegend,
+    // Layer colours, widths and line types are set per FILE in the layer list,
+    // so they travel with the item rather than with the global settings — see
+    // `layerStylesFor`, which is applied to the request in `convertItem`.
     assessHealth: settings.assessHealth,
     repair: {
       closeRings: settings.repairCloseRings,
@@ -287,6 +295,41 @@ export function boundaryRings(itemId: string): number[][][][] {
   return rings;
 }
 
+/**
+ * Turns the layer list's styling into commands the writers will see.
+ *
+ * Colour, line width and line type are VIEW state: they change on every drag of
+ * a slider and belong in the undo history no more than a scroll position does.
+ * But the owner's ask is that they reach the output — "layer wise colour
+ * control … on export automatically legend will also created according to
+ * layers and colours" — and a colour that only exists on the preview canvas
+ * would make that legend a document asserting something false.
+ *
+ * So the view is converted to `layer-style` commands at the moment of
+ * conversion. Only layers the user actually styled produce one: an untouched
+ * file converts to exactly the bytes it always did.
+ */
+export function layerStyleCommands(item: QueueItem): EditCommand[] {
+  const view = item.layerView;
+  if (!view) return [];
+
+  const commands: EditCommand[] = [];
+  for (const layer of (item.dataset?.layers ?? []) as any[]) {
+    const colour = colourOf(view, layer.name);
+    const entry = view.entries[layer.name];
+    const width = entry?.lineWidth;
+    const type = entry?.lineType;
+    if (!colour && width === undefined && type === undefined) continue;
+
+    const style: StyleHint = {};
+    if (colour) style.color = colour;
+    if (width !== undefined) style.lineWidth = lineWidthOf(view, layer.name);
+    if (type !== undefined) style.linetype = lineTypeOf(view, layer.name);
+    commands.push({ kind: 'layer-style', layer: layer.name, style });
+  }
+  return commands;
+}
+
 /** How many polygons a candidate boundary file offers, for the picker. */
 export function describeBoundary(itemId: string): string {
   const count = boundaryRings(itemId).length;
@@ -363,7 +406,10 @@ export async function convertItem(id: string, withQa: boolean): Promise<void> {
     const settings = {
       ...buildSettings(),
       runQa: withQa && store.get().settings.runQa,
-      edits: item.edits,
+      // Layer styling is appended LAST, after the user's own edits, so a colour
+      // set on a layer still applies after that layer has been renamed or
+      // merged — the style command names the layer as it will be by then.
+      edits: [...(item.edits ?? []), ...layerStyleCommands(item)],
       protectedLayers: protectedFor(item),
     };
     const result = await runConversion(

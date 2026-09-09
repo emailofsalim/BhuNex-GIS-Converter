@@ -84,8 +84,25 @@ function walk(dir) {
  * one nobody reviewed.
  */
 const ALLOWED_TEMPLATES = [
+  // --- keyless providers offered in the switcher ---------------------------
   'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
   'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+  // Note the reversed row/column order: this service is {z}/{y}/{x}. Listed
+  // exactly as it appears, so a typo'd variant would still be caught.
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+
+  // --- presets, which are TEMPLATES and not endpoints ----------------------
+  // Each still carries `{key}` in the shipped bundle, so none of them resolves
+  // to a fetchable URL until a user pastes their own key in. They are inert
+  // strings in the build, which is the strongest form of this exemption:
+  // the packaged extension cannot load them even if it tried.
+  'https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}.png?api_key={key}',
+  'https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}.jpg?api_key={key}',
+  'https://tile.jawg.io/jawg-streets/{z}/{x}/{y}.png?access-token={key}',
+  'https://tile.googleapis.com/v1/2dtiles/{z}/{x}/{y}?session=SESSION_TOKEN&key={key}',
+
   // Shown to the user as an example of the shape a custom template takes.
   // Never fetched — `your-server` does not resolve, which is the point of it.
   'https://your-server/tiles/{z}/{x}/{y}.png',

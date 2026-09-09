@@ -32,7 +32,8 @@ import {
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
-import { renderCompare, renderPreview, updateLinkButton } from './panels/canvas';
+import { backdropTab } from './panels/backdrop-tab';
+import { ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
@@ -44,6 +45,7 @@ import { historyPanel, stepHistory } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
+import { renderSelect, selectTab } from './panels/select-tab';
 import { openHelpDialog, openSettingsDialog, renderSettingsPanel } from './panels/settings';
 import { openProject, workflowsPanel } from './panels/workflows';
 import { ui } from './ui-state';
@@ -86,21 +88,70 @@ function render(): void {
   $('targetBadge').textContent = target ? (getFormat(target)?.name ?? target) : 'none selected';
   $('targetBadge').className = target ? 'badge badge--accent' : 'badge badge--muted';
 
+  updateLocalBadge(state);
+
   const dropzone = $('dropzone');
   dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
   $('inspectorTabs').classList.toggle('hidden', !selected);
   const usesCanvas =
-    state.inspectorTab === 'preview' || state.inspectorTab === 'edit' || state.inspectorTab === 'geometry-ops';
+    state.inspectorTab === 'preview' ||
+    state.inspectorTab === 'edit' ||
+    state.inspectorTab === 'select' ||
+    state.inspectorTab === 'backdrop' ||
+    state.inspectorTab === 'geometry-ops';
   $('previewWrap').classList.toggle('hidden', !usesCanvas || !selected);
   $('editBar').classList.toggle('hidden', state.inspectorTab !== 'edit' || !selected);
+  $('selectBar').classList.toggle('hidden', state.inspectorTab !== 'select' || !selected);
   // Leaving the Edit tab turns editing off, so a stray Delete on another tab
   // cannot reach a vertex.
   if (state.inspectorTab !== 'edit') ui.editCanvas?.setEnabled(false);
   // Same rule for measuring: leaving the tab that owns a tool turns the tool
   // off, so a click on another tab's canvas cannot land a stray point.
   if (state.inspectorTab !== 'preview') stopMeasuring();
+  // And the same for selecting: a rubber band belongs to the tab that owns it,
+  // and a drag started on the Preview tab must not commit a translate.
+  if (state.inspectorTab !== 'select') ui.toolCanvas?.setEnabled(false);
+  updateSelectBar();
   updateMeasureBar(selected ?? undefined);
   $('compareWrap').classList.toggle('hidden', state.inspectorTab !== 'compare' || !selected);
+}
+
+/**
+ * Keeps the "Local only" badge honest.
+ *
+ * The badge is the strongest promise this tool makes, and it was static text:
+ * "Local only — no file leaves this machine. There is no network path in any
+ * conversion." Both sentences are still literally true with the basemap on —
+ * tiles are a view-time layer and touch no conversion path — but a badge
+ * reading "Local only" while the tool is fetching map tiles overclaims, and a
+ * user weighing whether to open a survey under NDA deserves to see the
+ * difference rather than read the title attribute for it.
+ *
+ * So it says which it is. What never changes is the part that matters: no file
+ * bytes, no attribute values and no file names are ever sent anywhere. Tiles
+ * carry COORDINATES, which discloses the area being looked at and nothing else.
+ */
+function updateLocalBadge(state: { settings: AppSettings }): void {
+  const badge = $('localBadge');
+  const tiles = state.settings.basemapEnabled && navigator.onLine !== false;
+
+  badge.textContent = tiles ? 'Local + map tiles' : 'Local only';
+  badge.className = tiles ? 'badge badge--warn' : 'badge badge--ok';
+  badge.title = tiles
+    ? 'Conversions are local — no file, attribute or file name is ever sent anywhere. The map basemap is the one exception and it is on: it requests TILE COORDINATES from the provider you chose, which discloses the area you are looking at. Turn it off in Settings to make no network request at all.'
+    : 'No file leaves this machine. There is no network path in any conversion, and no request of any kind is being made.';
+}
+
+/** Keeps the canvas toolbar's active tool in step with the tool layer. */
+function updateSelectBar(): void {
+  const active = ui.toolCanvas?.getTool() ?? 'select';
+  for (const [id, tool] of [
+    ['selectToolSelect', 'select'],
+    ['selectToolLasso', 'lasso'],
+    ['selectToolMove', 'move'],
+  ] as const) {
+    $(id).classList.toggle('btn--on', active === tool);
+  }
 }
 
 function renderInspector(): void {
@@ -147,6 +198,24 @@ function renderInspector(): void {
       // giving it a tab of its own would mean two canvases showing the same
       // data with different tools on them.
       renderMeasure(item);
+      break;
+    case 'backdrop':
+      // The canvas has to exist before the backdrop can attach to it, so the
+      // preview is rendered first and the panel built against the layer that
+      // results.
+      renderPreview(item);
+      ensureBackdrop();
+      body.append(...backdropTab(item));
+      // A georeference is checked by LOOKING at whether the sheet lines up,
+      // not by reading a residual table — so the canvas is not optional here.
+      renderPreview(item);
+      break;
+    case 'select':
+      body.append(...selectTab(item));
+      // The canvas is not optional here: the whole point of the tab is the
+      // gesture, and a panel with no drawing to gesture on is a settings form.
+      renderPreview(item);
+      renderSelect(item);
       break;
     case 'edit':
       body.append(...editTab(item));
@@ -356,6 +425,23 @@ function wire(): void {
     await addFiles(files);
   });
 
+  // Picking a folder. `toIngestFile` already reads `webkitRelativePath`, so the
+  // tree arrives with its paths intact and the companion grouper pairs each
+  // .shp with the .dbf beside it rather than with one from a sibling folder.
+  const folderPicker = $('folderPicker') as HTMLInputElement;
+  const browseFolder = () => folderPicker.click();
+  $('dropFolderBtn').addEventListener('click', (event) => {
+    // The dropzone itself is a click target, so a button inside it has to stop
+    // the event or choosing a folder opens the file picker straight after.
+    event.stopPropagation();
+    browseFolder();
+  });
+  folderPicker.addEventListener('change', async () => {
+    const files = await Promise.all(Array.from(folderPicker.files ?? []).map((file) => toIngestFile(file)));
+    folderPicker.value = '';
+    await addFiles(files);
+  });
+
   $('clearQueueBtn').addEventListener('click', () => {
     store.set({ items: [], selectedId: null, manifestCsv: undefined });
     store.log('info', 'Queue cleared.');
@@ -411,6 +497,19 @@ function wire(): void {
     });
   }
 
+  // The basemap is the only feature here that needs a network, so this is the
+  // only thing a connection change affects. Losing it turns the tiles off and
+  // says so; regaining it turns them back on without the user doing anything.
+  watchConnectivity(() => {
+    store.log(
+      navigator.onLine ? 'ok' : 'warn',
+      navigator.onLine
+        ? 'Back online — map tiles are available again.'
+        : 'Offline. Map tiles are off until the connection returns; everything else runs on this machine and is unaffected.'
+    );
+    render();
+  });
+
   $('fitBtn').addEventListener('click', () => ui.previewCanvas?.fit());
   $('gridBtn').addEventListener('click', () => ui.previewCanvas?.toggleGrid());
 
@@ -422,6 +521,17 @@ function wire(): void {
   ($('editSnap') as HTMLInputElement).addEventListener('change', (event) => {
     void store.patchSettings({ editSnapEnabled: (event.target as HTMLInputElement).checked });
   });
+
+  for (const [id, tool] of [
+    ['selectToolSelect', 'select'],
+    ['selectToolLasso', 'lasso'],
+    ['selectToolMove', 'move'],
+  ] as const) {
+    $(id).addEventListener('click', () => {
+      ui.toolCanvas?.setTool(tool);
+      render();
+    });
+  }
 
   $('compareFitBtn').addEventListener('click', () => ui.dualCanvas?.fit());
   $('compareGridBtn').addEventListener('click', () => ui.dualCanvas?.toggleGrid());

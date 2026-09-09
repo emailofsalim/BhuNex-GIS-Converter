@@ -17,6 +17,12 @@ export interface PreviewLayer {
   visible: boolean;
   color: string;
   features: { geometry: any; properties?: Record<string, unknown> }[];
+  /** Stroke width in screen pixels. Absent means the renderer's default. */
+  lineWidth?: number;
+  /** Dash pattern in screen pixels. Absent or empty means solid. */
+  lineDash?: number[];
+  /** 0..1. Absent means fully opaque. */
+  opacity?: number;
 }
 
 export interface PreviewPointCloud {
@@ -335,10 +341,17 @@ export class PreviewCanvas {
 
     for (const layer of this.data.layers) {
       if (!layer.visible) continue;
+      // Saved and restored per layer: a dash pattern or an alpha left set would
+      // leak into every layer drawn after it, and the layer that looks wrong is
+      // then the one AFTER the one that is misconfigured.
+      context.save();
       context.strokeStyle = layer.color;
       context.fillStyle = layer.color;
-      context.lineWidth = 1.2;
+      context.lineWidth = layer.lineWidth ?? 1.2;
+      context.setLineDash(layer.lineDash ?? []);
+      if (layer.opacity !== undefined) context.globalAlpha = Math.max(0, Math.min(1, layer.opacity));
       for (const feature of layer.features) this.drawGeometry(feature.geometry);
+      context.restore();
     }
 
     if (this.data.overlay?.length) this.drawOverlay();
@@ -475,7 +488,10 @@ export class PreviewCanvas {
     }
     if (fill) {
       context.save();
-      context.globalAlpha = 0.14;
+      // Multiplied, not assigned: the layer's own opacity is already on the
+      // context, and assigning here would make a layer faded to 10% draw its
+      // fill at the same strength as a fully opaque one.
+      context.globalAlpha *= 0.14;
       context.fill();
       context.restore();
     }

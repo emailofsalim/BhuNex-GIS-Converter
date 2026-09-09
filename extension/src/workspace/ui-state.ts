@@ -35,6 +35,9 @@ import type { DualCanvas } from '../ui/dual-canvas';
 import type { EditCanvas, EditTarget } from '../ui/edit-canvas';
 import type { MeasureCanvas } from '../ui/measure-canvas';
 import type { PreviewCanvas } from '../ui/preview';
+import type { Backdrop } from '../ui/backdrop';
+import type { ToolCanvas } from '../ui/tool-canvas';
+import type { Selection } from '../core/selection';
 import type { VertexRef } from '../core/vertex-edit';
 
 export interface UiState {
@@ -54,6 +57,27 @@ export interface UiState {
   editSelection: VertexRef[];
   /** The feature being edited: which layer, which index. */
   editTarget: EditTarget | null;
+  /** The selecting-and-moving interaction layer, drawn over `previewCanvas`. */
+  toolCanvas: ToolCanvas | null;
+  /**
+   * A local image or scanned sheet drawn UNDER the canvas.
+   *
+   * Kept apart from `basemap` deliberately: they look alike on screen and are
+   * opposites underneath. A basemap is remote, tiled, needs a network, and is
+   * authoritative about position whenever it draws at all. A backdrop is local,
+   * needs no network ever, and may be placed by a route that fixes scale and
+   * rotation while knowing nothing about where on Earth it is.
+   */
+  backdrop: Backdrop | null;
+  /**
+   * FEATURES currently selected, which is a different thing from `editSelection`.
+   *
+   * The vertex editor selects VERTICES inside one open feature; this selects
+   * whole features across layers, and is what a transform is applied to. Keeping
+   * them apart is deliberate: sharing one list would make Delete in the vertex
+   * editor able to reach a feature the user picked on another tab.
+   */
+  featureSelection: Selection;
   /** Ctrl/Cmd+K. Created once at boot. */
   palette: CommandPalette | null;
   /**
@@ -80,6 +104,9 @@ export const ui: UiState = {
   measureCanvas: null,
   editSelection: [],
   editTarget: null,
+  toolCanvas: null,
+  backdrop: null,
+  featureSelection: { refs: [], wholeLayers: [] },
   palette: null,
   basemap: undefined,
 };

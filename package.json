@@ -1,6 +1,6 @@
 {
   "name": "universal-bhunex-converter",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "description": "Universal GIS / Geomatics / Survey / CAD / Mining conversion suite as a Chrome MV3 extension.",
   "type": "module",
@@ -17,7 +17,8 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run lint && npm run test && npm run docs:check && npm run build:store && npm run build:check",
+    "offline:check": "node scripts/assert-offline.mjs",
+    "verify": "npm run lint && npm run test && npm run docs:check && npm run build:store && npm run build:check && npm run offline:check && npm run store:check && npm run package",
     "build:store": "STORE_BUILD=1 vite build && node scripts/write-root-manifest.mjs",
     "store:check": "node scripts/assert-store-ready.mjs",
     "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs && node scripts/verify-package.mjs",
