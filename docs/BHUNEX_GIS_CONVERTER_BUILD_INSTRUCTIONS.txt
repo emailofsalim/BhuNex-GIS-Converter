@@ -1,5 +1,5 @@
 ================================================================================
-UNIVERSAL BHUNEX CONVERTER
+BHUNEX GIS CONVERTER
 GIS / GEOMATICS / LAND SURVEY / CAD / LiDAR / MINE SURVEY CONVERSION SUITE
 CHROME MANIFEST V3 EXTENSION
 --------------------------------------------------------------------------------
@@ -57,7 +57,7 @@ to resume the build using only this file plus docs/BUILD_STATE.md.
 ================================================================================
 
 0.1 WHAT IS BEING BUILT
-Universal BhuNex Converter is a single Chrome MV3 extension that converts spatial
+BhuNex GIS Converter is a single Chrome MV3 extension that converts spatial
 and survey data between formats entirely on the user's own machine.
 
 Product identity, in priority order:
@@ -169,10 +169,10 @@ R24  The first screen stays minimal. Advanced capability is reached through
     tsconfig.json                strict TypeScript, path aliases
     vite.config.ts               MV3 multi-entry build -> /dist
     vitest.config.ts             node-environment test runner
-    scripts/package-extension.mjs  produces dist-zip/universal-bhunex-converter.zip
+    scripts/package-extension.mjs  produces dist-zip/bhunex-gis-converter.zip
     .github/workflows/ci.yml     typecheck + test + build + package artifact
     docs/
-      UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt   (this file)
+      BHUNEX_GIS_CONVERTER_BUILD_INSTRUCTIONS.txt        (this file)
       BUILD_STATE.md             resumable progress ledger - update every session
       FORMAT_MATRIX.md           generated-by-hand mirror of the registry
       NATIVE_HOST.md             DWG/ODA helper install + protocol
@@ -1008,7 +1008,7 @@ without a corresponding round-trip or read test. This is what keeps R1 true.
   4. npm run lint      (tsc --noEmit, strict)
   5. npm test          (vitest)
   6. npm run build     (vite -> dist/)
-  7. npm run package   (dist-zip/universal-bhunex-converter.zip)
+  7. npm run package   (dist-zip/bhunex-gis-converter.zip)
   8. upload the packaged extension as a build artifact
 A red CI is a broken build. The artifact from a green run is directly loadable
 with chrome://extensions -> Load unpacked (dist/) or as the packaged zip.

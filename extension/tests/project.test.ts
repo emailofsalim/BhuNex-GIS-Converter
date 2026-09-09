@@ -663,6 +663,51 @@ describe('credential detection', () => {
     expect(dropped).toEqual(['password']);
   });
 
+  it('catches a key in a tile URL whatever the parameter is called', () => {
+    // The named-parameter list held `key` and `access_token`, so it caught
+    // Google's `&key=` and let through `?api_key=` (Stadia) and
+    // `?access-token=` (Jawg) — two of the four tile services this extension
+    // itself offers as presets. A user who pasted their Stadia key into the
+    // custom tile URL and saved a project file shipped the key inside it.
+    for (const url of [
+      'https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}.png?api_key=SECRET',
+      'https://tile.jawg.io/jawg-streets/{z}/{x}/{y}.png?access-token=SECRET',
+      'https://tile.googleapis.com/v1/2dtiles/{z}/{x}/{y}?session=T&key=SECRET',
+      'https://maps.example.test/tiles/{z}/{x}/{y}?subscription-key=SECRET',
+      'https://maps.example.test/tiles/{z}/{x}/{y}?X-Amz-Signature=SECRET',
+    ]) {
+      expect(looksLikeSecret('basemapCustomUrl', url), url).toBe(true);
+    }
+  });
+
+  it('does not mistake an ordinary query parameter for a credential', () => {
+    // The credential word has to END the parameter name. `keyword` contains
+    // `key` and is not one, and a rule that drops it drops real attributes.
+    expect(looksLikeSecret('link', 'https://example.test/search?keyword=parcel')).toBe(false);
+    expect(looksLikeSecret('link', 'https://example.test/wms?layers=cadastre&format=png')).toBe(false);
+    expect(looksLikeSecret('link', 'https://tile.openstreetmap.org/12/2345/1234.png')).toBe(false);
+  });
+
+  it('keeps a tile key out of a saved project file', () => {
+    // The end-to-end version of the two cases above: what actually reaches disk.
+    const dropped: string[] = [];
+    const cleaned = stripSecretsDeep(
+      {
+        basemapEnabled: true,
+        basemapProviderId: 'custom',
+        basemapCustomUrl: 'https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}.png?api_key=THE-USERS-REAL-KEY',
+        precisionDecimals: 3,
+      },
+      dropped
+    ) as Record<string, unknown>;
+    expect(JSON.stringify(cleaned)).not.toContain('THE-USERS-REAL-KEY');
+    expect(dropped).toContain('basemapCustomUrl');
+    // Everything that is not a credential survives, or the scrub is a data loss
+    // bug wearing a security rule's clothes.
+    expect(cleaned.precisionDecimals).toBe(3);
+    expect(cleaned.basemapProviderId).toBe('custom');
+  });
+
   it('does not hang on a structure that references itself', () => {
     const looping: Record<string, unknown> = { name: 'job' };
     looping.self = looping;

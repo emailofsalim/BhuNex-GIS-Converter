@@ -110,13 +110,13 @@ jobs:
       - name: Upload unpacked extension
         uses: actions/upload-artifact@v4
         with:
-          name: universal-bhunex-converter-unpacked
+          name: bhunex-gis-converter-unpacked
           path: dist/
           if-no-files-found: error
 
       - name: Upload packaged extension
         uses: actions/upload-artifact@v4
         with:
-          name: universal-bhunex-converter-zip
+          name: bhunex-gis-converter-zip
           path: dist-zip/*.zip
           if-no-files-found: error

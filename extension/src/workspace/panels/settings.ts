@@ -16,7 +16,7 @@ import {
   PRIORITY_LABEL,
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
-import { isOnline, TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
+import { applyPreset, isOnline, TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
 import { boundaryRings, describeBoundary } from '../conversion';
@@ -777,7 +777,10 @@ export function openHelpDialog(): void {
 
   const body = element('div', { class: 'dialog__body stack' });
   const rules: [string, string][] = [
-    ['Nothing is uploaded', 'Every conversion runs in this browser. The only exception is the optional DWG helper, which is a program on your own machine.'],
+    [
+      'Your files are never uploaded',
+      'Every conversion, QA check, measurement, edit and export runs in this browser, and no file byte leaves this machine on any path. Two things do reach outside it, and neither touches your data: the optional DWG helper, which is a program on your own machine, and the map basemap if you switch it on, which asks a tile server for the map squares covering the area on screen — tile coordinates only, no file bytes, names or attributes. With the basemap off, the extension makes no network request at all.',
+    ],
     ['A CRS is never invented', 'If a file declares no coordinate system and the numbers are ambiguous, the conversion stops and asks. The same easting is valid in all 60 UTM zones.'],
     [
       'A CRS the format requires is applied for you',
@@ -792,6 +795,22 @@ export function openHelpDialog(): void {
     ['LAZ is refused, not guessed', 'No LAZ decoder is bundled, so compressed point data is reported honestly instead of being read as raw LAS coordinates.'],
     ['QA means re-import', 'A green PASS means the output was read back and compared with the source — not merely that bytes were written.'],
     ['Repair is off', 'Geometry repair edits your data, so it stays off until you turn it on, and reports every change it makes.'],
+    [
+      'An edit is replayed against the whole file, not the preview',
+      'Moving, rotating, offsetting or deleting on the canvas records what you meant — "move these features by this much" — not a patch to the drawing on screen. At conversion the source file is re-read in full and your edits are re-applied to it, so nothing depends on the preview having held every feature. The queued edits are listed on the item, and the last one can be taken back or all of them discarded before you convert.',
+    ],
+    [
+      'The canvas shows the first 5,000 features of a layer',
+      'A larger layer is drawn up to that point and says so. All of it converts — the cap is on what is drawn, not on what is read or written — but a click, a rubber band or a lasso can only reach a feature that is on screen, so a selection gesture on a truncated layer reaches the first 5,000. Select the layer as a whole and the edit applies to every feature in it.',
+    ],
+    [
+      'A backdrop that is not georeferenced is marked, not trusted',
+      'A scanned plan or PDF placed behind your data with a world file or three or more control points is georeferenced, and the fit residual is reported. Placed by scaling between two points it is not: it is drawn with a dashed border, and digitising from it produces coordinates no better than that placement.',
+    ],
+    [
+      'A digitised point is the coordinate you snapped to',
+      'When a drawing tool snaps to an existing vertex, the vertex is copied exactly rather than re-derived from the pixel you clicked. Snapping to a surveyed corner gives back that corner, bit for bit, not a value rounded through the screen.',
+    ],
   ];
   for (const [title, text] of rules) body.append(messageBlock('info', title, text));
 
@@ -871,12 +890,30 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
     // difference between offering a service and shipping somebody's key in a
     // public repository for every install to spend.
     section.append(element('h4', { class: 'section__subtitle', text: 'Start from a service that needs your own key' }));
+
+    // The key is asked for HERE, next to the buttons, and substituted into the
+    // template by `applyPreset`. Storing the raw template instead — which this
+    // did — left a literal `{key}` in the URL box, so every tile request 404'd
+    // until the user noticed the placeholder and hand-edited a URL. A field is
+    // cheaper than a note telling someone to edit a URL correctly.
+    let pendingKey = '';
+    section.append(
+      textField('Your key for the service below', pendingKey, (value) => {
+        pendingKey = value;
+      })
+    );
+
     const presets = element('div', { class: 'stack' });
     for (const preset of TILE_PRESETS) {
       const row = element('div', { class: 'row' });
       const button = element('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: preset.name });
       button.addEventListener('click', () => {
-        void store.patchSettings({ basemapCustomUrl: preset.template });
+        void store.patchSettings({
+          basemapCustomUrl: applyPreset(preset, pendingKey),
+          // Remembered so the canvas can credit this service and stop at the
+          // zoom it actually serves.
+          basemapPresetId: preset.id,
+        });
         host.render();
       });
       row.append(button);
@@ -886,6 +923,16 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
     section.append(presets);
 
     section.append(
+      element('p', {
+        class: 'small faint',
+        text:
+          'Type your key first, then press a service. The key is stored in this browser profile only — ' +
+          'it is never sent anywhere except to that tile service, and it is stripped out of project files ' +
+          'and reports before they are written.',
+      })
+    );
+
+    section.append(
       messageBlock(
         'info',
         'Use {z}, {x} and {y} — for example https://your-server/tiles/{z}/{x}/{y}.png',
@@ -893,7 +940,7 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
         // endpoints in directly is what most examples do, and it would put the
         // user in breach of terms they never agreed to.
         'Google and Bing are not built-in choices because their tile endpoints are not licensed for direct use outside their own APIs — a public MIT-licensed extension shipping one would put every person who installs it in breach of terms they never saw. If you hold a Google Maps Tile API key, an organisational WMTS, or a departmental imagery service, start from a preset above or paste your endpoint and it will be used under whatever terms you actually hold. For satellite imagery without any of that, Esri World Imagery in the list above is keyless.',
-        'You are responsible for the terms and the attribution of a service you supply. Replace {key} with your own key before it will load.'
+        'You are responsible for the terms and the attribution of a service you supply. A URL still containing {key} will not load — fill the key box above in before pressing a service, or replace the placeholder here.'
       )
     );
   }
@@ -953,7 +1000,7 @@ function aboutSection(): HTMLElement {
   const version = chrome.runtime?.getManifest?.()?.version ?? '';
   section.append(
     keyValues([
-      ['Universal BhuNex Converter', version ? `Version ${version}` : '—'],
+      ['BhuNex GIS Converter', version ? `Version ${version}` : '—'],
       ['Author', AUTHOR],
       ['Licence', `MIT — Copyright © ${AUTHOR}`],
     ])
@@ -962,7 +1009,7 @@ function aboutSection(): HTMLElement {
   const feedback = element('p', { class: 'small', style: 'margin:10px 0 0' });
   feedback.append(document.createTextNode('Found something wrong, or need a format that is not here? Write to '));
   const link = element('a', {
-    href: `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent('Universal BhuNex Converter feedback')}`,
+    href: `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent('BhuNex GIS Converter feedback')}`,
     text: FEEDBACK_EMAIL,
   }) as HTMLAnchorElement;
   // A conversion that went wrong is worth more as a bug report than as a

@@ -419,7 +419,7 @@ shoot(
     `<div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:15px;
                 background:radial-gradient(circle at 50% 38%, #16272f 0%, #0d1117 72%);text-align:center;padding:18px">
       ${logo(84)}
-      <div style="font-size:24px;font-weight:660;letter-spacing:-0.015em;line-height:1.2">Universal BhuNex Converter</div>
+      <div style="font-size:24px;font-weight:660;letter-spacing:-0.015em;line-height:1.2">BhuNex GIS Converter</div>
       <div style="font-size:15px;color:#adb6c0;line-height:1.55">GIS · CAD · Survey · LiDAR · Mining<br>
         <span style="color:#10b9a8;font-weight:500">Converted offline, on your machine</span></div>
     </div>`,
@@ -436,7 +436,7 @@ shoot(
                 background:radial-gradient(circle at 22% 50%, #16272f 0%, #0d1117 62%)">
       ${logo(190)}
       <div>
-        <div style="font-size:52px;font-weight:680;letter-spacing:-0.025em;line-height:1.12">Universal BhuNex Converter</div>
+        <div style="font-size:52px;font-weight:680;letter-spacing:-0.025em;line-height:1.12">BhuNex GIS Converter</div>
         <div style="font-size:25px;color:#9198a1;margin-top:16px;line-height:1.45">
           Convert GIS, CAD, survey, LiDAR and mining data<br>
           <span style="color:#10b9a8">entirely on your own machine.</span>

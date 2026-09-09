@@ -37,8 +37,24 @@ export const SECRET_NAME_PATTERN =
  */
 export const SECRET_VALUE_PATTERN = /^(bearer\s+\S+|eyJ[A-Za-z0-9_-]{10,}\.|sk-[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,})/i;
 
-/** A URL carrying credentials in its authority or a signed query. */
-export const CREDENTIALED_URL = /^https?:\/\/[^/\s]*:[^/\s]*@|[?&](sig|signature|token|access_token|key)=/i;
+/**
+ * A URL carrying credentials in its authority or a signed query.
+ *
+ * The query half matches a parameter whose name ENDS in a credential word,
+ * rather than a fixed list of parameter names. The fixed list was wrong in the
+ * way a fixed list always is: it held `access_token` and `key`, so it caught
+ * Google's `&key=`, and let through `?api_key=` (Stadia) and `?access-token=`
+ * (Jawg) — two of the four tile services this extension itself offers as
+ * presets. A user who pasted their Stadia key into the custom tile URL and then
+ * saved a project file shipped that key inside it.
+ *
+ * `[^=&\s]*` before the word is what makes the prefix free, and requiring the
+ * word to be followed immediately by `=` is what keeps it tight: `?api_key=`,
+ * `?access-token=` and `?subscription-key=` all match, while `?keyword=` does
+ * not, because `key` there is not the end of the parameter name.
+ */
+export const CREDENTIALED_URL =
+  /^https?:\/\/[^/\s]*:[^/\s]*@|[?&][^=&\s]*(?:sig|signature|token|key|secret|password|passwd|auth)=/i;
 
 export interface SanitisedProperties {
   safe: Record<string, unknown>;

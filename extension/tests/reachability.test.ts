@@ -527,3 +527,77 @@ describe('rasterizing polygons, which was built and unreachable', () => {
     expect(written.features[0].properties.landuse).toBe(7);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The tile presets, and whether anything reads what they carry
+// ---------------------------------------------------------------------------
+
+describe('the key-holding tile presets are wired to something', () => {
+  const SETTINGS = read('extension', 'src', 'workspace', 'panels', 'settings.ts');
+  const CANVAS = read('extension', 'src', 'workspace', 'panels', 'canvas.ts');
+
+  it('fills the user’s key into the template rather than storing the placeholder', () => {
+    // The preset button stored `preset.template` verbatim, so pressing one left
+    // a literal `{key}` in the URL box and every tile request 404'd. The
+    // substitution function existed, was tested, and was called by nothing.
+    expect(SETTINGS).toContain('applyPreset(preset');
+    expect(SETTINGS).not.toMatch(/basemapCustomUrl:\s*preset\.template/);
+  });
+
+  it('remembers which preset a custom URL came from', () => {
+    expect(SETTINGS).toContain('basemapPresetId: preset.id');
+  });
+
+  it('credits the preset’s service on the canvas instead of nobody', () => {
+    // `TilePreset.attribution` was populated for all four presets and read by
+    // nothing: a Stadia or Jawg canvas credited "Custom tile service — check
+    // its attribution requirements", which is not the credit their terms
+    // require and which the tool already had the text for.
+    expect(CANVAS).toContain('preset.attribution');
+  });
+
+  it('stops at the zoom the preset’s service actually serves', () => {
+    // Every custom URL was given maxZoom 22, including presets that stop at 20
+    // — so panning in far enough asked those services for tiles they do not
+    // have, and the basemap went blank for no stated reason.
+    expect(CANVAS).toContain('preset.maxZoom');
+    expect(CANVAS).not.toMatch(/attribution: 'Custom tile service[^']*',\s*\n\s*maxZoom: 22,\s*\n\s*\};/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the Help dialog claims, against what the tool does
+// ---------------------------------------------------------------------------
+
+describe('the Help dialog does not describe an older tool', () => {
+  const SETTINGS = read('extension', 'src', 'workspace', 'panels', 'settings.ts');
+  const help = /export function openHelpDialog\(\): void \{[^]*?\n\}/.exec(SETTINGS)?.[0] ?? '';
+
+  it('was found at all', () => {
+    expect(help.length, 'openHelpDialog no longer matches — this whole block is checking nothing').toBeGreaterThan(500);
+  });
+
+  it('does not claim the DWG helper is the only thing that leaves the machine', () => {
+    // It said exactly that, and kept saying it after the basemap shipped. The
+    // Settings dialog was honest about tiles; Help was not, which is the worse
+    // of the two places to be wrong because it is the one people read to decide
+    // whether to trust the tool with a confidential survey.
+    expect(help).not.toMatch(/only exception is the optional DWG helper/);
+    expect(help.toLowerCase()).toContain('basemap');
+  });
+
+  it('explains that an edit is replayed against the whole file', () => {
+    // The single most surprising thing about the editing workstation: the
+    // canvas holds a truncated preview, and a gesture on it is stored as an
+    // intent that is re-planned against the full file at conversion.
+    expect(help).toMatch(/replayed against the whole file/i);
+  });
+
+  it('states the preview cap that a selection gesture is bounded by', () => {
+    expect(help).toContain('5,000');
+  });
+
+  it('warns that a two-point backdrop placement is not a georeference', () => {
+    expect(help.toLowerCase()).toContain('backdrop');
+  });
+});

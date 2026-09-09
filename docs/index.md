@@ -1,4 +1,4 @@
-# Universal BhuNex Converter
+# BhuNex GIS Converter
 
 Convert GIS, survey, CAD, LiDAR and mining data **entirely on your own machine**.
 Nothing is uploaded.

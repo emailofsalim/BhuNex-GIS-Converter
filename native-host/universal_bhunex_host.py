@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Universal BhuNex Converter — Chrome native messaging host.
+"""BhuNex GIS Converter — Chrome native messaging host.
 
 A Chrome extension cannot execute a native converter, so DWG support runs
 through this small local helper, which drives the user's own installed ODA File
@@ -298,6 +298,10 @@ def handle(message: dict[str, Any]) -> dict[str, Any]:
     engine = engine_info(config)
 
     if operation == "ping":
+        # The `host` value is the protocol identity, not the product name, so it
+        # stays as it is through the rename to BhuNex GIS Converter — matching
+        # HOST_NAME and this file's own name, both of which a helper installed
+        # before the rename still has on disk.
         return {"id": message_id, "ok": True, "result": {"host": "universal-bhunex-converter", "version": HOST_VERSION}, "engine": engine.to_dict()}
 
     if operation == "health":

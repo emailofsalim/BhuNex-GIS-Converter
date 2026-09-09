@@ -147,7 +147,7 @@ export function buildProject(options: SaveProjectOptions): ProjectFile {
 
   return {
     formatVersion: PROJECT_FORMAT_VERSION,
-    product: 'Universal BhuNex Converter',
+    product: 'BhuNex GIS Converter',
     productVersion: options.productVersion,
     name: options.name,
     savedAt: (options.now ?? new Date()).toISOString(),

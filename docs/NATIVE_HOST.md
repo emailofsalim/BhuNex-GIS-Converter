@@ -1,6 +1,6 @@
 # Native engine — DWG support
 
-Everything else in Universal BhuNex Converter runs inside the browser. DWG cannot:
+Everything else in BhuNex GIS Converter runs inside the browser. DWG cannot:
 it is a proprietary binary format with no open reader that can be bundled, and a
 Chrome extension may not execute a native program directly.
 

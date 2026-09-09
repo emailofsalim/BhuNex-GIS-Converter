@@ -1,5 +1,5 @@
 /**
- * Universal BhuNex Converter workspace.
+ * BhuNex GIS Converter workspace.
  *
  * Framework-free: the workspace has one state tree and a handful of views, and a
  * render-on-change loop is the whole requirement. It also keeps the bundle small
@@ -617,7 +617,7 @@ async function boot(): Promise<void> {
   store.subscribe(() => {
     /* views re-render explicitly; the subscription keeps the store honest */
   });
-  store.log('info', 'Universal BhuNex Converter ready. All processing is local.');
+  store.log('info', 'BhuNex GIS Converter ready. All processing is local.');
   render();
   void refreshNative();
 }

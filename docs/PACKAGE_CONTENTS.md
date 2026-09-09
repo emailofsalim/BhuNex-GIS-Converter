@@ -19,7 +19,7 @@ tree.
 folder.
 
 ```
-universal-bhunex-converter-1.0.5.zip     17 entries, 0.35 MB
+bhunex-gis-converter-1.0.5.zip     17 entries, 0.35 MB
 ├── manifest.json               ← at the ROOT. Not in a subfolder.
 ├── INSTALL-FIRST.txt
 ├── service-worker.js
@@ -43,7 +43,7 @@ universal-bhunex-converter-1.0.5.zip     17 entries, 0.35 MB
 ```
 
 **Why the root matters.** If the archive contains
-`universal-bhunex-converter/manifest.json`, the user extracts it, selects the
+`bhunex-gis-converter/manifest.json`, the user extracts it, selects the
 folder they just extracted, and the browser reports *"Manifest file is missing
 or unreadable"* — because the manifest is one level further down. This is one of
 the three common causes of that message.
