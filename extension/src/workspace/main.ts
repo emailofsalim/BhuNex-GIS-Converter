@@ -44,6 +44,7 @@ import { historyPanel, stepHistory } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
+import { renderSelect, selectTab } from './panels/select-tab';
 import { openHelpDialog, openSettingsDialog, renderSettingsPanel } from './panels/settings';
 import { openProject, workflowsPanel } from './panels/workflows';
 import { ui } from './ui-state';
@@ -90,17 +91,37 @@ function render(): void {
   dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
   $('inspectorTabs').classList.toggle('hidden', !selected);
   const usesCanvas =
-    state.inspectorTab === 'preview' || state.inspectorTab === 'edit' || state.inspectorTab === 'geometry-ops';
+    state.inspectorTab === 'preview' ||
+    state.inspectorTab === 'edit' ||
+    state.inspectorTab === 'select' ||
+    state.inspectorTab === 'geometry-ops';
   $('previewWrap').classList.toggle('hidden', !usesCanvas || !selected);
   $('editBar').classList.toggle('hidden', state.inspectorTab !== 'edit' || !selected);
+  $('selectBar').classList.toggle('hidden', state.inspectorTab !== 'select' || !selected);
   // Leaving the Edit tab turns editing off, so a stray Delete on another tab
   // cannot reach a vertex.
   if (state.inspectorTab !== 'edit') ui.editCanvas?.setEnabled(false);
   // Same rule for measuring: leaving the tab that owns a tool turns the tool
   // off, so a click on another tab's canvas cannot land a stray point.
   if (state.inspectorTab !== 'preview') stopMeasuring();
+  // And the same for selecting: a rubber band belongs to the tab that owns it,
+  // and a drag started on the Preview tab must not commit a translate.
+  if (state.inspectorTab !== 'select') ui.toolCanvas?.setEnabled(false);
+  updateSelectBar();
   updateMeasureBar(selected ?? undefined);
   $('compareWrap').classList.toggle('hidden', state.inspectorTab !== 'compare' || !selected);
+}
+
+/** Keeps the canvas toolbar's active tool in step with the tool layer. */
+function updateSelectBar(): void {
+  const active = ui.toolCanvas?.getTool() ?? 'select';
+  for (const [id, tool] of [
+    ['selectToolSelect', 'select'],
+    ['selectToolLasso', 'lasso'],
+    ['selectToolMove', 'move'],
+  ] as const) {
+    $(id).classList.toggle('btn--on', active === tool);
+  }
 }
 
 function renderInspector(): void {
@@ -147,6 +168,13 @@ function renderInspector(): void {
       // giving it a tab of its own would mean two canvases showing the same
       // data with different tools on them.
       renderMeasure(item);
+      break;
+    case 'select':
+      body.append(...selectTab(item));
+      // The canvas is not optional here: the whole point of the tab is the
+      // gesture, and a panel with no drawing to gesture on is a settings form.
+      renderPreview(item);
+      renderSelect(item);
       break;
     case 'edit':
       body.append(...editTab(item));
@@ -422,6 +450,17 @@ function wire(): void {
   ($('editSnap') as HTMLInputElement).addEventListener('change', (event) => {
     void store.patchSettings({ editSnapEnabled: (event.target as HTMLInputElement).checked });
   });
+
+  for (const [id, tool] of [
+    ['selectToolSelect', 'select'],
+    ['selectToolLasso', 'lasso'],
+    ['selectToolMove', 'move'],
+  ] as const) {
+    $(id).addEventListener('click', () => {
+      ui.toolCanvas?.setTool(tool);
+      render();
+    });
+  }
 
   $('compareFitBtn').addEventListener('click', () => ui.dualCanvas?.fit());
   $('compareGridBtn').addEventListener('click', () => ui.dualCanvas?.toggleGrid());

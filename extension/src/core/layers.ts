@@ -42,6 +42,48 @@ import { collectGeometryTypes } from './cir';
 // View state
 // =========================================================================
 
+/**
+ * How a layer's outline is drawn.
+ *
+ * A line type is a drawing convention with meaning attached: on a survey sheet
+ * a dashed line is a boundary under dispute or a service below ground, and a
+ * dash-dot is a centreline. Offering them is not decoration — it is how the
+ * exported legend ends up saying something.
+ */
+export type LineType = 'solid' | 'dashed' | 'dotted' | 'dash-dot';
+
+export const LINE_TYPES: LineType[] = ['solid', 'dashed', 'dotted', 'dash-dot'];
+
+export const LINE_TYPE_LABEL: Record<LineType, string> = {
+  solid: 'Solid',
+  dashed: 'Dashed',
+  dotted: 'Dotted',
+  'dash-dot': 'Dash-dot',
+};
+
+/**
+ * Dash patterns in SCREEN PIXELS, not ground units.
+ *
+ * A pattern in ground units would vanish when zoomed out and become one long
+ * stroke when zoomed in, which is exactly what a line type must not do: its
+ * whole job is to stay recognisable at any scale.
+ */
+const DASH_PATTERNS: Record<LineType, number[]> = {
+  solid: [],
+  dashed: [8, 5],
+  dotted: [1.5, 4],
+  'dash-dot': [10, 4, 2, 4],
+};
+
+export function dashPattern(type: LineType): number[] {
+  return DASH_PATTERNS[type] ?? [];
+}
+
+/** Line widths a user may choose, in screen pixels. */
+export const MIN_LINE_WIDTH = 0.5;
+export const MAX_LINE_WIDTH = 8;
+export const DEFAULT_LINE_WIDTH = 1.2;
+
 export interface LayerViewEntry {
   hidden?: boolean;
   /** A locked layer refuses every editing operation, including bulk ones. */
@@ -50,6 +92,10 @@ export interface LayerViewEntry {
   opacity?: number;
   /** Overrides the layer's own style in the preview only. */
   colour?: string;
+  /** Stroke width in SCREEN pixels. Absent means the renderer's default. */
+  lineWidth?: number;
+  /** Absent means solid. */
+  lineType?: LineType;
 }
 
 export interface LayerViewState {
@@ -83,6 +129,33 @@ export function isLocked(view: LayerViewState, layer: string): boolean {
 export function opacityOf(view: LayerViewState, layer: string): number {
   const value = entryOf(view, layer).opacity;
   return value === undefined ? 1 : Math.max(0, Math.min(1, value));
+}
+
+/**
+ * The stroke width for a layer, clamped to something drawable.
+ *
+ * Clamped rather than trusted: a width of 0 draws nothing at all, and a project
+ * file carrying a width of 400 from a hand-edited JSON would paint the canvas a
+ * solid colour. Neither reads as a settings problem when it happens.
+ */
+export function lineWidthOf(view: LayerViewState, layer: string, fallback = DEFAULT_LINE_WIDTH): number {
+  const value = entryOf(view, layer).lineWidth;
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(MIN_LINE_WIDTH, Math.min(MAX_LINE_WIDTH, value));
+}
+
+export function lineTypeOf(view: LayerViewState, layer: string): LineType {
+  const value = entryOf(view, layer).lineType;
+  return value !== undefined && LINE_TYPES.includes(value) ? value : 'solid';
+}
+
+/** The colour override for a layer, or null to keep the palette's own. */
+export function colourOf(view: LayerViewState, layer: string): string | null {
+  const value = entryOf(view, layer).colour;
+  // A colour has to be one the canvas will accept; a bad string silently makes
+  // `strokeStyle` keep its PREVIOUS value, so the layer takes on the colour of
+  // whichever layer was drawn before it.
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : null;
 }
 
 export function setView(view: LayerViewState, layer: string, patch: LayerViewEntry): LayerViewState {

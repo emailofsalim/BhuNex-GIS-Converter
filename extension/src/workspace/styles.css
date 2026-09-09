@@ -1867,6 +1867,52 @@ details.adv > div {
   flex: none;
 }
 
+/* Per-layer style controls, sized so a whole row still fits at tablet width. */
+.lm__colour {
+  width: 26px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.lm__width {
+  width: 52px;
+  flex: none;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.lm__lineType {
+  width: 84px;
+  flex: none;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* Below tablet the row runs out of width long before it runs out of controls.
+   The style trio is the first thing to go: it is a refinement, while the eye,
+   the padlock and the name are how the list is navigated at all. */
+@media (max-width: 720px) {
+  .lm__colour,
+  .lm__width,
+  .lm__lineType,
+  .lm__opacity {
+    display: none;
+  }
+}
+
 .lm__ops,
 .at__ops {
   display: flex;

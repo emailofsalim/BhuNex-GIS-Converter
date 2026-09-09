@@ -35,6 +35,8 @@ import type { DualCanvas } from '../ui/dual-canvas';
 import type { EditCanvas, EditTarget } from '../ui/edit-canvas';
 import type { MeasureCanvas } from '../ui/measure-canvas';
 import type { PreviewCanvas } from '../ui/preview';
+import type { ToolCanvas } from '../ui/tool-canvas';
+import type { Selection } from '../core/selection';
 import type { VertexRef } from '../core/vertex-edit';
 
 export interface UiState {
@@ -54,6 +56,17 @@ export interface UiState {
   editSelection: VertexRef[];
   /** The feature being edited: which layer, which index. */
   editTarget: EditTarget | null;
+  /** The selecting-and-moving interaction layer, drawn over `previewCanvas`. */
+  toolCanvas: ToolCanvas | null;
+  /**
+   * FEATURES currently selected, which is a different thing from `editSelection`.
+   *
+   * The vertex editor selects VERTICES inside one open feature; this selects
+   * whole features across layers, and is what a transform is applied to. Keeping
+   * them apart is deliberate: sharing one list would make Delete in the vertex
+   * editor able to reach a feature the user picked on another tab.
+   */
+  featureSelection: Selection;
   /** Ctrl/Cmd+K. Created once at boot. */
   palette: CommandPalette | null;
   /**
@@ -80,6 +93,8 @@ export const ui: UiState = {
   measureCanvas: null,
   editSelection: [],
   editTarget: null,
+  toolCanvas: null,
+  featureSelection: { refs: [], wholeLayers: [] },
   palette: null,
   basemap: undefined,
 };

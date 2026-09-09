@@ -1,6 +1,14 @@
 /** Drawing: the single-dataset canvas, the dual canvas and the overlay legend. */
 
 import type { CrsRef } from '../../core/cir';
+import {
+  colourOf,
+  dashPattern,
+  isVisible,
+  lineTypeOf,
+  lineWidthOf,
+  opacityOf,
+} from '../../core/layers';
 import { WGS84_CRS } from '../../crs/epsg';
 import { crsLabel, planTransform } from '../../crs/transform';
 import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-overlay';
@@ -9,6 +17,7 @@ import { DualCanvas } from '../../ui/dual-canvas';
 import { Basemap, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
+import { viewOf } from './dataset';
 import { geometryPlanOverlay } from './geometry-ops';
 import { ui } from '../ui-state';
 
@@ -20,12 +29,20 @@ export function renderPreview(item: QueueItem): void {
   const data: PreviewData = { layers: [], truncated: false };
 
   if (dataset?.layers?.length) {
+    const view = viewOf(item);
     dataset.layers.forEach((layer: any, index: number) => {
       data.layers.push({
         name: layer.name,
-        visible: true,
-        color: LAYER_COLORS[index % LAYER_COLORS.length],
+        // Was hardcoded true, which made the eye and the padlock in the layer
+        // list decorative on this canvas. Visibility, colour, width, line type
+        // and opacity all come from the layer view now, so a control the user
+        // moves is a control that changes the picture.
+        visible: isVisible(view, layer.name),
+        color: colourOf(view, layer.name) ?? LAYER_COLORS[index % LAYER_COLORS.length],
         features: layer.preview ?? [],
+        lineWidth: lineWidthOf(view, layer.name),
+        lineDash: dashPattern(lineTypeOf(view, layer.name)),
+        opacity: opacityOf(view, layer.name),
       });
       if (layer.previewTruncated) data.truncated = true;
     });
