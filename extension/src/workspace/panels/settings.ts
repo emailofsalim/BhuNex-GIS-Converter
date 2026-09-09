@@ -244,6 +244,115 @@ export function renderSettingsPanel(): void {
     panel.append(contourTools(state.settings, item.dataset.raster));
     panel.append(vectorizeTools(state.settings, item.dataset.raster));
   }
+
+  // The inverse: polygons into a grid. Shown only for a file that HAS polygons,
+  // for the same reason contours are shown only for a raster with pixels —
+  // offering an operation that can only refuse is worse than not offering it.
+  if (item?.dataset?.kind === 'vector' && hasPolygons(item.dataset)) {
+    panel.append(rasterizeTools(state.settings, item.dataset));
+  }
+}
+
+/** Whether any layer holds closed rings, which is all rasterizing can burn. */
+function hasPolygons(dataset: { layers?: { geometryTypes?: string[] }[] }): boolean {
+  return (dataset.layers ?? []).some((layer) =>
+    (layer.geometryTypes ?? []).some((type) => String(type).includes('Polygon'))
+  );
+}
+
+/**
+ * Burning polygons into a grid (spec §16, the inverse of vectorize).
+ *
+ * ONE number is asked for, and it is the one a surveyor actually has in mind:
+ * the cell size. Width, height and the geotransform are derived from the
+ * layer's own extent, so the raster covers the data exactly rather than a box
+ * somebody had to type — and the resulting grid size is shown before anything
+ * runs, because "0.1 metre cells" over a district is a hundred-million-cell
+ * raster and the moment to find that out is now.
+ */
+function rasterizeTools(settings: AppSettings, dataset: any): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Rasterize polygons' }));
+  section.append(
+    element('p', {
+      class: 'small muted',
+      text: 'Burns the polygons in this file into a grid — a land-use raster, a mask, or a zone layer for analysis somewhere else. Choose a raster output format to receive it.',
+    })
+  );
+
+  section.append(
+    numberField('Cell size (0 = do not rasterize)', settings.rasterizeCellSize, 0.1, (value) =>
+      void store.patchSettings({ rasterizeCellSize: Math.max(0, value) })
+    )
+  );
+
+  if (settings.rasterizeCellSize > 0) {
+    const extent = extentOf(dataset);
+    if (extent) {
+      const width = Math.ceil((extent.maxX - extent.minX) / settings.rasterizeCellSize);
+      const height = Math.ceil((extent.maxY - extent.minY) / settings.rasterizeCellSize);
+      const cells = width * height;
+      section.append(
+        element('p', {
+          class: cells > 50_000_000 ? 'small' : 'small muted',
+          text: `${width.toLocaleString()} × ${height.toLocaleString()} cells — ${cells.toLocaleString()} in total.`,
+        })
+      );
+      if (cells > 50_000_000) {
+        section.append(
+          messageBlock(
+            'warn',
+            'That is a very large grid.',
+            `${cells.toLocaleString()} cells at 8 bytes each is roughly ${Math.round((cells * 8) / 1e9)} GB before compression, which the browser will not hold.`,
+            'Use a larger cell size, or clip the layer to the area you actually need first.'
+          )
+        );
+      }
+    }
+
+    const fields: string[] = [
+      ...new Set((dataset.layers ?? []).flatMap((layer: any) => (layer.fields ?? []).map((field: any) => field.name))),
+    ] as string[];
+    const fieldRow = element('div', { class: 'field' });
+    fieldRow.append(element('label', { class: 'field__label', text: 'Value to burn' }));
+    const select = element('select', { class: 'select' }) as HTMLSelectElement;
+    select.append(element('option', { value: '', text: '1 everywhere (a mask)' }));
+    for (const name of fields) select.append(element('option', { value: name, text: name }));
+    select.value = settings.rasterizeField;
+    select.addEventListener('change', () => void store.patchSettings({ rasterizeField: select.value }));
+    fieldRow.append(select);
+    fieldRow.append(
+      element('p', {
+        class: 'small faint',
+        text: 'A raster cell holds a number, so only numeric fields carry through. Where polygons overlap, the one later in the layer wins — the convention every GIS uses, and the only predictable one.',
+      })
+    );
+    section.append(fieldRow);
+  }
+
+  return section;
+}
+
+/** The extent of a dataset's drawn features, for the grid-size preview. */
+function extentOf(dataset: any): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node) && typeof node[0] === 'number') {
+      minX = Math.min(minX, node[0]);
+      maxX = Math.max(maxX, node[0]);
+      minY = Math.min(minY, node[1]);
+      maxY = Math.max(maxY, node[1]);
+      return;
+    }
+    if (Array.isArray(node)) for (const child of node) walk(child);
+  };
+  for (const layer of (dataset.layers ?? []) as any[]) {
+    for (const feature of (layer.preview ?? []) as any[]) walk(feature.geometry?.coordinates);
+  }
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
 }
 
 /**

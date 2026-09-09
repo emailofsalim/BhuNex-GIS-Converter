@@ -429,3 +429,101 @@ describe('the local gate covers what CI runs', () => {
     }
   });
 });
+
+describe('rasterizing polygons, which was built and unreachable', () => {
+  // `rasterizePolygons` had been correct and tested since the raster tools
+  // landed, and nothing outside its own module and test file called it: it
+  // needed a target grid nothing asked for. The ledger said so honestly rather
+  // than counting it as done, which is why this was finished rather than found.
+  //
+  // The missing piece was arithmetic, not an engine — a user has a CELL SIZE in
+  // mind, never a width, a height and a geotransform.
+  const GEOJSON = JSON.stringify({
+    type: 'FeatureCollection',
+    crs: { type: 'name', properties: { name: 'urn:ogc:def:crs:EPSG::32645' } },
+    features: [
+      {
+        type: 'Feature',
+        properties: { landuse: 7 },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]]],
+        },
+      },
+    ],
+  });
+
+  async function run(rasterize: Record<string, unknown> | undefined, target = 'asciigrid') {
+    const { convert } = await import('@core/pipeline');
+    const { SURVEY_DEFAULT_PRECISION } = await import('@core/precision');
+    return convert({
+      input: { fileName: 'plots.geojson', bytes: new TextEncoder().encode(GEOJSON) },
+      targetFormatId: target,
+      settings: { precision: SURVEY_DEFAULT_PRECISION, runQa: false, rasterize: rasterize as never },
+    });
+  }
+
+  it('produces a grid whose size follows the cell size and the extent', async () => {
+    const result = await run({ cellSize: 10 });
+    const text = new TextDecoder().decode(result.outputs[0].bytes);
+    // A 100x100 extent at 10-unit cells is 10x10.
+    expect(text).toMatch(/ncols\s+10/);
+    expect(text).toMatch(/nrows\s+10/);
+    expect(text).toMatch(/cellsize\s+10/);
+  });
+
+  it('rounds the grid UP so it covers the whole extent', async () => {
+    // 100 / 30 is 3.33: rounding down would crop the last row and column, which
+    // on a cadastral sheet is the boundary of the outermost parcels.
+    const text = new TextDecoder().decode((await run({ cellSize: 30 })).outputs[0].bytes);
+    expect(text).toMatch(/ncols\s+4/);
+    expect(text).toMatch(/nrows\s+4/);
+  });
+
+  it('burns 1 everywhere when no field is named — a mask', async () => {
+    const text = new TextDecoder().decode((await run({ cellSize: 25 })).outputs[0].bytes);
+    const body = text.split('\n').filter((line) => /^[\d\s.-]+$/.test(line) && line.trim()).join(' ');
+    expect(body).toContain('1');
+    expect(body).not.toContain('7');
+  });
+
+  it('burns the named field when there is one', async () => {
+    const text = new TextDecoder().decode((await run({ cellSize: 25, field: 'landuse' })).outputs[0].bytes);
+    expect(text).toContain('7');
+  });
+
+  it('says what it did, with the grid it produced', async () => {
+    const warnings = (await run({ cellSize: 10 })).warnings.map((w) => `${w.message} ${w.reason ?? ''}`).join(' ');
+    expect(warnings).toContain('10 × 10');
+    expect(warnings).toContain('mask');
+  });
+
+  it('refuses a cell size that is not positive, rather than producing nothing', async () => {
+    await expect(run({ cellSize: -5 })).rejects.toThrow(/positive number/);
+  });
+
+  it('refuses a layer with no closed rings', async () => {
+    const { convert } = await import('@core/pipeline');
+    const { SURVEY_DEFAULT_PRECISION } = await import('@core/precision');
+    const lines = JSON.stringify({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[0, 0], [10, 10]] } }],
+    });
+    await expect(
+      convert({
+        input: { fileName: 'lines.geojson', bytes: new TextEncoder().encode(lines) },
+        targetFormatId: 'asciigrid',
+        settings: { precision: SURVEY_DEFAULT_PRECISION, runQa: false, rasterize: { cellSize: 5 } },
+      })
+    ).rejects.toThrow(/polygon/i);
+  });
+
+  it('leaves a conversion that did not ask for it completely alone', async () => {
+    // The risk of adding a pipeline stage: every conversion that omits the
+    // setting must produce exactly the bytes it always did.
+    const result = await run(undefined, 'geojson');
+    const written = JSON.parse(new TextDecoder().decode(result.outputs[0].bytes));
+    expect(written.features[0].geometry.type).toBe('Polygon');
+    expect(written.features[0].properties.landuse).toBe(7);
+  });
+});

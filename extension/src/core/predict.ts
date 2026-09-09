@@ -116,6 +116,20 @@ export interface PredictOptions {
   preserveZ?: boolean;
   /** Decimal places when precision is fixed; undefined means full precision. */
   precisionDecimals?: number;
+  /**
+   * True when the conversion will burn polygons into a grid.
+   *
+   * Without it, vector to raster is genuinely impossible and the refusal below
+   * is correct: there is no grid to burn into. WITH it the user has supplied a
+   * cell size, so the path exists — and this is the flag that tells the gate
+   * the difference.
+   *
+   * This is why `rasterizePolygons` sat unreachable. The engine was complete
+   * and the pre-flight rejected the conversion before it could ever run,
+   * saying "no engine converts between them" about an engine that was right
+   * there.
+   */
+  rasterizing?: boolean;
 }
 
 const WORST: Record<FidelityGrade, number> = { green: 0, yellow: 1, red: 2 };
@@ -330,7 +344,7 @@ export function predictFromProfile(profile: DatasetProfile, targetFormatId: stri
     });
   }
 
-  const kindFinding = checkDataKind(profile.kind, format);
+  const kindFinding = checkDataKind(profile.kind, format, options);
   if (kindFinding) return blockedPrediction(format.id, format.name, kindFinding);
 
   // --- axis by axis --------------------------------------------------------
@@ -375,10 +389,16 @@ function blockedPrediction(id: string, name: string, finding: Omit<FidelityFindi
  * cannot become vector without a vectoriser; neither is built. Saying so up
  * front is better than a writer-level refusal halfway through a batch.
  */
-function checkDataKind(from: DataKind, format: FormatDef): FidelityFinding | null {
+function checkDataKind(from: DataKind, format: FormatDef, options: PredictOptions = {}): FidelityFinding | null {
   const to = format.dataKind;
   if (from === to) return null;
   if (to === 'sidecar' || to === 'archive') return null;
+
+  // Vector to raster is possible only when a cell size has been given. That is
+  // the whole difference between an impossible conversion and a configured
+  // one, so it is checked here rather than added to the table below — the
+  // table describes paths that always exist.
+  if (from === 'vector' && to === 'raster' && options.rasterizing) return null;
 
   // The genuinely supported cross-kind paths.
   const allowed: Record<string, string[]> = {

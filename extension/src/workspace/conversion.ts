@@ -251,6 +251,10 @@ export function buildSettings(): Partial<ConversionSettings> {
     // A zero interval is how "do not contour" is expressed, so the whole
     // option is absent rather than present-and-zero: the pipeline treats an
     // interval of 0 as a refusal, and it should never see one.
+    rasterize:
+      settings.rasterizeCellSize > 0
+        ? { cellSize: settings.rasterizeCellSize, field: settings.rasterizeField || undefined }
+        : undefined,
     contours:
       settings.contourInterval > 0
         ? {
