@@ -1425,6 +1425,34 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
 
   for (const unit of plan.units) {
     const written = await writeTarget(unit.dataset, target.id, unit.baseName, settings);
+
+    // A writer that produced nothing is never a success.
+    //
+    // Found by sweeping for exports nothing calls: `writeShapefileZip` carried
+    // exactly this refusal and was dead, while the reachable path — which uses
+    // `buildShapefile` directly — had no such check. A dataset whose features
+    // all have null geometry (attribute rows from a spreadsheet, a GeoJSON with
+    // `"geometry": null`) grouped into zero shape packages, so the conversion
+    // reported SUCCESS and delivered an empty folder. No error, not one warning.
+    //
+    // The guard is here rather than in the shapefile case because the hole is
+    // structural: every writer returns a file list, and any of them returning
+    // an empty one is the same silent failure. Shapefile is merely the format
+    // where it was reachable today.
+    if (written.files.length === 0) {
+      throw new ConversionError({
+        code: 'NO_OUTPUT_WRITTEN',
+        what: `Converting to ${target.name} produced no file.`,
+        why:
+          `The writer had nothing to write: ${unit.dataset.layers.reduce((n, layer) => n + layer.features.length, 0)} ` +
+          `feature(s) reached it and none carried geometry this format can store. ` +
+          `A shapefile in particular has no way to record an attribute row with no shape.`,
+        action:
+          'Check the source in the inspector — geometry columns may not have been recognised, or a filter or edit may have removed every feature. ' +
+          'To deliver the attributes alone, convert to CSV, XLSX or GeoJSON, which can carry rows without geometry.',
+      });
+    }
+
     warnings.push(...written.warnings);
     if (firstWritten.length === 0) firstWritten = written.files;
 

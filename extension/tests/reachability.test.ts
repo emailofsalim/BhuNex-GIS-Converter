@@ -612,3 +612,55 @@ describe('a preset pressed with no key stays visibly unfinished', () => {
     expect(SETTINGS).toMatch(/pendingKey\.trim\(\)\s*\?\s*applyPreset\(preset, pendingKey\)\s*:\s*preset\.template/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A conversion that writes nothing is not a success
+// ---------------------------------------------------------------------------
+
+describe('a writer that produced no file refuses instead of delivering nothing', () => {
+  // Every feature has attributes and no shape. A shapefile has no way to record
+  // that: `buildShapefile` groups features by geometry kind, so it produced zero
+  // packages, the pipeline turned that into zero files, and the conversion
+  // reported SUCCESS with an empty delivery — no error, not one warning.
+  //
+  // The refusal existed the whole time, in `writeShapefileZip`, which nothing
+  // called. Found by sweeping for exports with no callers; the same sweep found
+  // the duplicate GCP fitter a session earlier.
+  const attributesOnly = JSON.stringify({
+    type: 'FeatureCollection',
+    crs: { type: 'name', properties: { name: 'EPSG:4326' } },
+    features: [
+      { type: 'Feature', properties: { plot: 'A1', owner: 'R. Devi' }, geometry: null },
+      { type: 'Feature', properties: { plot: 'A2', owner: 'S. Kumar' }, geometry: null },
+    ],
+  });
+
+  async function run(targetFormatId: string) {
+    const { convert } = await import('@core/pipeline');
+    const { SURVEY_DEFAULT_PRECISION } = await import('@core/precision');
+    return convert({
+      input: { fileName: 'attrs.geojson', bytes: new TextEncoder().encode(attributesOnly) },
+      targetFormatId,
+      settings: { precision: SURVEY_DEFAULT_PRECISION, runQa: false },
+    });
+  }
+
+  it('refuses rather than reporting success over an empty delivery', async () => {
+    await expect(run('shapefile')).rejects.toThrow(/produced no file/i);
+  });
+
+  it('names a format that CAN carry rows without geometry', async () => {
+    // A refusal that does not say what to do instead is a dead end. The
+    // attributes are real data the user still wants.
+    await expect(run('shapefile')).rejects.toThrow(/CSV|XLSX|GeoJSON/);
+  });
+
+  it('leaves the formats that can represent this alone', async () => {
+    // The guard must not turn a legitimate conversion into an error: GeoJSON
+    // and CSV can both hold an attribute row with no geometry, and do.
+    for (const target of ['geojson', 'csv']) {
+      const result = await run(target);
+      expect(result.outputs.length, target).toBeGreaterThan(0);
+    }
+  });
+});
