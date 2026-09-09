@@ -184,7 +184,7 @@ for (const entry of entries) contentOf(entry);
 /**
  * The manifest must be at the ROOT of the archive.
  *
- * If the ZIP contains `universal-bhunex-converter/manifest.json`, then after
+ * If the ZIP contains `bhunex-gis-converter/manifest.json`, then after
  * extraction the user must select the INNER folder, and selecting the one they
  * just extracted gives "Manifest file is missing or unreadable". Half the
  * reports of that message are this, and the other half are OneDrive.

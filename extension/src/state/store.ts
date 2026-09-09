@@ -168,6 +168,16 @@ export interface AppSettings {
   basemapProviderId: string;
   /** Used when `basemapProviderId` is 'custom'. */
   basemapCustomUrl: string;
+  /**
+   * The `TILE_PRESETS` entry the custom URL was started from, or ''.
+   *
+   * Remembered because a preset knows two things a bare URL cannot: who the
+   * service requires to be credited, and the zoom it stops at. Without this the
+   * custom path credited nobody and requested tiles up to z22 from services
+   * that stop at z20 — visibly blank tiles, and an attribution obligation
+   * quietly unmet.
+   */
+  basemapPresetId: string;
   basemapOpacity: number;
 
   /**
@@ -296,6 +306,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   basemapEnabled: false,
   basemapProviderId: 'osm',
   basemapCustomUrl: '',
+  basemapPresetId: '',
   basemapOpacity: 0.7,
   datumShift: null,
   checkCoverageGaps: false,

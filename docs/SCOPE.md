@@ -9,7 +9,7 @@
 That is the product. One deliverable, one target:
 
 - **Chrome Manifest V3 extension**, built to `dist/`, packaged to
-  `dist-zip/universal-bhunex-converter-<version>.zip`
+  `dist-zip/bhunex-gis-converter-<version>.zip`
 - Runs in **Google Chrome and Microsoft Edge** — both are Chromium, and the same
   package loads unchanged in either
 - Installed either by **sideloading the ZIP** (extract, Load unpacked) or from
@@ -17,7 +17,7 @@ That is the product. One deliverable, one target:
 - **Everything runs locally.** No server, no upload, no account. The build fails
   if a remote resource reaches the package.
 
-Everything in `docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt` is scoped
+Everything in `docs/BHUNEX_GIS_CONVERTER_BUILD_INSTRUCTIONS.txt` is scoped
 to that extension. The phase board in `docs/BUILD_STATE.md` tracks it.
 
 ---

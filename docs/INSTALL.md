@@ -1,4 +1,4 @@
-# Installing Universal BhuNex Converter
+# Installing BhuNex GIS Converter
 
 Works in **Chrome** and **Microsoft Edge** (both are Chromium, the steps are the
 same). Everything runs on your machine — no file is uploaded anywhere.
@@ -45,8 +45,8 @@ three different places in a row.
 
 1. Make a plain local folder. `C:\Extensions\` is a good choice. Avoid anything
    under `OneDrive`, `Desktop`, `Documents` or `Downloads` on a managed laptop.
-2. Extract `universal-bhunex-converter-<version>.zip` into it, so you have
-   `C:\Extensions\universal-bhunex-converter-1.0.0\manifest.json`.
+2. Extract `bhunex-gis-converter-<version>.zip` into it, so you have
+   `C:\Extensions\bhunex-gis-converter-1.0.0\manifest.json`.
 3. Load **that** folder.
 
 Keep it there permanently. The browser re-reads the folder at every start, so if
@@ -126,7 +126,7 @@ The same build, packaged so that `manifest.json` is at the top of the archive
 rather than one level down.
 
 1. <https://github.com/emailofsalim/Universal-Converter/releases>
-2. Download `universal-bhunex-converter-<version>.zip`.
+2. Download `bhunex-gis-converter-<version>.zip`.
 3. Extract it outside OneDrive, then Load unpacked → the extracted folder
    itself. `INSTALL-FIRST.txt` inside repeats these steps.
 
@@ -177,7 +177,7 @@ before it is released. Requires being signed in to GitHub.
 
 1. Open the **Actions** tab → the most recent green **CI** run.
 2. Scroll to **Artifacts**.
-3. Download `universal-bhunex-converter-unpacked`, unzip, and load the folder
+3. Download `bhunex-gis-converter-unpacked`, unzip, and load the folder
    as in Option A.
 
 ---

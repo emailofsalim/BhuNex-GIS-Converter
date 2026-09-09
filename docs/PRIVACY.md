@@ -1,7 +1,7 @@
-# Privacy Policy — Universal BhuNex Converter
+# Privacy Policy — BhuNex GIS Converter
 
 **Last updated: 7 September 2026**
-**Applies to: Universal BhuNex Converter browser extension, all versions**
+**Applies to: BhuNex GIS Converter browser extension, all versions**
 
 ---
 

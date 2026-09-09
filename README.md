@@ -1,4 +1,4 @@
-# Universal BhuNex Converter
+# BhuNex GIS Converter
 
 A Chrome Manifest V3 extension that converts GIS, geomatics, land-survey, CAD,
 LiDAR and mine-survey data **entirely on your own machine**.
@@ -61,7 +61,7 @@ its own manifest — so there is no wrong folder to pick.
 ### From a release
 
 **[Releases](https://github.com/emailofsalim/Universal-Converter/releases)** has
-`universal-bhunex-converter-<version>.zip` — the same build, already unwrapped
+`bhunex-gis-converter-<version>.zip` — the same build, already unwrapped
 so `manifest.json` sits at the top of the archive. Extract it and select the
 folder itself. `INSTALL-FIRST.txt` inside repeats these steps.
 
@@ -70,7 +70,7 @@ The identical archive is committed at
 
 ### For the Chrome Web Store or Edge Add-ons
 
-Upload `dist-zip/universal-bhunex-converter-<version>.zip` as it is. The listing
+Upload `dist-zip/bhunex-gis-converter-<version>.zip` as it is. The listing
 copy, permission justifications and data-use answers are written out in
 **[docs/STORE_LISTING.md](docs/STORE_LISTING.md)**, and the privacy policy both
 stores require is **[docs/PRIVACY.md](docs/PRIVACY.md)**.
@@ -382,7 +382,7 @@ it fires, the fix is to add the test, not to lower the claim.
 Provenance for the reused engines, the current phase board and the next tasks
 live in [docs/BUILD_STATE.md](docs/BUILD_STATE.md). The authoritative
 specification is
-[docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt](docs/UNIVERSAL_BHUNEX_CONVERTER_BUILD_INSTRUCTIONS.txt).
+[docs/BHUNEX_GIS_CONVERTER_BUILD_INSTRUCTIONS.txt](docs/BHUNEX_GIS_CONVERTER_BUILD_INSTRUCTIONS.txt).
 
 ---
 

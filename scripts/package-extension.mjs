@@ -1,5 +1,5 @@
 /**
- * Packages dist/ into dist-zip/universal-bhunex-converter-<version>.zip using only
+ * Packages dist/ into dist-zip/bhunex-gis-converter-<version>.zip using only
  * Node built-ins, so CI needs no zip binary and the produced archive is the same
  * on every runner.
  */
@@ -39,14 +39,14 @@ function walk(dir) {
  * instructions where they land, rather than only in a README on a website
  * nobody has open, is the cheapest fix available.
  */
-const INSTALL_NOTE = `UNIVERSAL BHUNEX CONVERTER — HOW TO INSTALL
+const INSTALL_NOTE = `BHUNEX GIS CONVERTER — HOW TO INSTALL
 ============================================================
 
 You are looking at the extension folder. It is ready to load.
 
 1. MOVE THIS FOLDER SOMEWHERE PERMANENT AND LOCAL.
 
-   Good:  C:\\Extensions\\universal-bhunex-converter
+   Good:  C:\\Extensions\\bhunex-gis-converter
    Bad:   anywhere under OneDrive, Desktop, Documents or Downloads
 
    On a work laptop those folders are usually synced to OneDrive, which
@@ -179,7 +179,7 @@ eocd.writeUInt32LE(centralBuf.length, 12);
 eocd.writeUInt32LE(offset, 16);
 
 mkdirSync(outDir, { recursive: true });
-const target = resolve(outDir, `universal-bhunex-converter-${version}.zip`);
+const target = resolve(outDir, `bhunex-gis-converter-${version}.zip`);
 writeFileSync(target, Buffer.concat([...locals, centralBuf, eocd]));
 console.log(`packaged ${entries.length} entries -> ${relative(root, target)}`);
 
@@ -198,7 +198,7 @@ console.log(`packaged ${entries.length} entries -> ${relative(root, target)}`);
  */
 for (const name of readdirSync(outDir)) {
   if (!name.endsWith('.zip')) continue;
-  if (name === `universal-bhunex-converter-${version}.zip`) continue;
+  if (name === `bhunex-gis-converter-${version}.zip`) continue;
   rmSync(resolve(outDir, name));
   console.log(`removed a stale archive from a previous version: ${name}`);
 }

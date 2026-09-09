@@ -18,7 +18,7 @@ problem. It also makes it available on any machine the user signs into.
 | Developer account | One-off **$5** fee | **Free** |
 | Register at | <https://chrome.google.com/webstore/devconsole> | <https://partner.microsoft.com/dashboard/microsoftedge> |
 | Typical review | A few hours to a few days | 1–7 business days |
-| Package | `dist-zip/universal-bhunex-converter-<version>.zip` | The same file |
+| Package | `dist-zip/bhunex-gis-converter-<version>.zip` | The same file |
 
 Build the package with:
 
@@ -36,7 +36,7 @@ and why — that is cheaper than a rejection.
 
 ### Name
 ```
-Universal BhuNex Converter — GIS/CAD/Survey
+BhuNex GIS Converter — GIS/CAD/Survey
 ```
 43 characters. Chrome allows 75, but Edge truncates the listing title past 45.
 
@@ -63,7 +63,7 @@ Convert geospatial, survey and CAD data files between formats locally in the bro
 ### Detailed description
 
 ```
-Universal BhuNex Converter turns one geospatial file format into another —
+BhuNex GIS Converter turns one geospatial file format into another —
 entirely on your own computer. No upload, no account, no server.
 
 Drop a file in. It tells you exactly what the file is, exactly what it can
@@ -248,7 +248,7 @@ Chrome requires at least one screenshot. Edge requires at least one and the
 ### Chrome Web Store
 
 1. <https://chrome.google.com/webstore/devconsole> → pay the one-off $5 fee.
-2. **Add new item** → upload `dist-zip/universal-bhunex-converter-<version>.zip`.
+2. **Add new item** → upload `dist-zip/bhunex-gis-converter-<version>.zip`.
 3. **Store listing** — paste the name, summary, detailed description and
    category from above; upload the screenshots and the 440×280 tile.
 4. **Privacy practices** — paste the single-purpose sentence and each permission

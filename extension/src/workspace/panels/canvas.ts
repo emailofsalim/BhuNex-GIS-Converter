@@ -15,7 +15,7 @@ import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-over
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
 import { Backdrop } from '../../ui/backdrop';
-import { Basemap, isOnline, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
+import { Basemap, isOnline, TILE_PRESETS, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
 import { viewOf } from './dataset';
@@ -216,19 +216,46 @@ export function watchConnectivity(onChange: () => void): void {
 }
 
 /** The chosen provider, or a custom template the user entered. */
-function resolveProvider(settings: { basemapProviderId: string; basemapCustomUrl: string }): TileProvider {
+function resolveProvider(settings: {
+  basemapProviderId: string;
+  basemapCustomUrl: string;
+  basemapPresetId?: string;
+}): TileProvider {
   if (settings.basemapProviderId === 'custom') {
+    // A custom URL started from a preset is not anonymous: the preset names the
+    // service, who it requires credited, and the zoom it stops at. Ignoring
+    // that — which this did — credited nobody on a Stadia or Jawg canvas whose
+    // terms require it, and asked those services for z21 and z22 tiles they do
+    // not serve. The URL is still compared, so editing it away from the preset
+    // drops back to the honest generic wording rather than keeping a credit for
+    // a service no longer being used.
+    const preset = TILE_PRESETS.find((entry) => entry.id === settings.basemapPresetId);
+    const fromPreset = preset && sameService(settings.basemapCustomUrl, preset.template);
     return {
       id: 'custom',
-      name: 'Custom tile service',
+      name: fromPreset ? preset.name : 'Custom tile service',
       url: settings.basemapCustomUrl,
-      // The user is responsible for the terms of a service they supplied, and
-      // for the credit it requires; this says so rather than inventing one.
-      attribution: 'Custom tile service — check its attribution requirements',
-      maxZoom: 22,
+      // Without a preset the user is responsible for the terms of a service
+      // they supplied, and for the credit it requires; this says so rather
+      // than inventing one.
+      attribution: fromPreset ? preset.attribution : 'Custom tile service — check its attribution requirements',
+      maxZoom: fromPreset ? preset.maxZoom : 22,
     };
   }
   return TILE_PROVIDERS.find((entry) => entry.id === settings.basemapProviderId) ?? TILE_PROVIDERS[0];
+}
+
+/**
+ * True when a custom URL is still the preset it was started from.
+ *
+ * Compared with the key removed, because the whole point of the preset flow is
+ * that the user fills their own key in — so the URL is never byte-identical to
+ * the template it came from. Everything up to the query string is the part that
+ * identifies the service.
+ */
+function sameService(url: string, template: string): boolean {
+  const base = (value: string) => value.split('?')[0].trim();
+  return base(url) === base(template);
 }
 
 /** Builds the drawable form of a worker-summarised dataset. */

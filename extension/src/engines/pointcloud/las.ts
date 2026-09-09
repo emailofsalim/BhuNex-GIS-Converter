@@ -393,8 +393,8 @@ export const DEFAULT_LAS_OPTIONS: WriteLasOptions = {
   versionMinor: 2,
   pointFormat: 1,
   defaultClassification: 0,
-  systemIdentifier: 'Universal BhuNex Converter',
-  generatingSoftware: 'Universal BhuNex Converter 1.0',
+  systemIdentifier: 'BhuNex GIS Converter',
+  generatingSoftware: 'BhuNex GIS Converter 1.0',
 };
 
 /**

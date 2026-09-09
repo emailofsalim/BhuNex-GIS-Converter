@@ -352,7 +352,7 @@ function buildSections(input: ReportInput, settings: Record<string, unknown> | u
 
   // ---- provenance ---------------------------------------------------------
   const provenance: Row[] = [
-    { label: 'Produced by', value: `Universal BhuNex Converter ${ENGINE_VERSION}` },
+    { label: 'Produced by', value: `BhuNex GIS Converter ${ENGINE_VERSION}` },
     { label: 'Processing', value: 'Entirely on this machine. No file or fragment was sent anywhere.' },
   ];
   if (dropped.length > 0) {
@@ -426,7 +426,7 @@ function renderHtml(title: string, generatedAt: string, sections: Section[]): st
     `<style>${STYLE}</style>`,
     '</head><body>',
     `<h1>${escapeHtml(title)}</h1>`,
-    `<p class="meta">Generated ${escapeHtml(generatedAt)} · Universal BhuNex Converter ${escapeHtml(ENGINE_VERSION)}</p>`,
+    `<p class="meta">Generated ${escapeHtml(generatedAt)} · BhuNex GIS Converter ${escapeHtml(ENGINE_VERSION)}</p>`,
   ];
 
   for (const section of sections) {
@@ -481,7 +481,7 @@ function renderHtml(title: string, generatedAt: string, sections: Section[]): st
  * a diff between two conversions can actually be taken of.
  */
 function renderText(title: string, generatedAt: string, sections: Section[]): string {
-  const lines: string[] = [title, '='.repeat(title.length), `Generated ${generatedAt} · Universal BhuNex Converter ${ENGINE_VERSION}`, ''];
+  const lines: string[] = [title, '='.repeat(title.length), `Generated ${generatedAt} · BhuNex GIS Converter ${ENGINE_VERSION}`, ''];
 
   for (const section of sections) {
     lines.push(section.heading.toUpperCase(), '-'.repeat(section.heading.length));

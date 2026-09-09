@@ -13,6 +13,18 @@ import { ConversionError } from '../../core/errors';
 import { readDxf } from '../../engines/cad/dxf-read';
 import { decodeText } from '../../engines/shared';
 
+/**
+ * The native-messaging host id, kept unchanged through the rename to
+ * BhuNex GIS Converter.
+ *
+ * This string is not a product name, it is an address. The browser matches it
+ * against a manifest already written to disk by `native-host/install.py` —
+ * under this exact name, in a per-user directory the extension cannot reach.
+ * Renaming it here would leave every helper installed before the rename
+ * unreachable, and the failure would present as "DWG support is not installed"
+ * to someone looking straight at the installed helper. Bundle identifiers
+ * survive rebrands for this reason; so does this one.
+ */
 export const HOST_NAME = 'com.universal_bhunex_converter.host';
 
 export type NativeStatus = 'READY' | 'NOT_INSTALLED' | 'CONFIGURATION_ERROR' | 'ENGINE_ERROR' | 'TIMEOUT' | 'UNKNOWN';

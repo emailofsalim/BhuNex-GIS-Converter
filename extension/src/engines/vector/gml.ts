@@ -400,6 +400,12 @@ export function writeGml(dataset: CirDataset, options: WriteGmlOptions): { text:
     );
   }
 
+  // The `ugc:` namespace URI keeps its original spelling through the rename to
+  // BhuNex GIS Converter. A namespace URI is an identifier, not a label: every
+  // GML file this tool has already written declares this one, and changing it
+  // would put yesterday's export and today's in different namespaces for any
+  // consumer that matches on it. Nobody reads it as a product name, so there is
+  // nothing to gain against that.
   const text =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<ugc:FeatureCollection xmlns:gml="http://www.opengis.net/gml" xmlns:ugc="http://universal-bhunex-converter.local/ns">\n` +

@@ -614,7 +614,7 @@ export async function downloadBatchZip(): Promise<void> {
   }));
   const { zip, manifestCsv, tree } = await packageBatch(results as never, { mirrorSource: store.get().settings.mirrorBatchTree });
   store.set({ manifestCsv });
-  downloadBytes(zip, `universal-bhunex-converter-batch-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip');
+  downloadBytes(zip, `bhunex-gis-converter-batch-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip');
   store.log('ok', `Batch ZIP written with ${done.length} dataset(s), ${tree.length} file(s) and a manifest.`);
   host.render();
 }
