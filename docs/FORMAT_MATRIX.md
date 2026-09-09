@@ -119,7 +119,7 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 | Format | Extensions | Import | Export | Carries |
 |---|---|---|---|---|
 | AutoCAD DWG | `.dwg` | Adapter required | Adapter required | 3D, Z, attributes, curves |
-| AutoCAD DXF (ASCII) | `.dxf` | **Supported** | **Supported** | 3D, Z, attributes, curves |
+| AutoCAD DXF (ASCII) | `.dxf` | **Supported** | **Supported** | 3D, Z, curves |
 | MicroStation DGN | `.dgn` | Adapter required | Adapter required | 3D, Z, attributes, curves |
 
 **AutoCAD DWG**
@@ -142,7 +142,7 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 | Format | Extensions | Import | Export | Carries |
 |---|---|---|---|---|
 | CSV / TSV coordinate table | `.csv` `.tsv` `.txt` | **Supported** | **Supported** | 3D, Z, attributes |
-| LandXML | `.landxml` `.xml` | Partial | Partial | 3D, Z, attributes, CRS |
+| LandXML | `.landxml` `.xml` | Partial | Partial | 3D, Z, CRS |
 
 **CSV / TSV coordinate table**
 
@@ -157,7 +157,7 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 
 | Format | Extensions | Import | Export | Carries |
 |---|---|---|---|---|
-| Surpac String | `.str` | Partial | Partial | 3D, Z, attributes |
+| Surpac String | `.str` | Partial | Partial | 3D, Z |
 
 **Surpac String**
 
