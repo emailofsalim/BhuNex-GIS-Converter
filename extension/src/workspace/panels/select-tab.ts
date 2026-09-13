@@ -539,12 +539,20 @@ export function renderSelect(item: QueueItem): void {
         const current = store.selected();
         return current ? snapSourcesFor(current) : [];
       },
-      snapSettings: (): SnapSettings => ({
-        ...DEFAULT_SNAP_SETTINGS,
-        vertex: drawState.snapVertex,
-        midpoint: drawState.snapMidpoint,
-        segment: drawState.snapSegment,
-      }),
+      // The toolbar's Snap button is the master switch; the three checkboxes in
+      // the drawing section choose WHICH snaps apply when it is on. Before this
+      // they were the only control, four clicks into the dock, so a user who
+      // turned "Snap" on at the canvas and saw nothing snap was reading a
+      // button that governed a different setting.
+      snapSettings: (): SnapSettings =>
+        ui.snapOn === false
+          ? { ...DEFAULT_SNAP_SETTINGS, vertex: false, midpoint: false, segment: false }
+          : {
+              ...DEFAULT_SNAP_SETTINGS,
+              vertex: drawState.snapVertex,
+              midpoint: drawState.snapMidpoint,
+              segment: drawState.snapSegment,
+            },
     });
   }
 

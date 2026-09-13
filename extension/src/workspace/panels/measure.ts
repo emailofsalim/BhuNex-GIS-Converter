@@ -75,23 +75,21 @@ export function renderMeasure(item: QueueItem): void {
   updateMeasureBar(item);
 }
 
-/** Keeps the measure toolbar in step with the run and the mode. */
+/** Keeps the measurement readout in step with the run and the mode. */
 export function updateMeasureBar(item: QueueItem | undefined): void {
-  const bar = $('measureBar');
   const mode = ui.measureCanvas?.getMode() ?? 'off';
-  bar.classList.toggle('hidden', store.get().inspectorTab !== 'preview');
 
-  for (const [id, value] of [
-    ['measureDistance', 'distance'],
-    ['measureArea', 'area'],
-  ] as [string, MeasureMode][]) {
-    $(id).classList.toggle('btn--on', mode === value);
-  }
-
+  // The mode buttons live on the one canvas toolbar now, which lights the
+  // active tool from `store.canvasTool`. This used to hide its own bar unless
+  // `inspectorTab === 'preview'` — and the `preview` tab was DELETED in the
+  // single-canvas rebuild, so the condition was never true. `renderInspector`
+  // showed the bar and this line hid it again on the very next call: the
+  // measure tool could not be turned on at all, by anyone, from anywhere.
   const readout = $('measureReadout');
+  $('measureClear').classList.toggle('hidden', mode === 'off');
   readout.replaceChildren();
   if (mode === 'off') {
-    readout.textContent = 'Choose Distance or Area, then click on the map.';
+    readout.textContent = '';
     return;
   }
   if (run.points.length < 2) {
@@ -135,23 +133,28 @@ export function updateMeasureBar(item: QueueItem | undefined): void {
   );
 }
 
-/** Wires the toolbar. Called once, from the shell. */
-export function wireMeasureBar(): void {
-  const setMode = (mode: MeasureMode): void => {
-    if (!ui.measureCanvas) return;
-    // Clicking the active mode turns it off, so pan-and-zoom comes straight
-    // back without hunting for a separate "off" button.
-    const next = ui.measureCanvas.getMode() === mode ? 'off' : mode;
-    ui.measureCanvas.setMode(next);
-    run.points = [];
-    run.closed = false;
-    updateMeasureBar(store.selected());
-  };
+/**
+ * Puts the measure canvas into a mode.
+ *
+ * Called by the toolbar, which owns which tool is live; this no longer decides
+ * that for itself. Clearing the run on a mode change is deliberate: a distance
+ * run reinterpreted as an area would report a number for points the user
+ * placed meaning something else.
+ */
+export function setMeasureMode(mode: MeasureMode): void {
+  if (!ui.measureCanvas) return;
+  ui.measureCanvas.setMode(mode);
+  run.points = [];
+  run.closed = false;
+  updateMeasureBar(store.selected());
+}
 
-  $('measureDistance').addEventListener('click', () => setMode('distance'));
-  $('measureArea').addEventListener('click', () => setMode('area'));
+/** Wires the one control that is not a tool: clearing the run. */
+export function wireMeasureBar(): void {
   $('measureClear').addEventListener('click', () => {
     ui.measureCanvas?.clear();
+    run.points = [];
+    run.closed = false;
     updateMeasureBar(store.selected());
   });
 }

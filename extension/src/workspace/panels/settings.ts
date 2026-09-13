@@ -17,6 +17,8 @@ import {
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
 import { applyPreset, isOnline, TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
+import { CANVAS_ACTIONS, CANVAS_TOOLS, GLOBAL_SHORTCUTS } from './toolbar';
+import { ui } from '../ui-state';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
 import { boundaryRings, describeBoundary } from '../conversion';
@@ -779,9 +781,28 @@ export function openSettingsDialog(): void {
   body.append(naming);
 
   const foot = element('div', { class: 'dialog__foot' });
-  const reset = element('button', { class: 'btn btn--danger', text: 'Reset to defaults' });
+  const reset = element('button', {
+    class: 'btn btn--danger',
+    text: 'Reset to defaults',
+    title: 'Put every setting back to how it shipped, including the canvas tool toggles',
+  });
   reset.addEventListener('click', () => {
+    // Confirmed first. Every other control here takes effect immediately and is
+    // trivially reversible; this one discards a configuration that may have
+    // taken a while to arrive at — output layout, precision, datum shift, tile
+    // provider — and there is no undo for a preference.
+    if (!window.confirm('Reset every setting to its default? This cannot be undone.')) return;
+
     void store.patchSettings({ ...DEFAULT_SETTINGS });
+    // The canvas toggles live in view state rather than in settings, so a reset
+    // that only touched `settings` would leave Snap or Ortho stuck on and the
+    // user with no way to tell which half had reset.
+    ui.snapOn = true;
+    ui.orthoOn = false;
+    ui.gridOn = true;
+    ui.toolCanvas?.setOrtho(false);
+    store.set({ canvasTool: 'pan' });
+    store.log('ok', 'Every setting is back to its default.');
     dialog.close();
     host.render();
   });
@@ -841,6 +862,93 @@ export function openHelpDialog(): void {
   ];
   for (const [title, text] of rules) body.append(messageBlock('info', title, text));
 
+  // Help is for USING the tool, so the shortcut reference belongs here and the
+  // authorship and licence do not. Both used to open this same dialog — the
+  // top bar's "MIT · Md Salim Ansari" button called `openHelpDialog`, so the
+  // credit button showed a page about conversion behaviour and the licence was
+  // a section two screens down it.
+  body.append(shortcutSection());
+
+  const foot = element('div', { class: 'dialog__foot' });
+  const done = element('button', { class: 'btn btn--primary', text: 'Close' });
+  done.addEventListener('click', () => dialog.close());
+  foot.append(done);
+
+  dialog.append(head, body, foot);
+  dialog.showModal();
+}
+
+/**
+ * Every shortcut, generated from the bindings themselves.
+ *
+ * `CANVAS_TOOLS`, `CANVAS_ACTIONS` and `GLOBAL_SHORTCUTS` are the same lists
+ * the toolbar builds from and the key handler dispatches on, so a key printed
+ * here is a key that works. Typing the table by hand is how a help page ends up
+ * documenting a shortcut that was renamed a release ago — which is exactly the
+ * class of confident-but-false claim this project keeps having to remove.
+ */
+function shortcutSection(): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Keyboard shortcuts' }));
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text: 'Single-key shortcuts act on the canvas and are ignored while you are typing in a field.',
+    })
+  );
+
+  const groups: [string, { label: string; key: string; hint: string }[]][] = [
+    ['Canvas tools', CANVAS_TOOLS.map((tool) => ({ label: tool.label, key: tool.key, hint: tool.hint }))],
+    ['Canvas actions', CANVAS_ACTIONS],
+    ['Workspace', GLOBAL_SHORTCUTS],
+  ];
+
+  for (const [title, rows] of groups) {
+    section.append(element('h4', { class: 'small', style: 'margin:12px 0 4px', text: title }));
+    const table = element('table', { class: 'table' });
+    const body = element('tbody');
+    for (const row of rows) {
+      body.append(
+        element('tr', {}, [
+          element('td', {}, [element('kbd', { text: row.key })]),
+          element('td', { text: row.label }),
+          element('td', { class: 'small muted', text: row.hint }),
+        ])
+      );
+    }
+    table.append(body);
+    section.append(element('div', { class: 'scroll-x' }, [table]));
+  }
+  return section;
+}
+
+/**
+ * Who wrote this, under what licence, and what it is.
+ *
+ * Its own dialog, opened by its own button. The MIT licence requires its notice
+ * to travel with the software, and a notice reachable only by scrolling a page
+ * titled "How this converter behaves" is not travelling with anything.
+ */
+export function openAboutDialog(): void {
+  const dialog = $('helpDialog') as HTMLDialogElement;
+  dialog.replaceChildren();
+
+  const head = element('div', { class: 'dialog__head' });
+  head.append(element('span', { class: 'dialog__title', text: 'About BhuNex GIS Converter' }));
+  const close = element('button', { class: 'btn btn--ghost', text: 'Close' });
+  close.addEventListener('click', () => dialog.close());
+  head.append(close);
+
+  const body = element('div', { class: 'dialog__body stack' });
+  body.append(
+    element('p', {
+      class: 'small',
+      text:
+        'A converter for GIS, CAD, survey, LiDAR and mining data that runs entirely in your browser. ' +
+        'Import a file, see it on the canvas, edit it, and export it to another format — with every conversion ' +
+        'checked by re-importing the output and comparing it against the source.',
+    })
+  );
   body.append(aboutSection());
 
   const foot = element('div', { class: 'dialog__foot' });
@@ -1028,7 +1136,13 @@ function aboutSection(): HTMLElement {
   const section = element('div', { class: 'section' });
   section.append(element('h3', { class: 'section__title', text: 'About' }));
 
-  const version = chrome.runtime?.getManifest?.()?.version ?? '';
+  // `chrome.runtime?.` does NOT guard this: optional chaining protects against
+  // a null property, not against the identifier `chrome` being undefined, which
+  // throws a ReferenceError before the `?.` is ever reached. The dialog then
+  // renders nothing at all rather than losing one row. `typeof` is the only
+  // form that is safe when the binding itself may not exist — as it does not in
+  // a plain page, which is exactly where this gets tested.
+  const version = typeof chrome !== 'undefined' ? (chrome.runtime?.getManifest?.()?.version ?? '') : '';
   section.append(
     keyValues([
       ['BhuNex GIS Converter', version ? `Version ${version}` : '—'],

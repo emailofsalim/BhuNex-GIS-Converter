@@ -378,6 +378,22 @@ export interface AppState {
   /** Which group of inspector sections the dock is showing. */
   inspectorGroup: string;
   /**
+   * Which tool owns the canvas pointer.
+   *
+   * Deliberately independent of `inspectorTab`. It used to be derived from it —
+   * vertex editing was live only while the "Vertices" tab was open, drawing
+   * only inside the "Select & move" tab — which meant reading a layer's
+   * attributes silently turned the user's drawing tool off, and the measure
+   * bar keyed off a `preview` tab that had been deleted, so measuring could not
+   * be switched on at all. A tool is a mode of the canvas, not a side effect of
+   * what the dock happens to be showing.
+   *
+   * Typed as a string here for the same reason `inspectorTab` is: the store
+   * must not import from the workspace. `panels/toolbar.ts` owns `CanvasToolId`
+   * and is the only writer.
+   */
+  canvasTool: string;
+  /**
    * Edits taken back with Undo, newest last, ready for Redo.
    *
    * Any NEW edit clears it — the standard rule, and the only one that cannot
@@ -422,6 +438,9 @@ class Store {
     inspectorTab: 'overview',
     bottomTab: 'qa',
     inspectorGroup: 'data',
+    // Pan, not select: opening a file should not arm anything that can move a
+    // parcel on the first drag.
+    canvasTool: 'pan',
     redoStack: [],
     formatSearch: '',
     formatCategory: null,

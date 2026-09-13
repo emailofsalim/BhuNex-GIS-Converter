@@ -48,9 +48,12 @@
           The MIT licence requires its copyright notice to travel with the
           software. A LICENSE file in the repository satisfies that for people
           who read the repository and for nobody who installs the extension, so
-          the credit is on the screen the tool actually opens on.
+          the credit is on the screen the tool actually opens on — now behind a
+          button labelled for what it opens. It read "MIT · Md Salim Ansari" and
+          opened the HELP dialog, which is neither what it said nor where the
+          licence was.
         -->
-        <button class="btn btn--ghost credit" id="aboutBtn" title="MIT licence, author and feedback">MIT · Md Salim Ansari</button>
+        <button class="btn btn--ghost" id="aboutBtn" title="Author, MIT licence, version and feedback">About</button>
         <button class="iconbtn" id="dockToggle" title="Show or hide the output panel" aria-label="Toggle the right panel">▤</button>
       </header>
 
@@ -90,38 +93,37 @@
           <div class="preview" id="previewWrap">
             <canvas id="previewCanvas"></canvas>
 
-            <!-- Tool bars FLOAT on the canvas rather than taking rows from it. -->
-            <div class="cbar cbar--tools">
-              <button class="btn btn--ghost btn--sm" id="fitBtn" title="Fit to extent">Fit</button>
-              <button class="btn btn--ghost btn--sm" id="gridBtn" title="Toggle grid">Grid</button>
-              <span class="cbar__sep"></span>
-              <!-- Undo and redo sit ON the canvas because that is where the
-                   edits are made. Ctrl+Z / Ctrl+Shift+Z drive the same path. -->
-              <button class="btn btn--ghost btn--sm" id="undoBtn" title="Undo the last edit (Ctrl+Z)" disabled>Undo</button>
-              <button class="btn btn--ghost btn--sm" id="redoBtn" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
-            </div>
+            <!--
+              ONE TOOLBAR, EVERY TOOL, FLOATING OVER THE CANVAS.
 
-            <div class="cbar cbar--mode hidden" id="selectBar">
-              <button class="btn btn--ghost btn--sm" id="selectToolSelect" title="Click to select, drag from empty space for a rubber band, drag a selected feature to move it">Select</button>
-              <button class="btn btn--ghost btn--sm" id="selectToolLasso" title="Draw a freehand outline around what to select">Lasso</button>
-              <button class="btn btn--ghost btn--sm" id="selectToolMove" title="Drag anywhere to move the current selection">Move</button>
-              <span class="edit__readout" id="selectStatus">Nothing selected</span>
-            </div>
+              This replaces four bars: a Fit/Grid/Undo/Redo strip plus three
+              that were each `hidden` unless a particular tab was open in the
+              right-hand dock. Selecting, drawing, vertex editing and measuring
+              all existed and all worked; reaching any of them meant opening the
+              dock and choosing the matching tab, so the canvas had tools that
+              could not be picked from the canvas.
 
-            <div class="cbar cbar--mode hidden" id="editBar">
-              <button class="btn btn--ghost btn--sm" id="editToggle" title="Turn vertex editing on or off">Edit off</button>
-              <label class="edit__snap"><input type="checkbox" id="editSnap" /> Snap</label>
-              <span class="edit__readout" id="editReadout"></span>
-            </div>
+              Its contents are BUILT IN `panels/toolbar.ts`, from one list that
+              also generates the shortcut table in Help — so a key documented
+              there and a button here cannot describe different things.
+            -->
+            <!-- The bar and its readout are STACKED in one positioned column,
+                 never placed independently. Pinning the readout at a fixed
+                 offset from the top put it straight through the toolbar's
+                 second row the moment the bar wrapped, hiding the last three
+                 tools behind it. -->
+            <div class="cstack">
+              <div class="cbar cbar--tools" id="canvasToolbar" role="toolbar" aria-label="Canvas tools"></div>
 
-            <!-- Measuring on the canvas (spec §26.1). The arithmetic is in
-                 core/measure.ts, which picks geodesic or planar from the CRS —
-                 nothing here computes a length. -->
-            <div class="cbar cbar--mode hidden" id="measureBar">
-              <button class="btn btn--ghost btn--sm" id="measureDistance" title="Measure a distance or a run of legs">Distance</button>
-              <button class="btn btn--ghost btn--sm" id="measureArea" title="Measure an enclosed area">Area</button>
-              <button class="btn btn--ghost btn--sm" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
-              <span class="edit__readout" id="measureReadout"></span>
+              <!-- What the live tool is saying: the selection count, a dragged
+                   vertex's coordinates, a running measurement. A readout, not a
+                   tool bar, so it never competes for the tool line. -->
+              <div class="cbar cbar--status hidden" id="toolStatus">
+                <span class="edit__readout" id="selectStatus">Nothing selected</span>
+                <span class="edit__readout" id="editReadout"></span>
+                <span class="edit__readout" id="measureReadout"></span>
+                <button class="btn btn--ghost btn--sm hidden" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
+              </div>
             </div>
 
             <div class="preview__overlay">

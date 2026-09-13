@@ -168,9 +168,17 @@ export function editOptions() {
   };
 }
 
-/** Snaps a dragged vertex, when snapping is on. */
+/**
+ * Snaps a dragged vertex, when snapping is on.
+ *
+ * "On" now means the one Snap button on the canvas toolbar. It used to mean
+ * `settings.editSnapEnabled`, a second snap control that only governed vertex
+ * dragging and lived in a different panel from the one that governed drawing —
+ * so whichever the user found, the other half of their editing did not snap.
+ * The setting is still the persisted default; the toolbar is the live switch.
+ */
 export function snapDuringDrag(ref: VertexRef, to: number[]): number[] {
-  if (!store.get().settings.editSnapEnabled) return to;
+  if (ui.snapOn === false) return to;
 
   // Snap against a dataset in which the dragged vertex already sits at the
   // pointer, so the snap sees the position being proposed rather than the one
@@ -255,17 +263,17 @@ export function commitEdit(plan: ReturnType<typeof planMoveVertex>): void {
   host.render();
 }
 
-/** Keeps the edit toolbar and the readout panel in step with the selection. */
+/**
+ * Keeps the vertex readout in step with the selection.
+ *
+ * The "Edit on/off" button and the snap checkbox that used to live here are
+ * gone: vertex editing is the `vertex` tool on the one canvas toolbar, and snap
+ * is the one Snap button beside it. Two separate snap controls — one for
+ * drawing, one for vertex editing — was a distinction only the code cared
+ * about, and left the user to discover that turning "Snap" on did not snap the
+ * thing they were dragging.
+ */
 export function updateEditBar(): void {
-  const toggle = $('editToggle');
-  const on = ui.editCanvas?.isEnabled() ?? false;
-  toggle.textContent = on ? 'Edit on' : 'Edit off';
-  toggle.classList.toggle('btn--on', on);
-
-  // The checkbox reflects the setting rather than only writing to it, so a
-  // change made from the command palette shows here too.
-  ($('editSnap') as HTMLInputElement).checked = store.get().settings.editSnapEnabled;
-
   const panel = document.getElementById('editReadoutPanel');
   if (!panel) return;
   panel.replaceChildren();
