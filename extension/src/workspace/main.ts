@@ -221,7 +221,10 @@ function renderInspector(): void {
   // they are rendered every time rather than only when a tab is open.
   const rail = $('layerRail');
   rail.replaceChildren();
-  rail.append(...layersTab(item));
+  // Only once there is a dataset to describe. Rendering during inspection is
+  // what surfaced the crash above, and a half-built layer list is not
+  // information anyone can use anyway.
+  if (item.dataset) rail.append(...layersTab(item));
 
   // The canvas is drawn ONCE, for every section, before the switch decides
   // which tool is live on it. Previously six of the fourteen cases each called

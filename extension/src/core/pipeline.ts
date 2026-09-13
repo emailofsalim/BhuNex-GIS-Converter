@@ -1691,11 +1691,18 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   };
 }
 
+/** A local file header — the only thing that makes bytes openable as a ZIP. */
+function isZip(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
 /**
  * Re-imports the written output and compares it with the source.
  *
- * A packaged target (Shapefile, MIF/MID) is unzipped first so the reader sees
- * the same files a recipient would.
+ * A packaged target (Shapefile, MIF/MID) arrives here as the LOOSE files the
+ * writer produced — the ZIP is built later, at delivery — so the companions are
+ * bound from those directly, exactly as a recipient's unzipped folder would
+ * present them.
  */
 async function runQa(
   source: CirDataset,
@@ -1708,11 +1715,26 @@ async function runQa(
   }
 
   try {
-    const primary = files[0];
     let reimportInput: ConversionInput;
 
-    if (target.packaging === 'zip' && target.id !== 'kmz') {
-      const entries = await readZip(primary.bytes);
+    if (files.length > 1) {
+      // A multi-file package as the WRITER returned it: loose files. This is
+      // the shapefile and MIF/MID case, and it is what actually arrives here —
+      // zipping happens downstream, at delivery. The old code keyed off
+      // `target.packaging === 'zip'` and tried to unzip `files[0]`, which is a
+      // .shp; readZip threw "no ZIP signature", the throw was caught, and every
+      // shapefile export in the tool's history reported NOT VALIDATED. The
+      // bytes were fine — the check never ran on them.
+      const main = files.find((file) => file.name.toLowerCase().endsWith(`.${target.extensions[0]}`)) ?? files[0];
+      const companions = new Map<string, Uint8Array>();
+      for (const file of files) {
+        if (file === main) continue;
+        companions.set(extensionOf(file.name), file.bytes);
+      }
+      reimportInput = { fileName: main.name, bytes: main.bytes, companions };
+    } else if (target.packaging === 'zip' && target.id !== 'kmz' && isZip(files[0].bytes)) {
+      // A single file that really is a ZIP — the writer packaged it itself.
+      const entries = await readZip(files[0].bytes);
       const main = entries.find((entry) => entry.name.toLowerCase().endsWith(`.${target.extensions[0]}`));
       if (!main) return { report: notValidated('The output package did not contain a readable primary file.') };
       const companions = new Map<string, Uint8Array>();
@@ -1722,7 +1744,7 @@ async function runQa(
       }
       reimportInput = { fileName: main.name, bytes: main.bytes, companions };
     } else {
-      reimportInput = { fileName: primary.name, bytes: primary.bytes };
+      reimportInput = { fileName: files[0].name, bytes: files[0].bytes };
     }
 
     const detection = detectFormat({ fileName: reimportInput.fileName, bytes: reimportInput.bytes });

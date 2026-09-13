@@ -25,7 +25,7 @@ import {
 } from '../../core/layers';
 import { LAYER_COLORS } from '../../ui/preview';
 import { type QueueItem, store } from '../../state/store';
-import { editDialog, element, ghostButton, messageBlock } from '../dom';
+import { collapsibleNote, editDialog, element, ghostButton } from '../dom';
 import { host } from '../host';
 import { datasetForTools, protectedFor, tableStateOf, truncationOf, viewOf } from './dataset';
 import { pendingEditsPanel, queueEdit } from './edits';
@@ -72,9 +72,10 @@ export function layersTab(item: QueueItem): HTMLElement[] {
   );
   nodes.push(bar);
 
-  // The single most important sentence on this panel.
+  // The single most important sentence on this panel — kept visible, with the
+  // rest folded away: as a full block it was taller than the layer list itself.
   nodes.push(
-    messageBlock(
+    collapsibleNote(
       'info',
       'Visibility is a view setting. It does not change what is exported.',
       'Hiding a layer here only removes it from the canvas. Every layer is still written to the output file.',
@@ -182,12 +183,22 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
   });
   row.append(isolate);
 
-  const label = element('button', { class: 'lm__name', title: 'Show this layer in the attribute table' });
+  const meta = `${(truncationOf(item, entry.name)?.total ?? entry.featureCount ?? 0).toLocaleString()} · ${entry.geometryTypes.join(', ') || 'no geometry'} · ${entry.fieldCount ?? 0} field${entry.fieldCount === 1 ? '' : 's'}`;
+  // Both lines are clipped to one line each in a narrow rail, so the full text
+  // has to stay reachable somewhere: the title is that somewhere.
+  const label = element('button', { class: 'lm__name', title: `${entry.name} — ${meta}\nShow this layer in the attribute table` });
   label.append(element('span', { class: 'lm__nameText', text: entry.name }));
   label.append(
     element('span', {
       class: 'lm__meta',
-      text: `${(truncationOf(item, entry.name)?.total ?? entry.featureCount).toLocaleString()} · ${entry.geometryTypes.join(', ') || 'no geometry'} · ${entry.fieldCount} field${entry.fieldCount === 1 ? '' : 's'}`,
+      // `?? 0` is load-bearing. This panel used to render only when the user
+      // opened the Layers tab, by which time the dataset was always fully
+      // inspected; it now renders in the left rail on EVERY render, including
+      // the ones during inspection where a layer entry exists before its counts
+      // do. `undefined.toLocaleString()` threw there, and the exception aborted
+      // the whole render — which is why the canvas drew its grid and then no
+      // data at all, and the inspector body came out empty.
+      text: meta,
     })
   );
   label.addEventListener('click', () => {
@@ -196,6 +207,16 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
     host.render();
   });
   row.append(label);
+
+  // The style controls go on their own line inside the row.
+  //
+  // They used to sit flat beside the name. In a 260px rail that made the row
+  // wider than the rail, and the trailing ones (line type, rename, reorder)
+  // were clipped off the edge — present in the DOM and unreachable. Letting the
+  // row wrap instead squeezed the NAME to nothing, because it was the only
+  // flexible item. A sub-row that takes the full width fixes both: the name
+  // keeps line one, the controls get line two, and nothing is cut off.
+  const tools = element('div', { class: 'lm__tools' });
 
   // Opacity -------------------------------------------------------------
   const opacity = element('input', {
@@ -213,7 +234,7 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
     });
     host.render();
   });
-  row.append(opacity);
+  tools.append(opacity);
 
   // Style ----------------------------------------------------------------
   // A colour well, a width and a line type, right on the row: these are read
@@ -231,7 +252,7 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
     store.updateItem(item.id, { layerView: setLayerView(view, entry.name, { colour: colour.value }) });
     host.render();
   });
-  row.append(colour);
+  tools.append(colour);
 
   const width = element('input', {
     class: 'lm__width',
@@ -247,7 +268,7 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
     store.updateItem(item.id, { layerView: setLayerView(view, entry.name, { lineWidth: Number(width.value) }) });
     host.render();
   });
-  row.append(width);
+  tools.append(width);
 
   const lineType = element('select', {
     class: 'lm__lineType',
@@ -266,7 +287,7 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
     });
     host.render();
   });
-  row.append(lineType);
+  tools.append(lineType);
 
   // Rename ---------------------------------------------------------------
   // `planRenameLayer` has existed since the layer manager shipped and was only
@@ -279,7 +300,7 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
     text: '✎',
   });
   rename.addEventListener('click', () => promptRenameLayer(item, entry.name));
-  row.append(rename);
+  tools.append(rename);
 
   // Reorder ---------------------------------------------------------------
   // `planReorder` also shipped with the layer manager and NOTHING constructed
@@ -297,7 +318,7 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
   }) as HTMLButtonElement;
   up.disabled = position <= 0;
   up.addEventListener('click', () => reorderLayer(item, entry.name, position - 1));
-  row.append(up);
+  tools.append(up);
 
   const down = element('button', {
     class: 'lm__icon',
@@ -307,7 +328,8 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
   }) as HTMLButtonElement;
   down.disabled = position >= total - 1;
   down.addEventListener('click', () => reorderLayer(item, entry.name, position + 1));
-  row.append(down);
+  tools.append(down);
+  row.append(tools);
 
   into.append(row);
   for (const child of node.children) renderLayerNode(child, into, item, depth + 1);

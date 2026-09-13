@@ -55,6 +55,27 @@ export function messageBlock(kind: 'error' | 'warn' | 'info', what: string, why?
   return node;
 }
 
+/**
+ * The same message, one line tall until asked.
+ *
+ * For notes that must stay on screen but do not deserve a fifth of a side
+ * panel. The headline sentence — the one that prevents a mistake — is always
+ * visible; the explanation is one click away. Used in the layer rail, where the
+ * full block was taller than the layer list it was explaining.
+ */
+export function collapsibleNote(kind: 'error' | 'warn' | 'info', what: string, why?: string, action?: string): HTMLElement {
+  const node = element('details', { class: `msg msg--${kind} msg--collapsible` }) as HTMLDetailsElement;
+  const summary = element('summary', { class: 'msg__summary' });
+  summary.append(element('span', { class: 'msg__icon', text: kind === 'error' ? '✕' : kind === 'warn' ? '!' : 'i' }));
+  summary.append(element('span', { class: 'msg__what', text: what }));
+  node.append(summary);
+  const body = element('div', { class: 'msg__body' });
+  if (why) body.append(element('div', { class: 'msg__why', text: why }));
+  if (action) body.append(element('div', { class: 'msg__action', text: action }));
+  node.append(body);
+  return node;
+}
+
 export function keyValues(pairs: [string, string][]): HTMLElement {
   const grid = element('div', { class: 'kv' });
   for (const [key, value] of pairs) {
