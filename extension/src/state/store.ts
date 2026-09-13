@@ -375,6 +375,17 @@ export interface AppState {
   compareLinked: boolean;
   inspectorTab: string;
   bottomTab: string;
+  /** Which group of inspector sections the dock is showing. */
+  inspectorGroup: string;
+  /**
+   * Edits taken back with Undo, newest last, ready for Redo.
+   *
+   * Any NEW edit clears it — the standard rule, and the only one that cannot
+   * produce a redo that reapplies a command to geometry it was never planned
+   * against. It lives on the app state rather than the item because it is a
+   * property of the current editing session, not of the file.
+   */
+  redoStack: any[];
   formatSearch: string;
   formatCategory: string | null;
   busy: boolean;
@@ -410,6 +421,8 @@ class Store {
     compareLinked: true,
     inspectorTab: 'overview',
     bottomTab: 'qa',
+    inspectorGroup: 'data',
+    redoStack: [],
     formatSearch: '',
     formatCategory: null,
     busy: false,

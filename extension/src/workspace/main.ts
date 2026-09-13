@@ -45,6 +45,7 @@ import { historyPanel, stepHistory } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
+import { rebuildPreviewFrom } from './panels/edits';
 import { renderSelect, selectTab } from './panels/select-tab';
 import { openHelpDialog, openSettingsDialog, renderSettingsPanel } from './panels/settings';
 import { openProject, workflowsPanel } from './panels/workflows';
@@ -93,27 +94,74 @@ function render(): void {
   const dropzone = $('dropzone');
   dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
   $('inspectorTabs').classList.toggle('hidden', !selected);
-  const usesCanvas =
-    state.inspectorTab === 'preview' ||
-    state.inspectorTab === 'edit' ||
-    state.inspectorTab === 'select' ||
-    state.inspectorTab === 'backdrop' ||
-    state.inspectorTab === 'geometry-ops';
-  $('previewWrap').classList.toggle('hidden', !usesCanvas || !selected);
+
+  // ONE CANVAS, ALWAYS PRESENT.
+  //
+  // It used to be shown only on the five sections that named it, so switching
+  // to Layers or Attributes made the drawing disappear and switching back
+  // rebuilt it from scratch — losing the pan and zoom every time. The canvas is
+  // the workspace now; the sections change which TOOL is live on it, never
+  // whether it exists.
+  $('previewWrap').classList.toggle('hidden', !selected);
   $('editBar').classList.toggle('hidden', state.inspectorTab !== 'edit' || !selected);
   $('selectBar').classList.toggle('hidden', state.inspectorTab !== 'select' || !selected);
-  // Leaving the Edit tab turns editing off, so a stray Delete on another tab
+  $('measureBar').classList.toggle('hidden', state.inspectorTab !== 'measure' || !selected);
+  // Leaving the Vertices section turns editing off, so a stray Delete elsewhere
   // cannot reach a vertex.
   if (state.inspectorTab !== 'edit') ui.editCanvas?.setEnabled(false);
-  // Same rule for measuring: leaving the tab that owns a tool turns the tool
-  // off, so a click on another tab's canvas cannot land a stray point.
-  if (state.inspectorTab !== 'preview') stopMeasuring();
-  // And the same for selecting: a rubber band belongs to the tab that owns it,
-  // and a drag started on the Preview tab must not commit a translate.
+  // Same rule for measuring: leaving the section that owns a tool turns the
+  // tool off, so a click meant for panning cannot land a stray point.
+  if (state.inspectorTab !== 'measure') stopMeasuring();
+  // And the same for selecting: a rubber band belongs to the section that owns
+  // it, and a drag started elsewhere must not commit a translate.
   if (state.inspectorTab !== 'select') ui.toolCanvas?.setEnabled(false);
   updateSelectBar();
   updateMeasureBar(selected ?? undefined);
+  updateUndoRedo();
   $('compareWrap').classList.toggle('hidden', state.inspectorTab !== 'compare' || !selected);
+}
+
+/**
+ * Takes the last edit back, keeping it for Redo.
+ *
+ * The rebuild replays the commands that REMAIN rather than inverting the one
+ * removed: an inverse that drifts from its forward operation is the classic way
+ * an undo leaves the data subtly different from where it started.
+ */
+function undoEdit(): void {
+  const item = store.selected();
+  const all = item?.edits ?? [];
+  if (!item || all.length === 0) return;
+  const undone = all[all.length - 1];
+  store.set({ redoStack: [...(store.get().redoStack ?? []), undone] });
+  rebuildPreviewFrom(item, all.slice(0, -1));
+}
+
+/** Puts back the edit Undo took, if no new edit has been made since. */
+function redoEdit(): void {
+  const item = store.selected();
+  const stack = store.get().redoStack ?? [];
+  if (!item || stack.length === 0) return;
+  const command = stack[stack.length - 1];
+  store.set({ redoStack: stack.slice(0, -1) });
+  rebuildPreviewFrom(item, [...(item.edits ?? []), command]);
+}
+
+/**
+ * Undo and redo, on the canvas where the edits are made.
+ *
+ * The queue of edits already supported taking the last one back; what was
+ * missing was a forward stack, so an accidental undo could not be walked back.
+ * `store.redoStack` holds the commands popped off the end, and any NEW edit
+ * clears it — the standard rule, and the only one that cannot produce a redo
+ * that reapplies a command to geometry it was never planned against.
+ */
+function updateUndoRedo(): void {
+  const item = store.selected();
+  const undoable = (item?.edits ?? []).length > 0;
+  const redoable = (store.get().redoStack ?? []).length > 0;
+  ($('undoBtn') as HTMLButtonElement).disabled = !undoable;
+  ($('redoBtn') as HTMLButtonElement).disabled = !redoable;
 }
 
 /**
@@ -170,6 +218,18 @@ function renderInspector(): void {
     body.append(messageBlock('error', item.error.what, item.error.why, item.error.action));
   }
 
+  // Layers live in the left panel now, beside the drawing they control, so
+  // they are rendered every time rather than only when a tab is open.
+  const rail = $('layerRail');
+  rail.replaceChildren();
+  rail.append(...layersTab(item));
+
+  // The canvas is drawn ONCE, for every section, before the switch decides
+  // which tool is live on it. Previously six of the fourteen cases each called
+  // `renderPreview` and the rest did not, so the drawing blinked in and out as
+  // the user moved between sections and every return rebuilt it from scratch.
+  renderPreview(item);
+
   switch (state.inspectorTab) {
     case 'overview':
       body.append(...overviewTab(item));
@@ -183,44 +243,28 @@ function renderInspector(): void {
     case 'attributes':
       body.append(...attributesTab(item));
       break;
-    case 'layers':
-      body.append(...layersTab(item));
-      break;
     case 'geometry-ops':
       body.append(...geometryOpsTab(item));
-      // The canvas comes with it: a plan is checked by its SHAPE, not by the
-      // feature count, so the panel is only half a tool without the drawing.
-      renderPreview(item);
-      break;
-    case 'preview':
-      renderPreview(item);
-      // Measuring lives on the Preview tab because that is where the map is;
-      // giving it a tab of its own would mean two canvases showing the same
-      // data with different tools on them.
-      renderMeasure(item);
       break;
     case 'backdrop':
-      // The canvas has to exist before the backdrop can attach to it, so the
-      // preview is rendered first and the panel built against the layer that
-      // results.
-      renderPreview(item);
+      // The canvas already exists (hoisted above the switch), so the backdrop
+      // attaches to a layer that is guaranteed to be there.
       ensureBackdrop();
       body.append(...backdropTab(item));
-      // A georeference is checked by LOOKING at whether the sheet lines up,
-      // not by reading a residual table — so the canvas is not optional here.
-      renderPreview(item);
       break;
     case 'select':
       body.append(...selectTab(item));
-      // The canvas is not optional here: the whole point of the tab is the
-      // gesture, and a panel with no drawing to gesture on is a settings form.
-      renderPreview(item);
       renderSelect(item);
       break;
     case 'edit':
       body.append(...editTab(item));
-      renderPreview(item);
       renderEdit(item);
+      break;
+    case 'measure':
+      // Measuring used to live on the Preview tab "because that is where the
+      // map is". The map is everywhere now, so the tool gets its own section
+      // rather than being hidden inside one that no longer exists.
+      renderMeasure(item);
       break;
     case 'metadata':
       body.append(keyValues(Object.entries(item.dataset?.metadata ?? {}).map(([key, value]) => [key, formatValue(value)])));
@@ -489,6 +533,52 @@ function wire(): void {
       render();
     });
   }
+  // The group row above the section strip. Only one sub-strip is in the DOM's
+  // flow at a time, which is what keeps fourteen sections inside a 340px dock
+  // without a five-row wrap or a scrollbar nobody can hit.
+  for (const gtab of Array.from(document.querySelectorAll('[data-group]'))) {
+    gtab.addEventListener('click', () => {
+      const group = (gtab as HTMLElement).dataset.group!;
+      store.set({ inspectorGroup: group });
+      for (const other of Array.from(document.querySelectorAll('[data-group]'))) {
+        const on = other === gtab;
+        other.classList.toggle('gtab--on', on);
+        other.setAttribute('aria-selected', String(on));
+      }
+      let first: HTMLElement | null = null;
+      for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
+        const on = (strip as HTMLElement).dataset.groupfor === group;
+        strip.classList.toggle('hidden', !on);
+        if (on) first = strip.querySelector('[data-tab]');
+      }
+      // Results is the old bottom dock, so it shows the other body. Swapping
+      // which one is visible is all that moving it here took.
+      const results = group === 'results';
+      $('inspectorBody').classList.toggle('hidden', results);
+      $('bottomBody').classList.toggle('hidden', !results);
+      if (results) renderBottom();
+      // Switching group moves to its first section rather than leaving the
+      // body showing a panel whose tab is no longer on screen.
+      else if (first?.dataset.tab) showInspectorTab(first.dataset.tab);
+    });
+  }
+
+  $('undoBtn').addEventListener('click', () => undoEdit());
+  $('redoBtn').addEventListener('click', () => redoEdit());
+
+  // Collapse toggles. The class does the work; the arrow is only a label.
+  $('layersToggle').addEventListener('click', () => {
+    const closed = $('queueRail').classList.toggle('rail--nolayers');
+    $('layersToggle').textContent = closed ? '▸' : '▾';
+  });
+  $('railToggle').addEventListener('click', () => {
+    const rail = $('queueRail');
+    rail.classList.toggle('rail--closed');
+  });
+  $('dockToggle').addEventListener('click', () => {
+    const dock = $('rightDock');
+    dock.classList.toggle('dock--closed');
+  });
   for (const tab of Array.from(document.querySelectorAll('[data-bottom]'))) {
     tab.addEventListener('click', () => {
       store.set({ bottomTab: (tab as HTMLElement).dataset.bottom! });
@@ -568,6 +658,18 @@ function wire(): void {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       void convertAll(store.get().settings.runQa);
+    }
+    // Undo and redo. Guarded on the target so Ctrl+Z inside a text field still
+    // undoes the typing rather than reversing an edit to the survey.
+    const typing = (event.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable]');
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !typing) {
+      event.preventDefault();
+      if (event.shiftKey) redoEdit();
+      else undoEdit();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y' && !typing) {
+      event.preventDefault();
+      redoEdit();
     }
     // Undo and redo, on the keys every application uses. Scoped to the selected
     // file, because two queued surveys are two independent jobs.

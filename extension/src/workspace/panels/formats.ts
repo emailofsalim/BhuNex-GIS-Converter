@@ -124,7 +124,25 @@ export function renderFormats(): void {
     const card = element('button', {
       class: `fcard${current === format.id ? ' fcard--on' : ''}`,
       type: 'button',
-      title: [format.notes, ...(format.warnings ?? [])].filter(Boolean).join('\n\n'),
+      // The row shows the NAME and the fidelity verdict, because those are what
+      // decide the choice. Extensions and capability badges are rendered too but
+      // CSS folds them away when the dock is narrow, so the title carries them:
+      // a compact row must not be a row that hides what it was hiding.
+      title: [
+        `${format.name} — ${format.extensions.map((extension) => `.${extension}`).join(' ')}`,
+        [
+          format.supports3D ? '3D' : null,
+          format.supportsAttributes ? 'attributes' : null,
+          format.supportsCRS ? 'CRS' : null,
+          format.packaging === 'zip' ? 'packaged as a ZIP' : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        format.notes,
+        ...(format.warnings ?? []),
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
     }) as HTMLButtonElement;
     card.disabled = !available;
 
