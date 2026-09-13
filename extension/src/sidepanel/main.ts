@@ -225,7 +225,21 @@ function wire(): void {
   byId('convertBtn').addEventListener('click', () => void convertAll());
   byId('downloadBtn').addEventListener('click', downloadAll);
   byId('openWorkspace').addEventListener('click', () => {
-    void chrome.tabs.create({ url: chrome.runtime.getURL('src/workspace/index.html') });
+    // The path comes from the MANIFEST, never spelled out here.
+    //
+    // This button was dead for anyone who installed the documented way. The
+    // repository root loads as an unpacked extension with every path prefixed
+    // `dist/`, so the workspace lives at `dist/src/workspace/index.html` — and
+    // the literal `src/workspace/index.html` this used to pass resolved to a
+    // page that does not exist. Chrome opened a blank tab with an error, which
+    // is indistinguishable from the button doing nothing.
+    //
+    // `popup/main.ts` and the service worker already read `options_page`, which
+    // is correct under either layout. This is now the third caller of the same
+    // fact rather than the one place that guessed it.
+    void chrome.tabs.create({
+      url: chrome.runtime.getURL(chrome.runtime.getManifest().options_page ?? 'src/workspace/index.html'),
+    });
   });
 }
 

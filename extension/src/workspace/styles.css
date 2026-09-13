@@ -401,10 +401,68 @@ textarea {
   left: 10px;
 }
 
-.cbar--mode {
+/* One positioned column holding the tool line and its readout. Stacking them
+   is what guarantees the readout cannot land on top of a wrapped tool row. */
+.cstack {
+  position: absolute;
   top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  /* The column is only a layout frame — clicks must reach the canvas between
+     and around the bars, or the top of the drawing becomes undraggable. */
+  pointer-events: none;
+}
+
+.cstack > * {
+  pointer-events: auto;
+}
+
+/* Inside the stack the bars flow, so `position: absolute` from `.cbar` would
+   take them straight back out of it. */
+.cstack .cbar {
+  position: static;
+  max-width: 100%;
+}
+
+/* What the live tool is saying, under the tool line rather than beside it: a
+   readout that grew with a long measurement used to push the buttons along. */
+.cbar--status {
+  font-size: 12px;
+}
+
+/* Empty readouts must not leave gaps between the ones that have something to
+   say — there are three, and usually only one is speaking. */
+.cbar--status .edit__readout:empty {
+  display: none;
+}
+
+/* Compact on purpose: nineteen controls share this line, and at a laptop width
+   with both side panels open the canvas is about 830px. The label is still the
+   affordance — icons for "Lasso" versus "Move" would need a legend — so the
+   saving comes out of the padding rather than out of the words.
+
+   Qualified with `.btn` deliberately. `.btn--ghost` is defined further down the
+   file with the same specificity, so a bare `.tbtn` loses on source order — the
+   padding here was silently ignored and the active tool was not highlighted at
+   all, because the same tie-break dropped the background too. */
+.btn.tbtn {
+  padding: 2px 6px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* The active tool. A border alone is too quiet to find at a glance when the
+   canvas beneath is busy, so the fill carries it. */
+.btn.tbtn--on,
+.btn.tbtn--on:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .cbar__sep {

@@ -37,17 +37,18 @@ import { ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchCo
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
-import { editTab, renderEdit, updateEditBar } from './panels/edit-tab';
+import { editTab, renderEdit } from './panels/edit-tab';
 import { renderFormats } from './panels/formats';
-import { renderMeasure, stopMeasuring, updateMeasureBar, wireMeasureBar } from './panels/measure';
+import { renderMeasure, setMeasureMode, stopMeasuring, updateMeasureBar, wireMeasureBar } from './panels/measure';
 import { healthPanel } from './panels/health';
-import { historyPanel, stepHistory } from './panels/history';
+import { historyPanel } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
+import { type CanvasToolId, engineOf, renderToolbar, setCanvasTool, toolForKey } from './panels/toolbar';
 import { rebuildPreviewFrom } from './panels/edits';
 import { renderSelect, selectTab } from './panels/select-tab';
-import { openHelpDialog, openSettingsDialog } from './panels/settings';
+import { openAboutDialog, openHelpDialog, openSettingsDialog } from './panels/settings';
 import { openProject, workflowsPanel } from './panels/workflows';
 import { ui } from './ui-state';
 
@@ -102,21 +103,9 @@ function render(): void {
   // the workspace now; the sections change which TOOL is live on it, never
   // whether it exists.
   $('previewWrap').classList.toggle('hidden', !selected);
-  $('editBar').classList.toggle('hidden', state.inspectorTab !== 'edit' || !selected);
-  $('selectBar').classList.toggle('hidden', state.inspectorTab !== 'select' || !selected);
-  $('measureBar').classList.toggle('hidden', state.inspectorTab !== 'measure' || !selected);
-  // Leaving the Vertices section turns editing off, so a stray Delete elsewhere
-  // cannot reach a vertex.
-  if (state.inspectorTab !== 'edit') ui.editCanvas?.setEnabled(false);
-  // Same rule for measuring: leaving the section that owns a tool turns the
-  // tool off, so a click meant for panning cannot land a stray point.
-  if (state.inspectorTab !== 'measure') stopMeasuring();
-  // And the same for selecting: a rubber band belongs to the section that owns
-  // it, and a drag started elsewhere must not commit a translate.
-  if (state.inspectorTab !== 'select') ui.toolCanvas?.setEnabled(false);
-  updateSelectBar();
+  renderToolbar($('canvasToolbar'), Boolean(selected));
+  applyCanvasTool(Boolean(selected));
   updateMeasureBar(selected ?? undefined);
-  updateUndoRedo();
   $('compareWrap').classList.toggle('hidden', state.inspectorTab !== 'compare' || !selected);
 }
 
@@ -155,13 +144,9 @@ function redoEdit(): void {
  * clears it — the standard rule, and the only one that cannot produce a redo
  * that reapplies a command to geometry it was never planned against.
  */
-function updateUndoRedo(): void {
-  const item = store.selected();
-  const undoable = (item?.edits ?? []).length > 0;
-  const redoable = (store.get().redoStack ?? []).length > 0;
-  ($('undoBtn') as HTMLButtonElement).disabled = !undoable;
-  ($('redoBtn') as HTMLButtonElement).disabled = !redoable;
-}
+// Undo and redo are built by `renderToolbar`, which sets their disabled state
+// from the same `edits` and `redoStack` this used to read. Two places deciding
+// whether Undo is available is one place too many.
 
 /**
  * Keeps the "Local only" badge honest.
@@ -189,15 +174,55 @@ function updateLocalBadge(state: { settings: AppSettings }): void {
     : 'No file leaves this machine. There is no network path in any conversion, and no request of any kind is being made.';
 }
 
-/** Keeps the canvas toolbar's active tool in step with the tool layer. */
-function updateSelectBar(): void {
-  const active = ui.toolCanvas?.getTool() ?? 'select';
-  for (const [id, tool] of [
-    ['selectToolSelect', 'select'],
-    ['selectToolLasso', 'lasso'],
-    ['selectToolMove', 'move'],
-  ] as const) {
-    $(id).classList.toggle('btn--on', active === tool);
+/**
+ * Makes exactly one engine live, and stops the rest.
+ *
+ * THE RULE: one tool owns the pointer. The three interaction layers each claim
+ * the canvas's single overlay hook, so two enabled at once means the last one
+ * to attach draws and the other quietly takes clicks — a vertex landing in the
+ * middle of a measurement, or a rubber band committing a translate over a
+ * drawing. Every engine is therefore stopped first and one is started after.
+ *
+ * This used to be driven by `inspectorTab`, which made a tool a side effect of
+ * which panel the dock was showing: opening Attributes to check a field turned
+ * off the drawing tool you were mid-polygon with. The tool is now its own
+ * state, so the dock is free to show anything.
+ */
+function applyCanvasTool(selected: boolean): void {
+  const item = store.selected();
+  const tool = (store.get().canvasTool ?? 'pan') as CanvasToolId;
+  const engine = selected ? engineOf(tool) : 'none';
+
+  // --- stop everything ---------------------------------------------------
+  ui.editCanvas?.setEnabled(false);
+  ui.toolCanvas?.setEnabled(false);
+  if (engine !== 'measure') stopMeasuring();
+
+  if (!item || engine === 'none') {
+    $('toolStatus').classList.add('hidden');
+    return;
+  }
+  $('toolStatus').classList.remove('hidden');
+
+  // --- start the one ----------------------------------------------------
+  if (engine === 'tool') {
+    renderSelect(item);
+    // `select`, `lasso` and `move` are ToolCanvas's own names; the drawing
+    // tools already share theirs, so the id passes straight through.
+    ui.toolCanvas?.setTool(tool as Parameters<NonNullable<typeof ui.toolCanvas>['setTool']>[0]);
+    ui.toolCanvas?.setOrtho(ui.orthoOn === true);
+  } else if (engine === 'edit') {
+    renderEdit(item);
+    ui.editCanvas?.setEnabled(true);
+  } else if (engine === 'measure') {
+    renderMeasure(item);
+    setMeasureMode(tool === 'measure-area' ? 'area' : 'distance');
+  } else if (engine === 'info') {
+    // Feature info is a read-only click, so it rides the select engine rather
+    // than having a fourth interaction layer of its own: the click that
+    // reports a parcel's area is the same click that selects it.
+    renderSelect(item);
+    ui.toolCanvas?.setTool('select');
   }
 }
 
@@ -511,7 +536,7 @@ function wire(): void {
   $('helpBtn').addEventListener('click', openHelpDialog);
   // The credit in the top bar is also the way to the licence text and the
   // feedback address, so it opens the same dialog rather than being inert.
-  $('aboutBtn').addEventListener('click', openHelpDialog);
+  $('aboutBtn').addEventListener('click', openAboutDialog);
   $('themeBtn').addEventListener('click', () => {
     const order: AppSettings['theme'][] = ['system', 'dark', 'light'];
     const next = order[(order.indexOf(store.get().settings.theme) + 1) % order.length];
@@ -565,8 +590,11 @@ function wire(): void {
     });
   }
 
-  $('undoBtn').addEventListener('click', () => undoEdit());
-  $('redoBtn').addEventListener('click', () => redoEdit());
+  // The toolbar builds Undo and Redo, so it needs to be able to call them.
+  // Passing the functions through `ui` rather than importing `main.ts` from the
+  // toolbar keeps the dependency one-way.
+  ui.undo = () => undoEdit();
+  ui.redo = () => redoEdit();
 
   // Collapse toggles. The class does the work; the arrow is only a label.
   $('layersToggle').addEventListener('click', () => {
@@ -602,28 +630,10 @@ function wire(): void {
     render();
   });
 
-  $('fitBtn').addEventListener('click', () => ui.previewCanvas?.fit());
-  $('gridBtn').addEventListener('click', () => ui.previewCanvas?.toggleGrid());
-
-  $('editToggle').addEventListener('click', () => {
-    if (!ui.editCanvas) return;
-    ui.editCanvas.setEnabled(!ui.editCanvas.isEnabled());
-    updateEditBar();
-  });
-  ($('editSnap') as HTMLInputElement).addEventListener('change', (event) => {
-    void store.patchSettings({ editSnapEnabled: (event.target as HTMLInputElement).checked });
-  });
-
-  for (const [id, tool] of [
-    ['selectToolSelect', 'select'],
-    ['selectToolLasso', 'lasso'],
-    ['selectToolMove', 'move'],
-  ] as const) {
-    $(id).addEventListener('click', () => {
-      ui.toolCanvas?.setTool(tool);
-      render();
-    });
-  }
+  // Fit, Grid, the tool buttons, Snap and Ortho are all built and wired by
+  // `renderToolbar`. Nothing here reaches into the canvas bar by element id any
+  // more, which is what let a button and its tool drift apart in the first
+  // place.
 
   $('compareFitBtn').addEventListener('click', () => ui.dualCanvas?.fit());
   $('compareGridBtn').addEventListener('click', () => ui.dualCanvas?.toggleGrid());
@@ -653,42 +663,95 @@ function wire(): void {
   host.openProjectPicker = () => projectPicker.click();
 
   document.addEventListener('keydown', (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'o') {
+    // TYPING WINS, ALWAYS.
+    //
+    // Single-letter tool keys make this rule load-bearing rather than polite:
+    // without it, typing a layer name containing "v" would drop the user into
+    // the Select tool mid-word. Checked once, at the top, for every branch.
+    const typing = Boolean((event.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable]'));
+    const accel = event.ctrlKey || event.metaKey;
+
+    if (accel && event.key.toLowerCase() === 'o') {
       event.preventDefault();
       browse();
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    if (accel && event.key === 'Enter') {
       event.preventDefault();
       void convertAll(store.get().settings.runQa);
+      return;
     }
-    // Undo and redo. Guarded on the target so Ctrl+Z inside a text field still
-    // undoes the typing rather than reversing an edit to the survey.
-    const typing = (event.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable]');
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !typing) {
+
+    // Undo and redo, on the keys every application uses.
+    //
+    // This used to run TWICE on one keypress: a first branch called `undoEdit`
+    // and a second, further down, matched the same key and also stepped the
+    // history back — so one Ctrl+Z reversed an edit and moved the history
+    // pointer, and the user lost two operations for one keystroke. There is now
+    // exactly one handler for the combination, and it returns.
+    if (accel && !typing && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
       event.preventDefault();
-      if (event.shiftKey) redoEdit();
+      if (event.key.toLowerCase() === 'y' || event.shiftKey) redoEdit();
       else undoEdit();
+      return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y' && !typing) {
-      event.preventDefault();
-      redoEdit();
-    }
-    // Undo and redo, on the keys every application uses. Scoped to the selected
-    // file, because two queued surveys are two independent jobs.
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
-      const item = store.selected();
-      if (!item?.history) return;
-      event.preventDefault();
-      stepHistory(item.id, item.history.position + (event.shiftKey ? 1 : -1));
-    }
+
     // Ctrl/Cmd+K, the shortcut every palette uses. Muscle memory is the whole
     // point of matching the convention rather than inventing one.
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+    if (accel && event.key.toLowerCase() === 'k') {
       event.preventDefault();
       ui.palette ??= new CommandPalette($('commandPalette') as HTMLDialogElement, {
         onRun: (command) => void command.run(),
       });
       ui.palette.open(buildCommands());
+      return;
+    }
+
+    // Collapse either side panel, so the canvas can take the whole window
+    // without reaching for the mouse.
+    if (accel && (event.key === '1' || event.key === '2')) {
+      event.preventDefault();
+      const panel = event.key === '1' ? $('queueRail') : $('rightDock');
+      panel.classList.toggle(event.key === '1' ? 'rail--closed' : 'dock--closed');
+      return;
+    }
+
+    if (accel || event.altKey || typing) return;
+
+    // --- single-key tools ------------------------------------------------
+    // Only with a file open: a tool key with nothing loaded would light a
+    // button for a canvas that is not there.
+    if (store.selected()) {
+      const tool = toolForKey(event.key);
+      if (tool) {
+        event.preventDefault();
+        setCanvasTool(tool.id);
+        return;
+      }
+      if (event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        ui.previewCanvas?.fit();
+        return;
+      }
+      if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        ui.previewCanvas?.toggleGrid();
+        ui.gridOn = ui.gridOn === false;
+        render();
+        return;
+      }
+      if (event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        ui.snapOn = ui.snapOn !== true;
+        render();
+        return;
+      }
+      // Escape falls THROUGH to ToolCanvas, which cancels a drawing in
+      // progress first and clears the selection second. Returning to Pan is
+      // the last step, and only once it has nothing left of its own to undo.
+      if (event.key === 'Escape' && !ui.toolCanvas?.isDrawing()) {
+        setCanvasTool('pan');
+      }
     }
   });
 

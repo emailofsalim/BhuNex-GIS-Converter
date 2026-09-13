@@ -258,6 +258,18 @@ export class ToolCanvas {
     return this.drawing?.positions.length ?? 0;
   }
 
+  /**
+   * Whether a drawing is part-placed.
+   *
+   * The workspace's Escape handler needs this: Escape must finish what the
+   * canvas is doing — abandon the part-drawn polygon — before it changes the
+   * tool, or one keypress would throw away the geometry AND the tool that was
+   * drawing it, leaving the user to work out which of the two they had lost.
+   */
+  isDrawing(): boolean {
+    return (this.drawing?.positions.length ?? 0) > 0;
+  }
+
   /** Abandons a drawing in progress without placing anything. */
   cancelDrawing(): void {
     if (!this.drawing) return;

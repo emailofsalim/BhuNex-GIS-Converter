@@ -88,6 +88,26 @@ export interface UiState {
    * a stale one on whichever canvas happens to hold it.
    */
   basemap?: Basemap;
+  /**
+   * Whether the grid is drawn — a MIRROR of `PreviewCanvas.showGrid`, not the
+   * owner of it. The canvas keeps that field private and offers `toggleGrid()`,
+   * which is the right shape; this exists only so the toolbar button can light
+   * up. Both are flipped at the one call site that toggles either.
+   */
+  gridOn?: boolean;
+  /** Whether new geometry snaps to existing vertices, midpoints and segments. */
+  snapOn?: boolean;
+  /** Whether new segments are constrained to one axis (F8, as in AutoCAD). */
+  orthoOn?: boolean;
+  /**
+   * Undo and redo, as the workspace implements them.
+   *
+   * Held here so the toolbar can call them without importing `main.ts`, which
+   * already imports the toolbar — a cycle that builds but initialises in an
+   * order neither file controls.
+   */
+  undo?: () => void;
+  redo?: () => void;
 }
 
 // The tile layer under the preview canvas, when the user has turned it on.
@@ -109,4 +129,9 @@ export const ui: UiState = {
   featureSelection: { refs: [], wholeLayers: [] },
   palette: null,
   basemap: undefined,
+  // The canvas constructs with the grid ON, so the mirror starts true or the
+  // button would claim it is off while the grid is drawn.
+  gridOn: true,
+  snapOn: true,
+  orthoOn: false,
 };
