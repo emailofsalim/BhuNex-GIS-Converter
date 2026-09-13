@@ -130,3 +130,67 @@ describe('a format that claims an attribute table must write one', () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// A point cloud bound for a vector target must arrive with its points
+// ---------------------------------------------------------------------------
+
+describe('a point cloud converted to a vector format carries its points', () => {
+  // `predict.ts` has always listed pointcloud -> vector and -> table as
+  // possible, and the format list offers GeoJSON, DXF, Shapefile and CSV for a
+  // LAS or an XYZ. But the points live in `pointcloud.points` as typed arrays
+  // and every vector writer reads `layers[].features`, and nothing joined the
+  // two — so a total-station XYZ converted to DXF for the drawing office came
+  // out as a 383-byte file with no entities in it, reported as a success.
+  const CLOUD = new TextEncoder().encode(
+    ['412000.5 2591300.5 10.5', '412010.5 2591310.5 11.5', '412020.5 2591320.5 12.5', ''].join('\n')
+  );
+
+  async function run(target: string) {
+    const { convert } = await import('@core/pipeline');
+    const { SURVEY_DEFAULT_PRECISION } = await import('@core/precision');
+    return convert({
+      input: { fileName: 'cloud.xyz', bytes: CLOUD },
+      targetFormatId: target,
+      settings: { precision: SURVEY_DEFAULT_PRECISION, runQa: false },
+    });
+  }
+
+  it('writes the points into GeoJSON', async () => {
+    const result = await run('geojson');
+    const gj = JSON.parse(new TextDecoder().decode(result.outputs[0].bytes));
+    expect(gj.features.length, 'three points in, three features out').toBe(3);
+    expect(gj.features[0].geometry.type).toBe('Point');
+    expect(gj.features[0].geometry.coordinates[0]).toBeCloseTo(412000.5, 3);
+    // Z is survey data, not decoration.
+    expect(gj.features[0].geometry.coordinates[2]).toBeCloseTo(10.5, 3);
+  });
+
+  it('writes the points into DXF, which is what the drawing office asked for', async () => {
+    const text = new TextDecoder().decode((await run('dxf')).outputs[0].bytes);
+    expect(text).toContain('412000.5');
+  });
+
+  it('says what it did rather than doing it silently', async () => {
+    const warnings = (await run('geojson')).warnings.map((w: any) => `${w.message} ${w.reason ?? ''}`).join(' ');
+    expect(warnings).toMatch(/cloud point/i);
+  });
+
+  it('leaves a point-cloud target writing from the arrays, not the features', async () => {
+    // The cloud is kept alongside the features it produced, so LAS still writes
+    // a real point cloud rather than a vector round trip of one.
+    const result = await run('las');
+    expect(result.outputs[0].bytes.length).toBeGreaterThan(200);
+  });
+});
+
+describe('a format the writer cannot write does not advertise export', () => {
+  it('zip is import-only, and says so in the registry', async () => {
+    // It declared `export: 'full'` with no case in `writeTarget`, so it appeared
+    // in the output list as a valid target and then refused when pressed — with
+    // a message reading "registered for import only", contradicting the
+    // registry entry two lines above it.
+    const { getFormat } = await import('@core/registry');
+    expect(getFormat('zip')?.support.export).toBe('none');
+  });
+});
