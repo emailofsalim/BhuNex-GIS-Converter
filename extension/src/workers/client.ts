@@ -20,6 +20,7 @@ import type { ConversionReport } from '../core/report';
 import { ConversionError } from '../core/errors';
 import type { TransferableFile, WorkerRequest } from './convert.worker';
 import { recommendedPoolSize, WorkerPool, type JobProgress, type PoolWorker } from './pool';
+import { summarise } from './summarise';
 
 /** Files under this size are converted inline; a worker hop would cost more. */
 export const WORKER_THRESHOLD_BYTES = 2 * 1024 * 1024;
@@ -196,7 +197,12 @@ export async function inspect(
     // Small files are read in full: the pixel statistics and histogram the
     // inspector shows are worth the milliseconds at this size.
     const dataset = await readSource(toInput(file), detection, { preserveZ: true } as ConversionSettings);
-    return { detection, dataset, profile: profileDataset(dataset) };
+    // Summarised, exactly as the worker branch below does it. The workspace
+    // reads `layer.preview` and `layer.featureCount`; handing it the raw CIR
+    // here drew an empty canvas and a count of 0 for every file under the
+    // threshold — which is most survey files. The profile is taken from the
+    // FULL dataset first, so the counts it reports stay exact.
+    return { detection, dataset: summarise(dataset), profile: profileDataset(dataset) };
   }
   return request(( id) => {
     const { file: transferable, transfer } = toTransferable(file);
@@ -243,14 +249,19 @@ export async function runConversion(
     // under the threshold is not a lesser conversion, and a compare canvas that
     // works on a 3 MB DXF but is empty on a 300 KB one reads as a bug in the
     // canvas rather than as the missing hand-off it actually is.
+    // `summarise` on both datasets, at the same 2,000-feature limit the worker
+    // uses. The comment above is older than the bug it describes: this branch
+    // DID return every field, but returned the raw CIR for the two dataset
+    // ones, so the compare canvas was blank on exactly the small files the
+    // comment warns about.
     return {
       detection: result.detection,
-      dataset: result.sourceDataset,
+      dataset: summarise(result.sourceDataset, 2000),
       outputs: result.outputs.map((output) => ({ name: output.name, mimeType: output.mimeType, bytes: output.bytes })),
       tree: result.tree,
       prediction: result.prediction,
       diff: result.diff,
-      outputDataset: result.outputDataset,
+      outputDataset: result.outputDataset ? summarise(result.outputDataset, 2000) : undefined,
       overlay: result.overlay,
       health: result.health,
       report: result.report,

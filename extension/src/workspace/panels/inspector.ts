@@ -107,7 +107,11 @@ export function geometryTab(item: QueueItem): HTMLElement[] {
     body.append(
       element('tr', {}, [
         element('td', { text: layer.name }),
-        element('td', { class: 'num', text: layer.featureCount.toLocaleString() }),
+        // `?? 0` guards the render, it does not excuse a missing count: an
+        // undefined here threw and aborted the whole inspector render, which is
+        // how a shape mismatch upstream (see `workers/summarise.ts`) presented
+        // as a blank panel rather than as the wrong number it actually was.
+        element('td', { class: 'num', text: (layer.featureCount ?? 0).toLocaleString() }),
         element('td', { text: layer.geometryTypes.join(', ') || '—' }),
         element('td', { class: 'num', text: String(layer.fields.length) }),
       ])

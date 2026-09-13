@@ -1340,6 +1340,44 @@ details.adv > div {
   color: var(--accent);
 }
 
+/* A note that costs one line until opened. `.msg` is a flex row, which would
+   put the summary marker beside the text instead of before it, so the details
+   element goes back to block and the summary carries the row layout. */
+.msg--collapsible {
+  display: block;
+  padding: 7px 10px;
+}
+
+.msg__summary {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  cursor: pointer;
+  list-style: none;
+}
+
+.msg__summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The affordance: a caret that turns when the note is open. */
+.msg__summary::after {
+  content: '▸';
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: transform 0.12s ease;
+}
+
+.msg--collapsible[open] .msg__summary::after {
+  transform: rotate(90deg);
+}
+
+.msg--collapsible .msg__body {
+  margin-top: 6px;
+  padding-left: 20px;
+}
+
 /* ------------------------------------------------------------------ preview
 
    `.preview`, `.preview canvas`, `.preview__overlay` and `.preview__readout`
@@ -2091,12 +2129,17 @@ details.adv > div {
   color: var(--accent);
 }
 
+/* Wraps rather than overflows. The row carries three toggles, a name, an
+   opacity slider, a colour well and a width select; in a 260px rail that is
+   wider than the rail, and without wrapping the trailing controls were simply
+   cut off at the edge — present in the DOM, unreachable with a mouse. */
 .lm__row {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 5px 10px 5px 8px;
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
 .lm__row:hover {
@@ -2143,6 +2186,28 @@ details.adv > div {
   cursor: pointer;
   padding: 2px 4px;
   min-width: 0;
+}
+
+/* Line two of a layer row: every style control, on its own full-width line so
+   the name above it keeps the whole of line one. */
+.lm__tools {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: 2px;
+}
+
+/* One line each, with the overflow as an ellipsis. "12 · Polygon · 1 field"
+   was wrapping to three lines and tripling the height of every row. The full
+   text stays available as the row's title. */
+.lm__nameText,
+.lm__meta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lm__nameText {

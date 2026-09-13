@@ -69,19 +69,37 @@ function formatHistogram(histogram: Record<string, number>): string {
 }
 
 /**
- * Largest positional difference between two feature lists, compared in order.
+ * Largest positional difference between two feature lists.
  *
- * Order comparison is correct here because both sides come from the same source
- * through one writer and one reader; a writer that reorders features shows up as
- * a large drift, which is exactly the signal wanted.
+ * Features are paired in order — both sides come from one source through one
+ * writer and one reader, so a writer that reorders features should show up.
+ *
+ * WITHIN a feature the vertices are sorted before comparing, and that is the
+ * important part. Comparing them index-wise was wrong: a shapefile's outer ring
+ * must wind CLOCKWISE where GeoJSON's winds counter-clockwise, so the writer
+ * correctly reverses it, and the old comparison then read every vertex of a
+ * perfectly round-tripped parcel as displaced. It reported "drift 50.00 m" on a
+ * 50 m square whose bounds and vertex count it had just confirmed identical —
+ * a FAILED verdict on bytes that were exactly right, which is the one kind of
+ * QA result worse than no QA at all.
+ *
+ * Sorting makes the measure invariant to winding, which is the case that
+ * actually occurs, while a vertex that genuinely moved still lands at a
+ * different position in the sorted order and is still measured.
+ *
+ * It is NOT invariant to a ring re-started at a different vertex: a closed ring
+ * repeats its first vertex at the end, so rotating the start changes which
+ * coordinate is duplicated and the two multisets legitimately differ. No writer
+ * here re-starts rings, so that is left alone rather than guessed at — the
+ * limit is written down instead of being papered over.
  */
 function coordinateDrift(source: CirFeature[], target: CirFeature[]): number | null {
   const limit = Math.min(source.length, target.length);
   if (limit === 0) return null;
   let worst = 0;
   for (let index = 0; index < limit; index++) {
-    const a = flatten(source[index]);
-    const b = flatten(target[index]);
+    const a = sortVertices(flatten(source[index]));
+    const b = sortVertices(flatten(target[index]));
     const vertexLimit = Math.min(a.length, b.length);
     for (let vertex = 0; vertex < vertexLimit; vertex++) {
       const dx = Math.abs(a[vertex][0] - b[vertex][0]);
@@ -91,6 +109,11 @@ function coordinateDrift(source: CirFeature[], target: CirFeature[]): number | n
     }
   }
   return worst;
+}
+
+/** Canonical vertex order: by x, then y. Copies, so the geometry is untouched. */
+function sortVertices(vertices: number[][]): number[][] {
+  return [...vertices].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 }
 
 function flatten(feature: CirFeature): number[][] {

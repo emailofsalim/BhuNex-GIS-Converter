@@ -122,6 +122,11 @@ function allPositions(dataset: CirDataset): Position[] {
   return allFeatures(dataset).flatMap(positionsOf);
 }
 
+/** Canonical vertex order: by x, then y. Copies, so the geometry is untouched. */
+function sortPositions(positions: Position[]): Position[] {
+  return [...positions].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+}
+
 function ringsOf(feature: CirFeature): Position[][] {
   const geometry = feature.geometry;
   if (!geometry) return [];
@@ -250,16 +255,24 @@ export function diffDatasets(source: CirDataset, output: CirDataset, options: Pa
 
   // --- coordinates --------------------------------------------------------
   if (sourcePositions.length === outputPositions.length && sourcePositions.length > 0) {
+    // Sorted into a canonical order first. Comparing in file order made a
+    // shapefile's mandatory clockwise outer ring — the same parcel, correctly
+    // written — measure as a whole-ring displacement, and the note below used
+    // to assert the opposite of what had happened. Sorting makes the figure
+    // invariant to winding and to feature order; a vertex that really moved
+    // still separates the two lists and is still measured.
+    const sourceSorted = sortPositions(sourcePositions);
+    const outputSorted = sortPositions(outputPositions);
     let worst = 0;
     let at: Position | undefined;
-    for (let index = 0; index < sourcePositions.length; index++) {
+    for (let index = 0; index < sourceSorted.length; index++) {
       const drift = Math.hypot(
-        sourcePositions[index][0] - outputPositions[index][0],
-        sourcePositions[index][1] - outputPositions[index][1]
+        sourceSorted[index][0] - outputSorted[index][0],
+        sourceSorted[index][1] - outputSorted[index][1]
       );
       if (drift > worst) {
         worst = drift;
-        at = sourcePositions[index];
+        at = sourceSorted[index];
       }
     }
     entries.push({
@@ -268,7 +281,10 @@ export function diffDatasets(source: CirDataset, output: CirDataset, options: Pa
       output: `worst drift ${formatNumber(worst, 4)} ${UNIT}`,
       difference: `${formatNumber(worst, 4)} ${UNIT}`,
       at,
-      note: worst > settings.coordinateTolerance ? 'Vertex order is unchanged, so this is a real positional difference rather than a reordering.' : undefined,
+      note:
+        worst > settings.coordinateTolerance
+          ? 'Vertices are matched in a canonical order, so a ring reversed or re-started by the writer does not count here — this is a real positional difference.'
+          : undefined,
     });
   } else {
     entries.push({
