@@ -22,9 +22,21 @@ import { $, checkbox, element, keyValues, messageBlock, numberField, textField }
 import { boundaryRings, describeBoundary } from '../conversion';
 import { host } from '../host';
 
-export function renderSettingsPanel(): void {
+/**
+ * The conversion settings.
+ *
+ * ONE HOME FOR SETTINGS. These used to render into a strip in the right panel
+ * while privacy, the basemap, performance, delivery and naming lived in the
+ * Settings dialog — so "where is that option?" had two answers and the dock lost
+ * height to controls most conversions never touch. The dialog is the single
+ * place now, and this renders into it.
+ *
+ * `into` is a parameter rather than a fixed id precisely so there is one
+ * implementation and no second copy to drift.
+ */
+export function renderSettingsPanel(into: HTMLElement): void {
   const state = store.get();
-  const panel = $('settingsPanel');
+  const panel = into;
   panel.replaceChildren();
   const item = store.selected();
   const targetId = item?.targetFormatId ?? state.settings.globalTargetFormatId;
@@ -659,6 +671,21 @@ export function openSettingsDialog(): void {
   head.append(close);
 
   const body = element('div', { class: 'dialog__body stack' });
+
+  // Conversion first: it is what changes per job, and it is what people open
+  // this dialog looking for.
+  body.append(element('h3', { class: 'section__title', text: 'Conversion' }));
+  const conversion = element('div', { class: 'section' });
+  renderSettingsPanel(conversion);
+  if (conversion.childNodes.length === 0) {
+    conversion.append(
+      element('p', {
+        class: 'small faint',
+        text: 'Choose an output format to see the settings that apply to it — precision, elevations, attributes, QA and the options specific to that format.',
+      })
+    );
+  }
+  body.append(conversion);
 
   body.append(element('h3', { class: 'section__title', text: 'Privacy' }));
   body.append(

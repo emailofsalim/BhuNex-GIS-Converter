@@ -47,6 +47,7 @@ import { readZip, writeZip, type ZipInput } from '../engines/archives/zip';
 import { readDxf, type ReadDxfOptions } from '../engines/cad/dxf-read';
 import { DEFAULT_DXF_OPTIONS, writeDxf, type WriteDxfOptions } from '../engines/cad/dxf-write';
 import { applyDecimation, type DecimationSettings, type PointFilter } from '../engines/pointcloud/decimate';
+import { cloudToFeatures, needsCloudFeatures } from '../engines/pointcloud/to-features';
 import { DEFAULT_LAS_OPTIONS, readLas, writeLas, type WriteLasOptions } from '../engines/pointcloud/las';
 import {
   DEFAULT_TEXT_CLOUD_OPTIONS,
@@ -911,6 +912,21 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     const decimated = applyDecimation(working, settings.decimation ?? { mode: 'none' }, settings.pointFilter);
     working = decimated.dataset;
     warnings.push(...decimated.warnings);
+  }
+
+  // A CLOUD BOUND FOR A VECTOR TARGET BECOMES FEATURES.
+  //
+  // `predict.ts` has always listed pointcloud -> vector and -> table as
+  // possible, and the format list offers GeoJSON, DXF, Shapefile and CSV for a
+  // LAS or an XYZ. But the points live in `pointcloud.points` as typed arrays
+  // and every vector writer reads `layers[].features`, and nothing joined the
+  // two — so those conversions ran, reported success, and wrote a file with no
+  // points in it: a 52-byte GeoJSON, a 383-byte DXF.
+  //
+  // AFTER decimation deliberately: thinning is how a large cloud is made to fit
+  // a vector format at all, so it has to happen before the budget is measured.
+  if (target.dataKind !== 'pointcloud' && needsCloudFeatures(working)) {
+    working = cloudToFeatures(working, warnings);
   }
 
   // Polygonisation runs BEFORE repair and before burn-in: repair should act on

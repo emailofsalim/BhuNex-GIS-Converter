@@ -242,7 +242,7 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 
 | Format | Extensions | Import | Export | Carries |
 |---|---|---|---|---|
-| ZIP archive | `.zip` | **Supported** | **Supported** | — |
+| ZIP archive | `.zip` | **Supported** | Not supported | — |
 
 **ZIP archive**
 

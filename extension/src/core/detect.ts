@@ -302,6 +302,38 @@ function probeText(text: string, add: Scores): void {
     add.add('surpac-str', WEIGHTS.header, 'text-heuristic', 'Surpac string records with a 0,0,0,0 terminator');
   }
 
+  // PTS: a bare point COUNT on line one, then that many whitespace rows of
+  // x y z intensity [r g b].
+  //
+  // There was no rule for this at all, while the registry claimed
+  // `import: 'full'`. A .pts scored on its extension alone, which is not enough
+  // confidence to confirm, so every PTS file — including the ones this tool had
+  // just written — was refused with FORMAT_UNCONFIRMED. The count line is a
+  // strong, cheap signature and no other format here starts with one.
+  const ptsLines = text.split(/\r?\n/);
+  const declared = /^\s*(\d+)\s*$/.exec(ptsLines[0] ?? '');
+  if (declared) {
+    const body = ptsLines.slice(1).filter((line) => line.trim());
+    const columns = body.slice(0, 20).map((line) => line.trim().split(/\s+/));
+    const shaped =
+      columns.length > 0 &&
+      columns.every((cells) => cells.length >= 3 && cells.length <= 7 && cells.slice(0, 3).every((cell) => Number.isFinite(Number(cell))));
+    if (shaped) {
+      // The count must be consistent with the rows actually present, so a
+      // numeric first line in some other table cannot masquerade as a PTS
+      // header. Only this probe's head is read, so falling SHORT is expected;
+      // more rows than the header declares is not a PTS file.
+      const count = Number(declared[1]);
+      const agrees = count > 0 && body.length <= count;
+      add.add(
+        'pts',
+        agrees ? WEIGHTS.header : WEIGHTS.textHeuristic,
+        'text-heuristic',
+        `Point count line of ${count.toLocaleString()} followed by ${body.length.toLocaleString()} whitespace coordinate row(s)`
+      );
+    }
+  }
+
   // Delimited coordinate table. Requires several rows with a consistent
   // delimiter and at least two numeric columns, which is what separates a real
   // coordinate table from arbitrary prose.

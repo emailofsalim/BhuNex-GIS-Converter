@@ -47,7 +47,7 @@ import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
 import { rebuildPreviewFrom } from './panels/edits';
 import { renderSelect, selectTab } from './panels/select-tab';
-import { openHelpDialog, openSettingsDialog, renderSettingsPanel } from './panels/settings';
+import { openHelpDialog, openSettingsDialog } from './panels/settings';
 import { openProject, workflowsPanel } from './panels/workflows';
 import { ui } from './ui-state';
 
@@ -58,7 +58,6 @@ function render(): void {
   renderQueue();
   renderFormats();
   renderInspector();
-  renderSettingsPanel();
   renderBottom();
 
   $('queueCount').textContent = `${state.items.length} file${state.items.length === 1 ? '' : 's'}`;

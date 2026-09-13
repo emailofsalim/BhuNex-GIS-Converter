@@ -851,7 +851,13 @@ export const FORMATS: FormatDef[] = [
     magic: [{ offset: 0, bytes: 'PK' }],
     category: 'archive',
     dataKind: 'archive',
-    support: { import: 'full', export: 'full' },
+    // EXPORT IS 'none' BECAUSE THERE IS NO WRITER. `writeTarget` has no case
+    // for zip, so it fell through to the default and threw TARGET_NOT_WRITABLE
+    // — whose own message read "this format is registered for import only",
+    // contradicting the `export: 'full'` two lines up. The card appeared in the
+    // output list as a valid choice and refused when pressed. A batch delivery
+    // IS a ZIP, but that is the Batch ZIP button, not a per-file target.
+    support: { import: 'full', export: 'none' },
     supports2D: F,
     supports3D: F,
     supportsZ: F,
