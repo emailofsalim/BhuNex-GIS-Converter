@@ -8,18 +8,40 @@
     <link rel="stylesheet" crossorigin href="../../assets/client.css">
   </head>
   <body>
+    <!--
+      THREE PANELS AND A CANVAS.
+
+        left    files and layers — what is loaded, and how it draws
+        centre  the canvas, and nothing else
+        right   output format, the inspector, results, and Convert
+        all three collapse, so the canvas can have the whole window
+
+      What this replaces: a three-column grid whose middle column stacked a
+      dropzone, a fourteen-tab strip wrapping to three rows, an inspector body
+      and a compare pane, above a permanent bottom dock allowed 34vh. On a
+      1366x768 laptop those minimums exceed the height available, so the canvas
+      collapsed to its 240px floor and the rest was clipped — which is what
+      "things are hidden and I cannot select them" actually was.
+
+      The rules that keep it from coming back:
+        1. Only ONE element in the centre can grow, and it is the canvas.
+        2. Tool bars FLOAT over the canvas; they never take a row from it.
+        3. There is no bottom dock. Its panels are a group in the right one.
+        4. One control adds files, and it is in the left panel.
+    -->
     <div class="app">
       <header class="topbar">
+        <button class="iconbtn" id="railToggle" title="Show or hide files and layers" aria-label="Toggle the left panel">☰</button>
         <div class="brand">
           <img class="brand__mark" src="../../icons/icon-48.png" alt="" />
-          <span>BhuNex GIS Converter</span>
-          <span class="brand__sub">GIS · Survey · CAD · LiDAR · Mining</span>
+          <span class="brand__name">BhuNex GIS Converter</span>
         </div>
         <div class="topbar__spacer"></div>
         <span class="badge badge--ok" id="localBadge" title="No file leaves this machine. There is no network path in any conversion.">
           Local only
         </span>
         <span class="badge badge--muted" id="nativeBadge" title="Status of the optional DWG helper">Native engine: checking…</span>
+        <span class="badge badge--muted" id="perfBadge"></span>
         <button class="btn btn--ghost" id="themeBtn" title="Switch theme" aria-label="Switch theme">Theme</button>
         <button class="btn btn--ghost" id="settingsBtn">Settings</button>
         <button class="btn btn--ghost" id="helpBtn">Help</button>
@@ -27,101 +49,82 @@
           The MIT licence requires its copyright notice to travel with the
           software. A LICENSE file in the repository satisfies that for people
           who read the repository and for nobody who installs the extension, so
-          the credit is on the screen the tool actually opens on. "About" opens
-          the full notice and the feedback address.
+          the credit is on the screen the tool actually opens on.
         -->
-        <button class="btn btn--ghost credit" id="aboutBtn" title="MIT licence, author and feedback">
-          MIT · Md Salim Ansari
-        </button>
+        <button class="btn btn--ghost credit" id="aboutBtn" title="MIT licence, author and feedback">MIT · Md Salim Ansari</button>
+        <button class="iconbtn" id="dockToggle" title="Show or hide the output panel" aria-label="Toggle the right panel">▤</button>
       </header>
 
-      <div class="main">
-        <!-- Left: the queue -->
-        <section class="pane pane--queue" aria-label="Conversion queue">
-          <div class="pane__head">
-            <span class="pane__title">Queue</span>
+      <!-- A hairline under the top bar rather than a row of its own. -->
+      <div class="progress"><div class="progress__bar" id="progressBar"></div></div>
+
+      <div class="work">
+        <!-- LEFT: what is loaded, and how it draws. -->
+        <section class="rail" id="queueRail" aria-label="Files and layers">
+          <div class="rail__head">
+            <span class="pane__title">Files</span>
             <span class="badge badge--muted" id="queueCount">0 files</span>
             <div class="topbar__spacer"></div>
-            <button class="btn btn--ghost" id="addFilesBtn" title="Add files (Ctrl+O)">Add Files</button>
-            <button class="btn btn--ghost btn--danger" id="clearQueueBtn">Clear</button>
+            <!-- THE ONE PLACE FILES ARE ADDED. The canvas used to carry a second
+                 "Choose files" of its own, which is two controls for one job and
+                 a large box in the middle of the screen to hold them. -->
+            <button class="btn btn--ghost btn--sm" id="addFilesBtn" title="Add files (Ctrl+O)">Add files</button>
+            <button class="btn btn--ghost btn--sm" id="dropFolderBtn" title="Add a folder — a shapefile is four files, and a delivery is usually a tree of them">Folder</button>
+            <button class="btn btn--ghost btn--sm btn--danger" id="clearQueueBtn" title="Remove every file from the queue">Clear</button>
           </div>
-          <div class="pane__body queue" id="queue">
-            <p class="queue__empty">Nothing queued yet.<br />Drop files anywhere, or use Add Files.</p>
+          <div class="rail__body queue" id="queue">
+            <p class="queue__empty">Nothing loaded yet.<br />Drop files anywhere, or use Add files.</p>
           </div>
+
+          <!-- Layers belong beside the drawing they control, not three clicks
+               into a tab on the far side of the window. -->
+          <div class="rail__split">
+            <span class="pane__title">Layers</span>
+            <div class="topbar__spacer"></div>
+            <button class="iconbtn" id="layersToggle" title="Show or hide the layer list" aria-label="Toggle layers">▾</button>
+          </div>
+          <div class="rail__layers" id="layerRail"></div>
         </section>
 
-        <!-- Centre: drop zone, inspector, preview -->
-        <section class="pane pane--work" aria-label="Inspector and preview">
-          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop files or folders here to convert">
-            <div class="dropzone__title">Drop files or folders here</div>
-            <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
-            <button class="btn btn--primary" id="dropBrowseBtn" type="button">Choose files</button>
-            <!-- A shapefile is .shp/.shx/.dbf/.prj and a delivery is usually a
-                 tree of them, so picking a FOLDER is the common case rather
-                 than the advanced one. `folderPicker` sat in this markup with
-                 nothing opening it: the zone offered folders and the only way
-                 to use one was to drag it. -->
-            <button class="btn btn--ghost" id="dropFolderBtn" type="button">Choose folder</button>
-            <div class="dropzone__formats" id="dropFormats"></div>
-          </div>
-
-          <nav class="tabs hidden" id="inspectorTabs" role="tablist" aria-label="Inspector sections">
-            <button class="tab tab--on" data-tab="overview" role="tab" aria-selected="true">Overview</button>
-            <button class="tab" data-tab="geometry" role="tab" aria-selected="false">Geometry</button>
-            <button class="tab" data-tab="crs" role="tab" aria-selected="false">CRS</button>
-            <button class="tab" data-tab="layers" role="tab" aria-selected="false">Layers</button>
-            <button class="tab" data-tab="attributes" role="tab" aria-selected="false">Attributes</button>
-            <button class="tab" data-tab="geometry-ops" role="tab" aria-selected="false">Geometry tools</button>
-            <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
-            <button class="tab" data-tab="select" role="tab" aria-selected="false">Select &amp; move</button>
-            <button class="tab" data-tab="backdrop" role="tab" aria-selected="false">Backdrop</button>
-            <button class="tab" data-tab="edit" role="tab" aria-selected="false">Edit</button>
-            <button class="tab" data-tab="metadata" role="tab" aria-selected="false">Source metadata</button>
-            <button class="tab" data-tab="fidelity" role="tab" aria-selected="false">What will be lost</button>
-            <button class="tab" data-tab="compare" role="tab" aria-selected="false">Compare</button>
-            <button class="tab" data-tab="warnings" role="tab" aria-selected="false">
-              Warnings <span class="badge badge--muted" id="warnCount">0</span>
-            </button>
-          </nav>
-
-          <div class="pane__body" id="inspectorBody" role="tabpanel"></div>
-
-          <div class="preview hidden" id="previewWrap">
+        <!-- CENTRE: the canvas. Display, editing, drawing, measuring, tiles. -->
+        <section class="stage" aria-label="Canvas">
+          <div class="preview" id="previewWrap">
             <canvas id="previewCanvas"></canvas>
-            <div class="preview__tools">
-              <button class="btn btn--ghost" id="fitBtn" title="Fit to extent">Fit</button>
-              <button class="btn btn--ghost" id="gridBtn" title="Toggle grid">Grid</button>
+
+            <!-- Tool bars FLOAT on the canvas rather than taking rows from it. -->
+            <div class="cbar cbar--tools">
+              <button class="btn btn--ghost btn--sm" id="fitBtn" title="Fit to extent">Fit</button>
+              <button class="btn btn--ghost btn--sm" id="gridBtn" title="Toggle grid">Grid</button>
+              <span class="cbar__sep"></span>
+              <!-- Undo and redo sit ON the canvas because that is where the
+                   edits are made. Ctrl+Z / Ctrl+Shift+Z drive the same path. -->
+              <button class="btn btn--ghost btn--sm" id="undoBtn" title="Undo the last edit (Ctrl+Z)" disabled>Undo</button>
+              <button class="btn btn--ghost btn--sm" id="redoBtn" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
             </div>
-            <div class="edit__bar hidden" id="editBar">
-              <button class="btn btn--ghost" id="editToggle" title="Turn vertex editing on or off">Edit off</button>
-              <span class="edit__hint">drag a vertex · Alt-click a segment to insert · Del to delete · Shift to multi-select</span>
-              <span class="topbar__spacer"></span>
+
+            <div class="cbar cbar--mode hidden" id="selectBar">
+              <button class="btn btn--ghost btn--sm" id="selectToolSelect" title="Click to select, drag from empty space for a rubber band, drag a selected feature to move it">Select</button>
+              <button class="btn btn--ghost btn--sm" id="selectToolLasso" title="Draw a freehand outline around what to select">Lasso</button>
+              <button class="btn btn--ghost btn--sm" id="selectToolMove" title="Drag anywhere to move the current selection">Move</button>
+              <span class="edit__readout" id="selectStatus">Nothing selected</span>
+            </div>
+
+            <div class="cbar cbar--mode hidden" id="editBar">
+              <button class="btn btn--ghost btn--sm" id="editToggle" title="Turn vertex editing on or off">Edit off</button>
               <label class="edit__snap"><input type="checkbox" id="editSnap" /> Snap</label>
               <span class="edit__readout" id="editReadout"></span>
             </div>
+
             <!-- Measuring on the canvas (spec §26.1). The arithmetic is in
                  core/measure.ts, which picks geodesic or planar from the CRS —
                  nothing here computes a length. -->
-            <div class="edit__bar hidden" id="measureBar">
-              <button class="btn btn--ghost" id="measureDistance" title="Measure a distance or a run of legs">Distance</button>
-              <button class="btn btn--ghost" id="measureArea" title="Measure an enclosed area">Area</button>
-              <button class="btn btn--ghost" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
-              <span class="edit__hint">click to add a point · double-click or Esc to finish · Backspace undoes one</span>
-              <span class="topbar__spacer"></span>
+            <div class="cbar cbar--mode hidden" id="measureBar">
+              <button class="btn btn--ghost btn--sm" id="measureDistance" title="Measure a distance or a run of legs">Distance</button>
+              <button class="btn btn--ghost btn--sm" id="measureArea" title="Measure an enclosed area">Area</button>
+              <button class="btn btn--ghost btn--sm" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
               <span class="edit__readout" id="measureReadout"></span>
             </div>
-            <!-- Selecting and moving (docs/EDITING_WORKSTATION.md phases B-C).
-                 The status line is written by the tool layer while a gesture is
-                 in progress, so the offset is visible before the pointer is
-                 released rather than only after the edit is recorded. -->
-            <div class="edit__bar hidden" id="selectBar">
-              <button class="btn btn--ghost" id="selectToolSelect" title="Click to select, drag from empty space for a rubber band, drag a selected feature to move it">Select</button>
-              <button class="btn btn--ghost" id="selectToolLasso" title="Draw a freehand outline around what to select">Lasso</button>
-              <button class="btn btn--ghost" id="selectToolMove" title="Drag anywhere to move the current selection">Move</button>
-              <span class="edit__hint">Shift adds to the selection · Shift while dragging constrains to one axis · Esc clears</span>
-              <span class="topbar__spacer"></span>
-              <span class="edit__readout" id="selectStatus">Nothing selected</span>
-            </div>
+
             <div class="preview__overlay">
               <span class="preview__readout" id="readout">—</span>
               <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
@@ -133,13 +136,23 @@
             </div>
           </div>
 
+          <!-- The whole stage is the drop target. With nothing loaded it says so
+               in the middle of the canvas and costs no height; with a file
+               loaded it disappears entirely and the drawing has all of it. -->
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop files or folders here to convert">
+            <div class="dropzone__title">Drop files or folders here</div>
+            <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
+            <div class="dropzone__formats" id="dropFormats"></div>
+          </div>
+
           <!-- Source and output side by side, so nobody has to export a file to
-               find out the conversion damaged it (spec §30.1). -->
+               find out the conversion damaged it (spec §30.1). It covers the
+               canvas rather than competing with it for height. -->
           <div class="compare hidden" id="compareWrap">
             <div class="compare__tools">
-              <button class="btn btn--ghost" id="compareFitBtn" title="Fit both panes to their data">Fit</button>
-              <button class="btn btn--ghost" id="compareGridBtn" title="Toggle the grid on both panes">Grid</button>
-              <button class="btn btn--ghost" id="compareLinkBtn" title="Pan and zoom the two panes together">Linked</button>
+              <button class="btn btn--ghost btn--sm" id="compareFitBtn" title="Fit both panes to their data">Fit</button>
+              <button class="btn btn--ghost btn--sm" id="compareGridBtn" title="Toggle the grid on both panes">Grid</button>
+              <button class="btn btn--ghost btn--sm" id="compareLinkBtn" title="Pan and zoom the two panes together">Linked</button>
               <span class="compare__readout" id="compareReadout">—</span>
               <span class="compare__legend" id="compareLegend"></span>
             </div>
@@ -148,26 +161,76 @@
           </div>
         </section>
 
-        <!-- Right: target format and settings -->
-        <section class="pane pane--settings" aria-label="Output format and conversion settings">
-          <div class="pane__head">
-            <span class="pane__title">Output format</span>
-            <div class="topbar__spacer"></div>
+        <!-- RIGHT: format, inspector, results, Convert. -->
+        <section class="dock" id="rightDock" aria-label="Output format, inspector and results">
+          <div class="dock__head">
+            <span class="pane__title">Output</span>
             <span class="badge badge--muted" id="targetBadge">none selected</span>
           </div>
-          <div class="pane__body">
-            <div class="formats">
-              <input class="input" id="formatSearch" type="search" placeholder="Search formats…" aria-label="Search output formats" />
-              <div class="chips" id="categoryChips" role="group" aria-label="Format categories"></div>
-              <div class="fcards" id="formatCards"></div>
-            </div>
-            <div id="settingsPanel"></div>
+
+          <!-- The format picker stays visible whatever section is open: it is
+               the choice every conversion turns on. -->
+          <div class="dock__formats">
+            <input class="input" id="formatSearch" type="search" placeholder="Search formats…" aria-label="Search output formats" />
+            <div class="chips" id="categoryChips" role="group" aria-label="Format categories"></div>
+            <div class="fcards" id="formatCards"></div>
           </div>
+
+          <!-- TWO LEVELS, so no tab is ever hidden.
+               Fourteen tabs in one strip wrapped to three rows in a wide pane
+               and would wrap to five here. Four groups of three to five each fit
+               one row apiece, and every section stays one click away. -->
+          <nav class="groups" id="inspectorTabs" aria-label="Inspector sections">
+            <div class="groups__top" role="tablist">
+              <button class="gtab gtab--on" data-group="data" role="tab" aria-selected="true">Data</button>
+              <button class="gtab" data-group="edit" role="tab" aria-selected="false">Edit</button>
+              <button class="gtab" data-group="out" role="tab" aria-selected="false">Export</button>
+              <button class="gtab" data-group="results" role="tab" aria-selected="false">Results</button>
+            </div>
+            <div class="groups__sub" data-groupfor="data" role="tablist">
+              <button class="tab tab--on" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+              <button class="tab" data-tab="geometry" role="tab" aria-selected="false">Geometry</button>
+              <button class="tab" data-tab="crs" role="tab" aria-selected="false">CRS</button>
+              <button class="tab" data-tab="attributes" role="tab" aria-selected="false">Attributes</button>
+              <button class="tab" data-tab="metadata" role="tab" aria-selected="false">Source</button>
+            </div>
+            <div class="groups__sub hidden" data-groupfor="edit" role="tablist">
+              <button class="tab" data-tab="select" role="tab" aria-selected="false">Select &amp; move</button>
+              <button class="tab" data-tab="edit" role="tab" aria-selected="false">Vertices</button>
+              <button class="tab" data-tab="measure" role="tab" aria-selected="false">Measure</button>
+              <button class="tab" data-tab="geometry-ops" role="tab" aria-selected="false">Geometry tools</button>
+              <button class="tab" data-tab="backdrop" role="tab" aria-selected="false">Backdrop</button>
+            </div>
+            <div class="groups__sub hidden" data-groupfor="out" role="tablist">
+              <button class="tab" data-tab="fidelity" role="tab" aria-selected="false">What will be lost</button>
+              <button class="tab" data-tab="compare" role="tab" aria-selected="false">Compare</button>
+              <button class="tab" data-tab="warnings" role="tab" aria-selected="false">
+                Warnings <span class="badge badge--muted" id="warnCount">0</span>
+              </button>
+            </div>
+            <!-- What used to be the bottom dock. It is a group here rather than a
+                 permanent strip across the foot of the window, so the canvas
+                 gets that height back and nothing is lost. -->
+            <div class="groups__sub hidden" data-groupfor="results" role="tablist">
+              <button class="tab tab--on" data-bottom="qa">QA</button>
+              <button class="tab" data-bottom="log">Log</button>
+              <button class="tab" data-bottom="delivery">Delivery</button>
+              <button class="tab" data-bottom="manifest">Manifest</button>
+              <button class="tab" data-bottom="health">Health</button>
+              <button class="tab" data-bottom="history">History</button>
+              <button class="tab" data-bottom="workflows">Workflows</button>
+            </div>
+          </nav>
+
+          <div class="dock__body" id="inspectorBody" role="tabpanel"></div>
+          <div class="dock__body hidden" id="bottomBody" role="tabpanel"></div>
+          <div class="dock__settings" id="settingsPanel"></div>
+
+          <!-- Convert is the point of the tool, so it is pinned and never
+               scrolls out of reach. -->
           <div class="actions">
             <button class="btn btn--primary" id="convertBtn" disabled>Convert</button>
-            <button class="btn" id="convertQaBtn" disabled title="Convert, then re-import the output and compare it with the source">
-              Convert + QA
-            </button>
+            <button class="btn" id="convertQaBtn" disabled title="Convert, then re-import the output and compare it with the source">Convert + QA</button>
             <button class="btn hidden" id="pauseBtn" title="Stop starting new files. The one already converting finishes.">Pause</button>
             <button class="btn hidden" id="retryBtn" title="Convert only the files that failed">Retry failed</button>
             <div class="actions__spacer"></div>
@@ -176,27 +239,13 @@
           </div>
         </section>
       </div>
-
-      <!-- Bottom: QA, log, progress -->
-      <section class="bottom" aria-label="Results and log">
-        <div class="progress"><div class="progress__bar" id="progressBar"></div></div>
-        <nav class="tabs">
-          <button class="tab tab--on" data-bottom="qa">QA report</button>
-          <button class="tab" data-bottom="log">Conversion log</button>
-          <button class="tab" data-bottom="delivery">Delivery structure</button>
-          <button class="tab" data-bottom="manifest">Batch manifest</button>
-          <button class="tab" data-bottom="health">Health</button>
-          <button class="tab" data-bottom="history">History</button>
-          <button class="tab" data-bottom="workflows">Workflows</button>
-          <span class="topbar__spacer"></span>
-          <span class="badge badge--muted" id="perfBadge" style="align-self: center; margin-right: 12px"></span>
-        </nav>
-        <div class="pane__body" id="bottomBody"></div>
-      </section>
     </div>
 
     <input type="file" id="filePicker" multiple class="sr-only" aria-hidden="true" />
     <input type="file" id="folderPicker" webkitdirectory multiple class="sr-only" aria-hidden="true" />
+    <!-- Kept so the canvas keeps its browse affordance for keyboard users
+         without a second visible button competing with the left panel's. -->
+    <button id="dropBrowseBtn" class="sr-only" type="button">Choose files</button>
 
     <dialog class="dialog" id="settingsDialog" aria-label="Settings"></dialog>
     <dialog class="dialog" id="helpDialog" aria-label="Help"></dialog>

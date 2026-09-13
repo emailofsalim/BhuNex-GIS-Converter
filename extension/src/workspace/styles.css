@@ -201,7 +201,21 @@ textarea {
   color: inherit;
 }
 
-/* ------------------------------------------------------------------ layout */
+/* ------------------------------------------------------------------ layout
+
+   THE CANVAS IS THE STAGE. Everything else docks around it.
+
+   What this replaces: a three-column grid whose middle column stacked a
+   dropzone, a fourteen-tab strip wrapping to three rows, an inspector body, a
+   preview and a compare pane — above a bottom section allowed 34vh. On a
+   1366x768 laptop those minimums add up to more than the height available, so
+   the canvas collapsed to its 240px floor and the overflow was clipped. That
+   is what "things are hidden and I cannot select them" was.
+
+   Three rules keep it from coming back:
+     1. Only ONE element in the centre column can grow, and it is the canvas.
+     2. Tool bars FLOAT over the canvas; they never take a row from it.
+     3. Both docks collapse to a strip, and the bottom one starts collapsed. */
 
 .app {
   display: grid;
@@ -211,14 +225,15 @@ textarea {
      The vh line is the fallback for anything without dvh. */
   height: 100vh;
   height: 100dvh;
+  overflow: hidden;
 }
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  height: 48px;
+  gap: 10px;
+  padding: 0 12px;
+  height: 44px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
@@ -227,60 +242,318 @@ textarea {
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
 .brand__mark {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 5px;
   flex: 0 0 auto;
 }
 
-.brand__sub {
-  color: var(--text-faint);
-  font-weight: 400;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.topbar__spacer {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-/* The licence credit sits with the other top-bar buttons but should not
-   compete with them: it is an attribution first and a control second. */
-.credit {
-  color: var(--text-faint);
-  font-size: 11px;
-}
-
-.credit:hover {
+/* A compact square control for the collapse toggles. */
+.iconbtn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
   color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
 }
 
-/* Links appear only in the About block and in reports. Underlined rather than
-   colour-only, so they are distinguishable without relying on hue. */
-a {
-  color: var(--accent);
-  text-underline-offset: 2px;
-}
-
-a:hover {
+.iconbtn:hover {
+  background: var(--surface-sunken);
   color: var(--text);
 }
 
-.topbar__spacer {
-  flex: 1;
-}
+/* ---------------------------------------------------------- the work area */
 
-.main {
+.work {
   display: grid;
-  grid-template-columns: minmax(280px, 22%) 1fr minmax(300px, 26%);
+  /* The canvas takes every pixel the two docks do not. Both side tracks are
+     `auto`, so collapsing one to `width: 0` genuinely returns its space
+     instead of leaving a gap the grid still reserves. */
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 1px;
   background: var(--border);
   min-height: 0;
+  overflow: hidden;
 }
+
+.rail {
+  width: 260px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  transition: width 120ms ease;
+}
+
+.rail--closed {
+  width: 0;
+  border: none;
+}
+
+.rail__head,
+.dock__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex: 0 0 auto;
+  /* Wraps rather than pushing a control off the edge: "Clear" was the third
+     button in a 260px panel and simply vanished. */
+  flex-wrap: wrap;
+}
+
+.rail__body {
+  flex: 1 1 auto;
+  min-height: 60px;
+  overflow: auto;
+}
+
+/* The divider between Files and Layers. Both halves scroll independently, so a
+   long queue cannot push the layer list off the bottom and a deep layer tree
+   cannot bury the file it belongs to. */
+.rail__split {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex: 0 0 auto;
+}
+
+.rail__layers {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.rail--nolayers .rail__layers {
+  display: none;
+}
+
+/* ------------------------------------------------------------- the stage */
+
+.stage {
+  position: relative;
+  background: var(--surface-sunken);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The canvas fills the stage absolutely, so nothing stacked can shrink it. */
+.preview {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-sunken);
+}
+
+.preview canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Floating tool bars. `pointer-events` is set per element rather than on the
+   bar, so the gaps between buttons stay click-through to the canvas — a bar
+   that swallows a drag is a canvas with a dead strip across it. */
+.cbar {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+  max-width: calc(100% - 20px);
+  flex-wrap: wrap;
+}
+
+.cbar--tools {
+  top: 10px;
+  left: 10px;
+}
+
+.cbar--mode {
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.cbar__sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+.preview__overlay {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 20px);
+}
+
+.preview__readout {
+  font: 11px var(--mono);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 7px;
+}
+
+/* Compare covers the canvas rather than competing with it for height. */
+.compare {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------- the dock */
+
+.dock {
+  width: 340px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  transition: width 120ms ease;
+}
+
+.dock--closed {
+  width: 0;
+  border: none;
+}
+
+.dock__formats {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Shares the dock with the inspector rather than being capped against it:
+     capped at a fixed fraction, the list showed four formats of thirty-five
+     while a hand's width of empty dock sat underneath it. Both boxes scroll, so
+     neither can push the Convert button off the bottom. */
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow: auto;
+}
+
+/* Two-level section picker. Fourteen tabs in one strip wrapped to three rows
+   in a wide pane and would wrap to five in a 340px dock; three groups of four
+   to six each fit one row apiece and nothing is ever out of reach. */
+.groups {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.groups__top {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+}
+
+.gtab {
+  flex: 1 1 0;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius) var(--radius) 0 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.gtab:hover {
+  color: var(--text);
+}
+
+.gtab--on {
+  color: var(--accent);
+  background: var(--bg);
+}
+
+.groups__sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--border);
+}
+
+.dock__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.dock__settings {
+  flex: 0 0 auto;
+  max-height: 30%;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.actions__spacer {
+  flex: 1 1 auto;
+}
+
+/* The bottom dock is gone: its panels are the Results group in the right
+   panel, which gave the canvas back the 34vh it used to hold permanently.
+   `.pane` and `.tabs` remain because the dialogs and the palette use them. */
 
 .pane {
   background: var(--bg);
@@ -294,121 +567,110 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex: 0 0 auto;
 }
 
 .pane__title {
-  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
 }
 
 .pane__body {
-  overflow: auto;
   flex: 1 1 auto;
   min-height: 0;
+  overflow: auto;
 }
 
-.bottom {
-  border-top: 1px solid var(--border);
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex: 0 0 auto;
-  max-height: 34vh;
-  display: flex;
-  flex-direction: column;
+  /* Wrap rather than scroll: a horizontal scrollbar inside a 37px strip is
+     either invisible or eats a third of it, and either way the later tabs stop
+     being reachable by mouse. */
+  flex-wrap: wrap;
 }
 
-/* Below a laptop width the three columns stack rather than crush. */
+.tab {
+  padding: 6px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab--on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
 /* ------------------------------------------------------------- responsive
-   This workspace is opened in four quite different frames: a desktop tab, a
-   laptop tab, a tablet, and the browser's own side panel — which on a phone,
-   and often on a laptop, is narrower than 400px. The three-column layout is
-   right for exactly one of them.
 
-   The columns give way in order of what can be deferred. The settings column
-   goes first: it is consulted before a run and then left alone. The queue goes
-   second: it is a list, and a list reads perfectly well above the work rather
-   than beside it. The centre — preview, edit canvas, format choice — is the
-   thing being looked at, so it is the last to lose room and never loses it
-   entirely. */
+   The docks give way in order of what can be deferred, and the canvas never
+   loses its room: below a laptop the docks stop being columns and become
+   overlays ON the stage, so the canvas keeps the full width underneath. */
 
-/* Laptop: keep three columns, take the width back from the sides. */
-@media (max-width: 1400px) {
-  .main {
-    grid-template-columns: minmax(240px, 20%) 1fr minmax(260px, 24%);
+@media (max-width: 1180px) {
+  .rail {
+    width: 220px;
+  }
+  .dock {
+    width: 300px;
   }
 }
 
-/* Tablet, narrow laptop, and the browser side panel: one column, full width,
-   in reading order.
-
-   An intermediate two-column step was tried and removed. Three columns of
-   controls do not fit in 800px however the fractions are written: the panes
-   stop shrinking at their content's own minimum, the grid overflows sideways,
-   and the user gets a horizontal scrollbar across the whole application — the
-   one thing a responsive layout exists to prevent. Stacking is not a
-   compromise here, it is the layout that fits.
-
-   Nothing is hidden. A control the user cannot reach is worse on a small
-   screen than a long scroll, because there is no second way to it. */
-@media (max-width: 1100px) {
-  .main {
-    grid-template-columns: 1fr;
-    /* Each pane keeps its own scroll; this is the scroll BETWEEN them. */
-    overflow-y: auto;
-    overflow-x: hidden;
+@media (max-width: 900px) {
+  .work {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .pane {
-    /* Tall enough to work in, short enough that the next pane is discoverable
-       without the user having to guess that scrolling reveals one. */
-    max-height: 70vh;
-    border-bottom: 1px solid var(--border);
+  .rail,
+  .dock {
+    position: absolute;
+    top: 44px;
+    bottom: 0;
+    z-index: 20;
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 30px rgb(0 0 0 / 28%);
   }
-  .pane--settings {
-    max-height: none;
+  .rail {
+    left: 0;
+    width: min(300px, 86vw);
   }
-
-  /* The top bar carries a brand, two badges and four buttons. Below about
-     1100px they stop fitting on one 48px line, and a fixed height turns that
-     into buttons sliced off at the right edge rather than a second row. */
-  .topbar {
-    height: auto;
-    min-height: 48px;
-    flex-wrap: wrap;
-    padding: 8px 12px;
-    gap: 8px 12px;
+  .dock {
+    right: 0;
+    width: min(340px, 92vw);
   }
-  /* A flex spacer inside a wrapping row eats a whole line to itself. */
-  .topbar__spacer {
-    display: none;
+  /* Off-screen rather than zero-width, so the transition still reads and the
+     grid does not reflow the canvas underneath them. */
+  .rail--closed {
+    transform: translateX(-100%);
+    box-shadow: none;
+  }
+  .dock--closed {
+    transform: translateX(100%);
+    box-shadow: none;
   }
 }
 
-/* Phone. */
-@media (max-width: 720px) {
-  /* The bottom dock takes half the screen rather than a third: QA findings and
-     the conversion log are unreadable in 34vh of a 640px-tall screen. */
-  .bottom {
-    max-height: 50vh;
-  }
-  .brand__sub {
-    display: none;
-  }
-  .pane {
-    max-height: none;
-  }
-}
-
-/* Very narrow — the side panel docked on a laptop is routinely 360px. Two
-   columns of buttons is better than one column of clipped ones. */
 @media (max-width: 420px) {
-  .pane__head {
-    flex-wrap: wrap;
+  .brand__name {
+    display: none;
+  }
+  .credit {
+    display: none;
   }
   .dialog {
     width: 100vw;
@@ -418,11 +680,11 @@ a:hover {
 }
 
 /* Touch. Not a width question: a tablet at 1200px still has fingers, and a
-   28px control that is comfortable with a mouse is a mis-tap with a thumb.
-   44px is the figure both Apple's and Google's guidance settle on. */
+   28px control that is comfortable with a mouse is a mis-tap with a thumb. */
 @media (pointer: coarse) {
   .btn,
   .tab,
+  .gtab,
   .select,
   .input {
     min-height: 44px;
@@ -430,17 +692,15 @@ a:hover {
   .btn {
     padding: 10px 14px;
   }
-  .tab {
+  .tab,
+  .gtab {
     padding: 12px 14px;
   }
-  /* Checkboxes are the smallest targets in the settings column by some way. */
-  input[type='checkbox'],
-  input[type='radio'] {
-    width: 20px;
-    height: 20px;
+  .iconbtn {
+    width: 44px;
+    height: 44px;
   }
-  /* An overlay scrollbar cannot be grabbed reliably with a finger, and a
-     touch device scrolls by dragging the content anyway. */
+  /* A finger needs the scrollbar to be visible; a mouse does not. */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -619,15 +879,38 @@ a:hover {
 
 /* ------------------------------------------------------------------ drop zone */
 
+/* An OVERLAY on the empty canvas, not a block above it: you drop onto the
+   space the data will appear in, and it costs the canvas no height at all.
+   `dropzone--compact` (set once the queue is not empty) shrinks it to a corner
+   hint so it never covers the drawing. */
 .dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /* Visible when it is the only thing on the stage: an empty grey rectangle
+     with no invitation in it is the screen most people would call broken. */
   margin: 16px;
+  inset: 0;
   border: 2px dashed var(--border-strong);
   border-radius: var(--radius-lg);
-  padding: 44px 24px;
+  padding: 24px;
   text-align: center;
   background: var(--surface);
   transition: border-color 120ms ease, background 120ms ease;
   cursor: pointer;
+}
+
+.dropzone__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
 }
 
 .dropzone:hover,
@@ -653,9 +936,11 @@ a:hover {
   margin-top: 14px;
 }
 
+/* Once something is loaded the canvas belongs entirely to the data. The stage
+   still accepts a drop — the handler is on the whole stage — so nothing is lost
+   by the invitation going away. */
 .dropzone--compact {
-  padding: 18px 16px;
-  margin: 12px;
+  display: none;
 }
 
 /* ------------------------------------------------------------------ queue */
@@ -747,22 +1032,31 @@ a:hover {
   font-weight: 600;
 }
 
+/* ONE ROW PER FORMAT.
+   The cards were a 150px-minimum grid of stacked blocks — name, extensions, a
+   row of badges and a sentence — about 170px tall each, so three of
+   thirty-five were visible and choosing a format meant scrolling a list you
+   could not scan. A row puts the name and its badges on one line: fifteen
+   formats in the space three used, and the fidelity verdict still on screen
+   beside the name it belongs to. */
 .fcards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .fcard {
   text-align: left;
-  padding: 9px 10px;
+  padding: 5px 8px;
   border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: transparent;
   cursor: pointer;
   display: flex;
-  flex-direction: column;
-  gap: 5px;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow: hidden;
 }
 
 .fcard:hover:not(:disabled) {
@@ -781,6 +1075,10 @@ a:hover {
 
 .fcard__name {
   font-weight: 600;
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fcard__ext {
@@ -791,8 +1089,10 @@ a:hover {
 
 .fcard__badges {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 3px;
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 /* The one-line fidelity summary under a format card. Quiet by default so the
@@ -801,6 +1101,24 @@ a:hover {
   font-size: 11px;
   color: var(--text-faint);
   line-height: 1.35;
+  /* Hidden on the row and kept as the row's title, because it restates the
+     fidelity badge sitting two centimetres to its left. "What will be lost"
+     carries the full version. */
+  display: none;
+}
+
+/* Folded away on the row and kept in the row's title. The name and the
+   fidelity verdict are what choose a format; a row that truncates the NAME to
+   "CS..." to make space for four capability chips has its priorities backwards. */
+.fcard__ext {
+  display: none;
+}
+
+/* Only the leading badge — the fidelity verdict for THIS data — stays on the
+   row. The capability chips behind it are generic and live in the title and in
+   "What will be lost". */
+.fcard__badges .badge:not(:first-child) {
+  display: none;
 }
 
 /* --------------------------------------------------- what will be lost (§22) */
@@ -1022,40 +1340,12 @@ details.adv > div {
   color: var(--accent);
 }
 
-/* ------------------------------------------------------------------ preview */
+/* ------------------------------------------------------------------ preview
 
-.preview {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 240px;
-  background: var(--surface-sunken);
-}
-
-.preview canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.preview__overlay {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  pointer-events: none;
-}
-
-.preview__readout {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  padding: 3px 7px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-}
+   `.preview`, `.preview canvas`, `.preview__overlay` and `.preview__readout`
+   are defined in the layout section, where the canvas is positioned as the
+   stage. Duplicating them here is what let the old flex sizing win by source
+   order and re-impose the 240px floor. */
 
 .preview__tools {
   position: absolute;
@@ -1443,14 +1733,7 @@ details.adv > div {
 
 /* ----------------------------------------------- dual canvas (spec §30.1) */
 
-.compare {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 280px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-sunken);
-}
+/* `.compare` is positioned over the stage in the layout section. */
 
 .compare__tools {
   display: flex;
