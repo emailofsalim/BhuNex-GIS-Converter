@@ -26,6 +26,7 @@ import {
   type Warning,
 } from '../../core/cir';
 import { ConversionError } from '../../core/errors';
+import { RING_APPID } from './dxf-write';
 import {
   DEFAULT_ARC_TOLERANCE,
   arcSegmentCount,
@@ -457,7 +458,8 @@ export function readDxf(text: string, source: SourceInfo, options: ReadDxfOption
       }
       case 'LWPOLYLINE': {
         const geometry = readLwPolyline(record, tolerance, curves);
-        emit(record, geometry, placement);
+        const tag = ringTagOf(record);
+        emit(record, geometry, placement, tag ? { _ringTag: `${tag.feature}:${tag.part}:${tag.ring}` } : {});
         break;
       }
       case 'POLYLINE': {
@@ -753,8 +755,11 @@ export function readDxf(text: string, source: SourceInfo, options: ReadDxfOption
     );
   }
 
+  let ringsRebuilt = 0;
   const cirLayers: CirLayer[] = [...layers.entries()].map(([name, features]) => {
-    const layer = createLayer(name, features, deriveFields(features));
+    const regrouped = regroupTaggedRings(features);
+    ringsRebuilt += regrouped.rebuilt;
+    const layer = createLayer(name, regrouped.features, deriveFields(regrouped.features));
     layer.style = layerStyles.get(name);
     return layer;
   });
@@ -779,6 +784,101 @@ export function readDxf(text: string, source: SourceInfo, options: ReadDxfOption
       unsupportedEntities: Object.fromEntries(unsupported),
     },
   });
+}
+
+/**
+ * The ring tag this converter writes, or null.
+ *
+ * XDATA is a flat run of pairs: 1001 names the application, and the 1000 that
+ * follows carries its string. Scanning for our APPID and taking the next 1000
+ * is what keeps this from picking up another application's data that happens to
+ * sit nearby in the same entity.
+ */
+export function ringTagOf(record: EntityRecord): { feature: number; part: number; ring: number } | null {
+  for (let index = 0; index < record.pairs.length - 1; index++) {
+    if (record.pairs[index].code !== 1001 || record.pairs[index].value !== RING_APPID) continue;
+    const next = record.pairs.slice(index + 1).find((pair) => pair.code === 1000);
+    if (!next) return null;
+    const parts = String(next.value).split(':').map(Number);
+    if (parts.length !== 3 || parts.some((value) => !Number.isInteger(value) || value < 0)) return null;
+    return { feature: parts[0], part: parts[1], ring: parts[2] };
+  }
+  return null;
+}
+
+/**
+ * Rebuilds polygons from rings this converter tagged on the way out.
+ *
+ * DXF cannot express a polygon with a hole, so each ring left as its own closed
+ * polyline. Read back naively that turns one cadastral parcel with an excluded
+ * tank into TWO parcels — the holding at its gross area, and the tank as a plot
+ * that does not exist. Where the tags are present the original grouping is
+ * exact, so this is a reconstruction rather than a guess.
+ *
+ * Untagged entities are left completely alone. A drawing from AutoCAD carries
+ * no tags, and inferring holes there by containment would be a guess that turns
+ * a genuine plot enclosed by a neighbour's land into a void in it.
+ */
+function regroupTaggedRings(features: CirFeature[]): { features: CirFeature[]; rebuilt: number } {
+  const groups = new Map<number, { part: number; ring: number; feature: CirFeature }[]>();
+  const order: (number | CirFeature)[] = [];
+
+  for (const feature of features) {
+    const tag = feature.properties?._ringTag as string | undefined;
+    if (typeof tag !== 'string') {
+      order.push(feature);
+      continue;
+    }
+    const parts = tag.split(':').map(Number);
+    const key = parts[0];
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      // Remember where this feature first appeared so the rebuilt polygon takes
+      // its place in the layer rather than being appended at the end.
+      order.push(key);
+    }
+    groups.get(key)!.push({ part: parts[1], ring: parts[2], feature });
+  }
+
+  if (groups.size === 0) return { features, rebuilt: 0 };
+
+  let rebuilt = 0;
+  const out: CirFeature[] = [];
+  for (const entry of order) {
+    if (typeof entry !== 'number') {
+      out.push(entry);
+      continue;
+    }
+    const members = groups.get(entry)!;
+    // Parts in order, and within each part ring 0 (the outer boundary) first.
+    members.sort((a, b) => a.part - b.part || a.ring - b.ring);
+
+    const byPart = new Map<number, Position[][]>();
+    let dimension = 2;
+    for (const member of members) {
+      const geometry = member.feature.geometry as { coordinates?: Position[][]; dimension?: number } | null;
+      const ring = geometry?.coordinates?.[0];
+      if (!ring) continue;
+      if ((geometry?.dimension ?? 2) > dimension) dimension = geometry!.dimension!;
+      const list = byPart.get(member.part) ?? [];
+      list.push(ring);
+      byPart.set(member.part, list);
+    }
+    if (byPart.size === 0) continue;
+
+    const properties = { ...members[0].feature.properties };
+    delete properties._ringTag;
+
+    const polygons = [...byPart.entries()].sort((a, b) => a[0] - b[0]).map(([, rings]) => rings);
+    const geometry =
+      polygons.length === 1
+        ? { type: 'Polygon' as const, coordinates: polygons[0], dimension }
+        : { type: 'MultiPolygon' as const, coordinates: polygons, dimension };
+
+    if (members.length > 1) rebuilt++;
+    out.push({ ...members[0].feature, geometry: geometry as never, properties });
+  }
+  return { features: out, rebuilt };
 }
 
 function bump(counter: Map<string, number>, key: string): void {
