@@ -232,6 +232,16 @@ function applyCanvasTool(selected: boolean): void {
   // --- start the one ----------------------------------------------------
   if (engine === 'tool') {
     renderSelect(item);
+    // SWITCH THE ENGINE ON. Everything above was turned off, and `setTool`
+    // only changes which tool is current — it does not enable the layer.
+    //
+    // Without this line ToolCanvas stayed disabled for its entire life, which
+    // killed Select, Lasso, Move, all five drawing tools and Info in one go:
+    // the buttons lit, the cursor changed, the status line gave instructions,
+    // and every click was ignored. Vertex and Measure worked, because their
+    // branches enable themselves — which is exactly what made it look like
+    // "some editing works and some does not" rather than a single missing call.
+    ui.toolCanvas?.setEnabled(true);
     // `select`, `lasso` and `move` are ToolCanvas's own names; the drawing
     // tools already share theirs, so the id passes straight through.
     ui.toolCanvas?.setTool(tool as Parameters<NonNullable<typeof ui.toolCanvas>['setTool']>[0]);
@@ -296,6 +306,7 @@ function applyCanvasTool(selected: boolean): void {
     // than having a fourth interaction layer of its own: the click that
     // reports a parcel's area is the same click that selects it.
     renderSelect(item);
+    ui.toolCanvas?.setEnabled(true);
     ui.toolCanvas?.setTool('select');
   }
 }
