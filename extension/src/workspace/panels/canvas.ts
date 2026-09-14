@@ -1,6 +1,7 @@
 /** Drawing: the single-dataset canvas, the dual canvas and the overlay legend. */
 
 import type { CrsRef } from '../../core/cir';
+import { EMPTY_SELECTION } from '../../core/selection';
 import {
   colourOf,
   dashPattern,
@@ -21,6 +22,43 @@ import { $, element } from '../dom';
 import { viewOf } from './dataset';
 import { geometryPlanOverlay } from './geometry-ops';
 import { ui } from '../ui-state';
+
+/**
+ * Empties the canvas when there is nothing to draw.
+ *
+ * `previewWrap` is hidden when no file is selected, which LOOKS like clearing
+ * and is not: the bitmap keeps its last drawing, and every hook that paints
+ * over it keeps its reference to a dataset that has been removed. Emptying the
+ * queue therefore left 282,374 painted pixels sitting behind a `hidden` class,
+ * and the moment anything unhid the canvas — importing the next file, a render
+ * that reveals it before `setData` runs — the previous file's layers were back
+ * on screen.
+ *
+ * The selection goes too. It addresses features by layer name and index, so a
+ * selection held across a file change points into geometry that no longer
+ * exists, and the next edit would apply to whatever now occupies those indices.
+ */
+export function clearPreview(): void {
+  ui.featureSelection = EMPTY_SELECTION;
+  ui.basemap = undefined;
+  ui.editTrace = null;
+  const canvas = ui.previewCanvas;
+  if (!canvas) return;
+
+  canvas.onOverlay = undefined;
+  setUnderlay(canvas, null);
+  canvas.setData({ layers: [], truncated: false });
+
+  // The bitmap is wiped DIRECTLY, not by asking the canvas to re-render.
+  //
+  // By the time this runs the wrapper is already hidden, so the element has no
+  // layout and the renderer has nothing to lay out against — it returns without
+  // painting, and the previous drawing stays in the backing store. Measured:
+  // the pixel hash after emptying the queue was identical to the hash while the
+  // file was still loaded. `clearRect` does not care about layout.
+  const context = canvas.element.getContext('2d');
+  if (context) context.clearRect(0, 0, canvas.element.width, canvas.element.height);
+}
 
 export function renderPreview(item: QueueItem): void {
   const canvas = $('previewCanvas') as HTMLCanvasElement;
@@ -70,6 +108,21 @@ export function renderPreview(item: QueueItem): void {
   // would be worse than drawing nothing.
   ui.previewCanvas.onOverlay =
     store.get().inspectorTab === 'geometry-ops' ? geometryPlanOverlay(item) : undefined;
+
+  // The pre-edit ghost, styled like the live layers so shapes are comparable
+  // rather than merely present.
+  const trace = ui.editTrace as { layers?: any[] } | null | undefined;
+  data.trace = trace?.layers?.length
+    ? trace.layers.map((layer: any, index: number) => ({
+        name: layer.name,
+        visible: true,
+        color: LAYER_COLORS[index % LAYER_COLORS.length],
+        features: layer.preview ?? layer.features ?? [],
+        lineWidth: 1,
+        lineDash: [],
+        opacity: 1,
+      }))
+    : undefined;
 
   attachBasemap(ui.previewCanvas, dataset);
 

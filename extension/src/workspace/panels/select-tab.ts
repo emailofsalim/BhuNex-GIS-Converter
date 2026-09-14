@@ -491,7 +491,12 @@ export function renderSelect(item: QueueItem): void {
       selection: () => ui.featureSelection,
       onSelectionChange: (selection) => {
         ui.featureSelection = selection;
-        host.renderInspector();
+        // `render`, not `renderInspector`: a feature selection is read by more
+        // than the Select panel — the attribute table annotates its header with
+        // the count, and the toolbar enables the tools that need something
+        // selected. Refreshing only the inspector left those disagreeing with
+        // what was highlighted on the canvas.
+        host.render();
       },
       onMove: (selection, offset) => commitMove(selection, offset),
       onStatus: (text) => {

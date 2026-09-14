@@ -52,6 +52,17 @@ export interface PreviewData {
   raster?: { extent: Bounds; label: string };
   /** Where the source and the output differ, drawn over both canvases. */
   overlay?: PreviewOverlayItem[];
+  /**
+   * The geometry as it stood before the pending edits, drawn as a grey dashed
+   * ghost under the live data.
+   *
+   * A survey edit is only defensible if it can be compared with what was there.
+   * Moving a boundary used to leave nothing behind: the parcel simply was
+   * somewhere else now, and how far it had gone was unrecoverable by eye. The
+   * trace stays for as long as the edits are pending, and goes when they are
+   * discarded or written out.
+   */
+  trace?: PreviewLayer[];
   /** True when what is drawn is a subset of what will be exported. */
   truncated: boolean;
 }
@@ -77,6 +88,12 @@ interface View {
 }
 
 /** Overlay colours, chosen to read on both themes and against every layer colour. */
+/**
+ * The colour of a pre-edit trace. Grey and low-contrast on purpose: it is a
+ * reference, not data, and must never be mistaken for a real boundary.
+ */
+const TRACE_COLOR = 'rgba(140, 148, 158, 0.85)';
+
 const OVERLAY_COLORS: Record<PreviewOverlayItem['role'], string> = {
   added: '#3fb950',
   removed: '#f85149',
@@ -339,6 +356,9 @@ export class PreviewCanvas {
 
     if (this.data.cloud) this.drawCloud();
 
+    // UNDER the live data, so an edit is drawn over the place it came from.
+    this.drawTrace();
+
     for (const layer of this.data.layers) {
       if (!layer.visible) continue;
       // Saved and restored per layer: a dash pattern or an alpha left set would
@@ -426,6 +446,35 @@ export class PreviewCanvas {
     context.fillStyle = this.style('--text-faint');
     context.font = '10px ui-monospace, monospace';
     context.fillText(`grid ${formatStep(step)}`, 8, height - 8);
+    context.restore();
+  }
+
+  /**
+   * The pre-edit geometry, grey and dashed.
+   *
+   * It reuses the same feature walk as the live layers rather than a reduced
+   * one, so a ghost of a polygon with a hole shows the hole, and a ghost of a
+   * multi-part holding shows both parts. A trace that simplified what it drew
+   * would be worse than none: it would invite a comparison against a shape that
+   * was never there.
+   */
+  private drawTrace(): void {
+    const trace = this.data.trace;
+    if (!trace?.length) return;
+    const context = this.context;
+    context.save();
+    context.strokeStyle = TRACE_COLOR;
+    // Outline only. `strokePath` fills a polygon's outer ring at 14% alpha, and
+    // a grey wash over the basemap would hide the very imagery the trace is
+    // there to be judged against — so the fill is made a no-op rather than the
+    // walk being reduced to one that cannot draw holes.
+    context.fillStyle = 'rgba(0, 0, 0, 0)';
+    context.lineWidth = 1.2;
+    context.setLineDash([4, 4]);
+    for (const layer of trace) {
+      if (!layer.visible) continue;
+      for (const feature of layer.features) this.drawGeometry(feature.geometry);
+    }
     context.restore();
   }
 

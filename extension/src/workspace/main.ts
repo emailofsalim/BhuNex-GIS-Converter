@@ -33,7 +33,7 @@ import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
 import { backdropTab } from './panels/backdrop-tab';
-import { ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
+import { clearPreview, ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
@@ -66,6 +66,24 @@ function render(): void {
   $('queueCount').textContent = `${state.items.length} file${state.items.length === 1 ? '' : 's'}`;
   ($('progressBar') as HTMLElement).style.width = `${Math.round(state.progress * 100)}%`;
   $('perfBadge').textContent = state.perf;
+
+  // THE DWG HELPER BADGE IS ONLY SHOWN WHEN IT MEANS SOMETHING.
+  //
+  // It read "Native engine: unknown" permanently, which is literally true —
+  // the helper is never probed until it is needed, because probing asks for a
+  // permission nobody should face until they actually open a DWG. But a
+  // permanent "unknown" in the top bar hangs a question mark over a tool that
+  // is working perfectly, for the great majority of users who will never
+  // convert a DWG at all.
+  //
+  // So it appears when it has something to say: the helper answered (worth
+  // confirming), it was asked and failed (worth fixing), or a DWG is in the
+  // queue (when the answer decides whether the conversion can run at all).
+  const dwgQueued = state.items.some(
+    (queued) => queued.detection?.formatId === 'dwg' || /\.dwg$/i.test(queued.fileName)
+  );
+  const nativeStatus = state.native?.status ?? 'UNKNOWN';
+  $('nativeBadge').classList.toggle('hidden', nativeStatus === 'UNKNOWN' && !dwgQueued);
 
   const selected = store.selected();
   const canConvert = Boolean(selected && (selected.status === 'ready' || selected.status === 'done') && (selected.targetFormatId ?? state.settings.globalTargetFormatId));
@@ -105,6 +123,10 @@ function render(): void {
   // the workspace now; the sections change which TOOL is live on it, never
   // whether it exists.
   $('previewWrap').classList.toggle('hidden', !selected);
+  // Hiding the wrapper is not clearing the canvas. Without this the last
+  // file's layers stay painted behind the `hidden` class and reappear the
+  // moment anything reveals the canvas again.
+  if (!selected) clearPreview();
   renderToolbar($('canvasToolbar'), Boolean(selected));
   applyCanvasTool(Boolean(selected));
   updateMeasureBar(selected ?? undefined);
@@ -210,6 +232,16 @@ function applyCanvasTool(selected: boolean): void {
   // --- start the one ----------------------------------------------------
   if (engine === 'tool') {
     renderSelect(item);
+    // SWITCH THE ENGINE ON. Everything above was turned off, and `setTool`
+    // only changes which tool is current — it does not enable the layer.
+    //
+    // Without this line ToolCanvas stayed disabled for its entire life, which
+    // killed Select, Lasso, Move, all five drawing tools and Info in one go:
+    // the buttons lit, the cursor changed, the status line gave instructions,
+    // and every click was ignored. Vertex and Measure worked, because their
+    // branches enable themselves — which is exactly what made it look like
+    // "some editing works and some does not" rather than a single missing call.
+    ui.toolCanvas?.setEnabled(true);
     // `select`, `lasso` and `move` are ToolCanvas's own names; the drawing
     // tools already share theirs, so the id passes straight through.
     ui.toolCanvas?.setTool(tool as Parameters<NonNullable<typeof ui.toolCanvas>['setTool']>[0]);
@@ -274,6 +306,7 @@ function applyCanvasTool(selected: boolean): void {
     // than having a fourth interaction layer of its own: the click that
     // reports a parcel's area is the same click that selects it.
     renderSelect(item);
+    ui.toolCanvas?.setEnabled(true);
     ui.toolCanvas?.setTool('select');
   }
 }

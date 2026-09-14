@@ -221,6 +221,43 @@ This strengthens R15 rather than qualifying it. Everything except the basemap
 already worked with the network disabled; now the basemap does not pretend
 otherwise.
 
+### An edit shows where the geometry was
+
+Added after the owner wrote: "when anything gets edited its trace must be there
+so that it can be comparable like if i am dragging a vertex then in the previous
+place there will be grey dashed line in the original place".
+
+The reason this is not cosmetic: a survey edit is only defensible if it can be
+compared with what was there. Before this, dragging a boundary moved it and
+erased the position it came from — there was no way to see how far a corner had
+gone, or to put it back by eye.
+
+Two traces, because there are two timescales:
+
+| When | What it shows | Where |
+|---|---|---|
+| During a vertex drag | every ring with a vertex in the gesture, at its original positions, plus a hollow marker on each moved vertex's start | `ui/edit-canvas.ts` → `drawOriginTrace` |
+| While edits are pending | the dataset as it stood **before the first** queued edit | `ui/preview.ts` → `drawTrace`, fed from `ui.editTrace` |
+
+Three decisions worth keeping:
+
+- **Captured once, not per edit.** The useful comparison is against the file as
+  it arrived. Refreshing it on every edit would make three small corrections
+  show where the parcel was one nudge ago — which is never the question being
+  asked.
+- **Drawn underneath.** The trace goes down before the live geometry. The other
+  order reads as "something is drawn over my parcel" rather than "this moved
+  from there".
+- **Outline only, and the same feature walk as a live layer.** A ghost of a
+  polygon with a hole shows the hole; a multi-part holding shows both parts. A
+  reduced walk would invite a comparison against a shape that was never there.
+  It is not filled, because a grey wash would hide the very imagery the
+  placement is being judged against.
+
+It is dropped when the edits are discarded and when the file itself goes: a
+ghost outliving its edits is a grey outline of a change the user has just
+undone, which is the most confusing thing that can be on the canvas.
+
 ## Rules this work must not break
 
 - **R4** — nothing is guessed. A transform records what it did.

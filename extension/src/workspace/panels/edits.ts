@@ -13,6 +13,7 @@ import { element, ghostButton } from '../dom';
 import { host } from '../host';
 import { datasetForTools, protectedFor, truncationOf } from './dataset';
 import { historyOf } from './history';
+import { ui } from '../ui-state';
 
 /**
  * What `queueEdit` needs from a plan: whether it refused, and why.
@@ -50,6 +51,14 @@ export function queueEdit(item: QueueItem, command: EditCommand, plan: Refusable
 
   const before = item.dataset;
   const preview = applyToPreview(item, command);
+
+  // THE TRACE: what the geometry looked like before the FIRST pending edit.
+  //
+  // Captured once and kept, not refreshed per edit, because the useful
+  // comparison for a surveyor is against the file as it arrived — not against
+  // the state after the previous nudge. Three small corrections should show
+  // where the parcel started, not where it was one drag ago.
+  if (!ui.editTrace && (before as { layers?: unknown[] } | undefined)?.layers) ui.editTrace = before as never;
 
   store.updateItem(item.id, {
     dataset: preview,
@@ -169,6 +178,10 @@ export function rebuildPreviewFrom(item: QueueItem, commands: EditCommand[]): vo
   }
 
   store.updateItem(item.id, { dataset, edits: commands, pristineDataset: pristine });
+  // With no edits left there is nothing for a ghost to be the ghost OF, and one
+  // left behind would be a grey outline of a change the user has just undone —
+  // the most confusing thing on the canvas.
+  if (commands.length === 0) ui.editTrace = null;
   store.log('ok', commands.length === 0 ? 'All edits discarded.' : `${commands.length} edit(s) remain.`);
   host.render();
 }
