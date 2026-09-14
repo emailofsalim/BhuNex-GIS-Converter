@@ -261,7 +261,11 @@ function applyCanvasTool(selected: boolean): void {
     if (!ui.georefCanvas && ui.previewCanvas) {
       ui.georefCanvas = new GeorefCanvas(ui.previewCanvas, {
         session: () => ui.georefSession,
-        centre: () => centreOf(store.selected()?.dataset as never),
+        // `?? null` rather than `as never`: the cast that used to be here hid
+        // the fact that a WORKSPACE dataset was being handed to a function
+        // typed for a CIR one, which is the shape mismatch that made every
+        // rotate and scale gesture throw. `centreOf` reads either shape now.
+        centre: () => centreOf(store.selected()?.dataset ?? null),
         onChange: (affine) => {
           const current = ui.georefSession;
           const active = store.selected();
@@ -406,6 +410,15 @@ function renderInspector(): void {
  * highlighted tab — a small inconsistency that makes a palette command look
  * like it half worked.
  */
+/**
+ * Shows one section, and folds the picker back up behind it.
+ *
+ * The section strip is a drop-down rather than a permanent row: six names wrap
+ * to two or three lines in a narrow dock, and a row of buttons nobody has
+ * clicked was costing the canvas that height on every render. Closing it here —
+ * rather than only on the chevron — means picking a section puts the space back
+ * immediately, which is the behaviour a menu has and a tab strip does not.
+ */
 function showInspectorTab(name: string): void {
   store.set({ inspectorTab: name });
   for (const tab of Array.from(document.querySelectorAll('[data-tab]'))) {
@@ -413,7 +426,31 @@ function showInspectorTab(name: string): void {
     tab.classList.toggle('tab--on', on);
     tab.setAttribute('aria-selected', String(on));
   }
+  closeSectionStrips();
   render();
+}
+
+/** Folds every section strip back to just the section that is open. */
+function closeSectionStrips(): void {
+  for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
+    strip.classList.add('groups__sub--closed');
+    const drop = strip.querySelector('.groups__drop');
+    if (drop) {
+      drop.textContent = 'More ▾';
+      drop.setAttribute('aria-expanded', 'false');
+    }
+  }
+}
+
+/** Drops one section strip open, folding any other that was left open. */
+function openSectionStrip(strip: Element): void {
+  closeSectionStrips();
+  strip.classList.remove('groups__sub--closed');
+  const drop = strip.querySelector('.groups__drop');
+  if (drop) {
+    drop.textContent = 'Less ▴';
+    drop.setAttribute('aria-expanded', 'true');
+  }
 }
 
 /**
@@ -443,6 +480,10 @@ function showInspectorGroup(group: string, tab?: string): void {
   $('inspectorBody').classList.toggle('hidden', results);
   $('bottomBody').classList.toggle('hidden', !results);
   if (results) {
+    // The early return skips `showInspectorTab`, so the fold has to happen
+    // here too — otherwise switching into Results left whichever strip the user
+    // had dropped open still open behind it.
+    closeSectionStrips();
     renderBottom();
     return;
   }
@@ -673,14 +714,39 @@ function wire(): void {
 
   for (const tab of Array.from(document.querySelectorAll('[data-tab]'))) {
     tab.addEventListener('click', () => {
-      const name = (tab as HTMLElement).dataset.tab!;
-      store.set({ inspectorTab: name });
-      for (const other of Array.from(document.querySelectorAll('[data-tab]'))) {
-        other.classList.toggle('tab--on', other === tab);
-        other.setAttribute('aria-selected', String(other === tab));
+      // Clicking the section that is ALREADY open, while the strip is folded,
+      // drops the list instead of re-selecting what is already selected. The
+      // visible name is the thing a user aims at to see the others, so it has
+      // to behave like the head of a drop-down and not like a dead button.
+      const strip = tab.closest('[data-groupfor]');
+      if (tab.classList.contains('tab--on') && strip?.classList.contains('groups__sub--closed')) {
+        openSectionStrip(strip);
+        return;
       }
-      render();
+      // Delegated rather than repeated: this used to carry its own copy of the
+      // select-and-mark loop, which is how it came to be the one path that did
+      // not fold the strip back up.
+      showInspectorTab((tab as HTMLElement).dataset.tab!);
     });
+  }
+
+  // The chevron that drops the section list open. Built here rather than in the
+  // HTML so the four strips cannot drift apart, and so a new section group gets
+  // one for free.
+  for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
+    const drop = element('button', {
+      class: 'groups__drop',
+      type: 'button',
+      text: 'More ▾',
+      title: 'Show the other sections in this group',
+    });
+    drop.setAttribute('aria-expanded', 'false');
+    drop.addEventListener('click', () => {
+      if (strip.classList.contains('groups__sub--closed')) openSectionStrip(strip);
+      else closeSectionStrips();
+    });
+    strip.append(drop);
+    strip.classList.add('groups__sub--closed');
   }
   // The group row above the section strip. Only one sub-strip is in the DOM's
   // flow at a time, which is what keeps fourteen sections inside a 340px dock
@@ -711,8 +777,17 @@ function wire(): void {
   });
   for (const tab of Array.from(document.querySelectorAll('[data-bottom]'))) {
     tab.addEventListener('click', () => {
+      // Results is the one group whose sections are addressed by `data-bottom`
+      // rather than `data-tab`, so it needs the same open-then-fold behaviour
+      // spelled out here — it does not pass through `showInspectorTab`.
+      const strip = tab.closest('[data-groupfor]');
+      if (tab.classList.contains('tab--on') && strip?.classList.contains('groups__sub--closed')) {
+        openSectionStrip(strip);
+        return;
+      }
       store.set({ bottomTab: (tab as HTMLElement).dataset.bottom! });
       for (const other of Array.from(document.querySelectorAll('[data-bottom]'))) other.classList.toggle('tab--on', other === tab);
+      closeSectionStrips();
       renderBottom();
     });
   }

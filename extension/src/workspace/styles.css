@@ -552,15 +552,24 @@ textarea {
   padding: 4px 6px 0;
 }
 
+/* DELIBERATELY QUIET.
+   This row is the workflow spine — Data, Edit, Export, Results is the order the
+   work happens in — so it stays on screen rather than moving into Settings. But
+   it is a signpost, not a headline: it was competing with the canvas and with
+   the panel content underneath it. Smaller, lighter, and marked by a rule under
+   the current group rather than by a filled tab body. */
 .gtab {
   flex: 1 1 0;
-  padding: 6px 8px;
+  padding: 5px 6px;
   border: none;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  border-radius: var(--radius) var(--radius) 0 0;
-  font-weight: 600;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
@@ -570,15 +579,45 @@ textarea {
 
 .gtab--on {
   color: var(--accent);
-  background: var(--bg);
+  background: transparent;
+  border-bottom-color: var(--accent);
+  font-weight: 600;
 }
 
 .groups__sub {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 2px;
   padding: 4px 6px;
   border-top: 1px solid var(--border);
+}
+
+/* CLOSED BY DEFAULT: only the section actually open is shown, with a chevron to
+   drop the rest down.
+   Six section names wrapped to two or three rows in a narrow dock, so a row of
+   buttons nobody had clicked was taking canvas height permanently. Collapsed,
+   it costs one line and still says which section you are in — which is the part
+   that has to stay visible. */
+.groups__sub--closed .tab:not(.tab--on) {
+  display: none;
+}
+
+.groups__drop {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.groups__drop:hover {
+  color: var(--text);
+  background: var(--bg);
 }
 
 .dock__body {

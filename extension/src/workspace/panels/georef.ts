@@ -31,7 +31,7 @@ import {
   type SurveyGcp,
 } from '../../core/georeference-apply';
 import { featuresBounds, isFiniteBounds } from '../../core/geometry';
-import type { CirDataset, CrsRef, Position } from '../../core/cir';
+import type { CirDataset, CirFeature, CrsRef, Position } from '../../core/cir';
 import { crsLabel, planTransform } from '../../crs/transform';
 import { invertAffine } from '../../core/georeference';
 import { utmCrs, WGS84_CRS } from '../../crs/epsg';
@@ -60,10 +60,33 @@ export function utmZoneFor(lon: number, lat: number): CrsRef {
   return utmCrs(zone, lat < 0);
 }
 
-/** The centre of a dataset's extent, which is what a placement pivots about. */
+/**
+ * The centre of a dataset's extent, which is what a placement pivots about.
+ *
+ * TOLERANT OF BOTH LAYER SHAPES, deliberately.
+ *
+ * CIR layers carry `features`; the workspace's own layers carry `preview`, the
+ * summarised form the canvas draws. Reading only `features` did not merely
+ * return nothing for a workspace layer — `flatMap` keeps a non-array result as
+ * an element, so a two-layer drawing produced `[undefined, undefined]` and
+ * `featuresBounds` threw
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'geometry')
+ *
+ * every time the georeference panel opened on a local-grid drawing. Since this
+ * is the pivot a rotate or scale gesture turns about, those gestures could not
+ * run at all. Caught by driving the real panel in a browser, not by a test.
+ *
+ * The same shape mismatch has now bitten three separate call sites, so this
+ * reads either rather than trusting a caller to normalise first.
+ */
 export function centreOf(dataset: CirDataset | null): Position | null {
   if (!dataset?.layers?.length) return null;
-  const bounds = featuresBounds(dataset.layers.flatMap((layer) => layer.features));
+  const features = dataset.layers.flatMap((layer) => {
+    const shaped = layer as typeof layer & { preview?: CirFeature[] };
+    return shaped.features ?? shaped.preview ?? [];
+  });
+  const bounds = featuresBounds(features);
   if (!isFiniteBounds(bounds)) return null;
   return [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2];
 }
@@ -203,6 +226,23 @@ export function cancelGeoref(item: QueueItem): void {
   ui.georefOriginal = null;
 }
 
+/**
+ * Whether a typed lon/lat pair can start a placement.
+ *
+ * Extracted from the button handler so it can be tested without a DOM, because
+ * the case that matters most is the one that is invisible: BLANK IS NOT ZERO.
+ * `Number('')` is `0`, which is finite and within every bound, so an empty
+ * field used to pass straight through and place the drawing at 0°N 0°E — UTM
+ * zone 31N, in the Gulf of Guinea — with no warning at all. A placement that
+ * silently lands somewhere plausible-looking is worse than one that refuses.
+ */
+export function isPlaceableCoordinate(lonText: string, latText: string): boolean {
+  if (lonText.trim() === '' || latText.trim() === '') return false;
+  const lon = Number(lonText);
+  const lat = Number(latText);
+  return Number.isFinite(lon) && Number.isFinite(lat) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+}
+
 function numberInput(value: string, placeholder: string, onChange: (value: string) => void): HTMLElement {
   const input = element('input', { class: 'input input--sm', type: 'text', value, placeholder }) as HTMLInputElement;
   input.addEventListener('change', () => onChange(input.value.trim()));
@@ -250,7 +290,7 @@ export function georefPanel(item: QueueItem): HTMLElement[] {
     start.addEventListener('click', () => {
       const lon = Number(lonText);
       const lat = Number(latText);
-      if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      if (!isPlaceableCoordinate(lonText, latText)) {
         store.log('warn', 'Enter a longitude and latitude in degrees — the approximate centre of the site is enough.');
         host.render();
         return;
