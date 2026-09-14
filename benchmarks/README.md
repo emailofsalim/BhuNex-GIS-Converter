@@ -101,12 +101,18 @@ algorithm rather than the machine.
 
 ## Reading a run
 
+Each group prints as one ranked table, fastest first:
+
 ```
-· dissolve 128 adjacent parcels   654.79 hz   mean 1.53 ms   ±1.17%   328 samples
+name                                 hz     min     max    mean     p75     rme  samples
+dissolve 32 adjacent parcels   1,773.52  0.4782  1.7255  0.5861  0.5861  ±1.22%     1707   fastest
+dissolve 64 adjacent parcels     755.69  1.1684  5.4468  1.3591  1.3423  ±1.50%      736
+dissolve 128 adjacent parcels    313.72  2.7448  4.7962  3.2325  3.5648  ±1.40%      310   slowest
 ```
 
 `hz` is operations per second — **higher is better**. Compare the *ratios*
-between sizes in one run, never a number from one machine against another.
+between sizes in one run, never a number from one machine against another. Here
+each doubling costs about 2.4×, so the fold is slightly worse than linear.
 
 `rme` above about 10% means the run was noisy; re-run before drawing a
 conclusion from it.
@@ -115,10 +121,32 @@ conclusion from it.
 
 ## Adding one
 
-Put it in `benchmarks/*.bench.ts`, use `bench()` from `vitest`, and build the
-fixture **outside** the benchmarked function — otherwise the measurement
-includes constructing the input, which is usually the larger cost.
+Put it in `benchmarks/*.bench.ts` and build the fixture **outside** the
+benchmarked function — otherwise the measurement includes constructing the
+input, which is usually the larger cost.
 
 Always include at least three sizes. One number tells you nothing; three tell
 you the shape of the curve, which is the only thing that survives moving to a
 different machine.
+
+Since Vitest 5 there is no top-level `bench` import: it is a fixture on the
+test context, and a set of benchmarks is run together with `bench.compare(...)`,
+which prints them as one ranked table. Group the sizes into a single `test` so
+that ranking is against each other — which is the reading — rather than four
+unrelated numbers:
+
+```ts
+import { describe, test } from 'vitest';
+
+describe('thing, by size', () => {
+  const small = fixture(64);
+  const large = fixture(128);
+
+  test('cost as the input doubles', async ({ bench }) => {
+    await bench.compare(
+      bench('64', () => doTheThing(small)),
+      bench('128', () => doTheThing(large))
+    );
+  }, 300_000); // a benchmark outlives the 5s default for a unit test
+});
+```
