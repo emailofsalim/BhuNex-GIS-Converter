@@ -104,7 +104,10 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   }
 
   const provider = resolveProvider(settings);
-  const crs: CrsRef | null = dataset?.crs ?? null;
+  // During a placement the working copy already carries the target CRS, so the
+  // tiles draw for a drawing that declared nothing — which is the entire point
+  // of being able to see the map while aligning against it.
+  const crs: CrsRef | null = dataset?.crs ?? ui.georefSession?.targetCrs ?? null;
 
   let toLonLat: ((x: number, y: number) => { lon: number; lat: number }) | null = null;
   let fromLonLat: ((lon: number, lat: number) => { x: number; y: number }) | null = null;

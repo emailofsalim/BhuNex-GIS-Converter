@@ -47,6 +47,7 @@ function workspaceSources(): { name: string; text: string }[] {
       'canvas',
       'commands',
       'compare',
+      'georef',
       'dataset',
       'edit-tab',
       'edits',

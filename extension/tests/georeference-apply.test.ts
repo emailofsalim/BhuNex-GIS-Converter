@@ -19,9 +19,16 @@ import {
   describeGeoreference,
   fitSurveyControl,
   revertGeoreference,
+  composeAffine,
+  initialPlacement,
+  refitSession,
+  rotationAffineAbout,
+  scaleAffineAbout,
+  translationAffine,
   type GeoreferenceRecord,
   type SurveyGcp,
 } from '@core/georeference-apply';
+import { applyAffine } from '@core/georeference';
 import type { CirDataset, CirFeature, Position } from '@core/cir';
 
 function parcel(ring: number[][]): CirFeature {
@@ -226,5 +233,99 @@ describe('georeferencing a local-grid drawing', () => {
     const clean = describeGeoreference({ a: 0.6, b: -0.8, c: 412000, d: 0.8, e: 0.6, f: 2591300 });
     expect(clean.preservesShape).toBe(true);
     expect(clean.scaleX).toBeCloseTo(1, 9);
+  });
+});
+
+describe('interactive placement algebra', () => {
+  it('rotates about a pivot, not about the grid origin', () => {
+    // The pivot must come back exactly where it started. Rotating about the
+    // origin of a UTM grid instead would swing the drawing off the equator —
+    // the classic way an "it jumped to Africa" bug happens.
+    const pivot: Position = [412000, 2591300];
+    const rotated = rotationAffineAbout(pivot, 30);
+    const [x, y] = applyAffine(rotated, pivot[0], pivot[1]);
+    expect(x).toBeCloseTo(pivot[0], 6);
+    expect(y).toBeCloseTo(pivot[1], 6);
+  });
+
+  it('a rotation preserves every distance', () => {
+    const pivot: Position = [412000, 2591300];
+    const rotated = rotationAffineAbout(pivot, 37.5);
+    const p = applyAffine(rotated, 412050, 2591330);
+    const q = applyAffine(rotated, 412090, 2591375);
+    expect(Math.hypot(p[0] - q[0], p[1] - q[1])).toBeCloseTo(Math.hypot(40, 45), 6);
+    expect(describeGeoreference(rotated).preservesShape).toBe(true);
+  });
+
+  it('scales about a pivot uniformly, so shape survives the gesture', () => {
+    const pivot: Position = [412000, 2591300];
+    const scaled = scaleAffineAbout(pivot, 2.5);
+    const fixed = applyAffine(scaled, pivot[0], pivot[1]);
+    expect(fixed[0]).toBeCloseTo(pivot[0], 6);
+    const moved = applyAffine(scaled, pivot[0] + 10, pivot[1]);
+    expect(moved[0] - pivot[0]).toBeCloseTo(25, 9);
+    expect(describeGeoreference(scaled).preservesShape).toBe(true);
+  });
+
+  it('composes gestures in order: inner first, then outer', () => {
+    const shift = translationAffine(100, 0);
+    const scale = scaleAffineAbout([0, 0], 2);
+    // Scale AFTER shifting: the shift is scaled too.
+    expect(applyAffine(composeAffine(scale, shift), 0, 0)[0]).toBeCloseTo(200, 9);
+    // Shift AFTER scaling: it is not.
+    expect(applyAffine(composeAffine(shift, scale), 0, 0)[0]).toBeCloseTo(100, 9);
+  });
+
+  it('a whole drag-rotate-scale session still preserves shape', () => {
+    // The point of the whole feature: however much the user shoves the drawing
+    // around, the parcel they export must be the parcel they imported.
+    let affine = initialPlacement([22, 19], [412030, 2591325]);
+    affine = composeAffine(rotationAffineAbout([412030, 2591325], -12.75), affine);
+    affine = composeAffine(scaleAffineAbout([412030, 2591325], 1.0004), affine);
+    affine = composeAffine(translationAffine(-3.2, 7.9), affine);
+
+    const described = describeGeoreference(affine);
+    expect(described.preservesShape).toBe(true);
+
+    const before = dataset([parcel(LOCAL_PARCEL)]);
+    const after = applyGeoreference(before, { affine, crs: { epsg: 32644 } as never, kind: 'similarity' });
+    const source = ringOf(before);
+    const placed = ringOf(after);
+    for (let i = 0; i < source.length - 1; i++) {
+      expect(angleAt(placed, i)).toBeCloseTo(angleAt(source, i), 6);
+    }
+    expect(area(placed)).toBeCloseTo(area(source) * described.scaleX ** 2, 4);
+  });
+
+  it('initialPlacement lands the drawing centre exactly on the named coordinate', () => {
+    const affine = initialPlacement([22.4, 19.2], [412038.6, 2591352.6]);
+    const [x, y] = applyAffine(affine, 22.4, 19.2);
+    expect(x).toBeCloseTo(412038.6, 9);
+    expect(y).toBeCloseTo(2591352.6, 9);
+  });
+
+  it('refitSession leaves a one-point session alone rather than inventing a scale', () => {
+    const session = {
+      targetCrs: { epsg: 32644 } as never,
+      affine: translationAffine(412000, 2591300),
+      gcps: [{ local: [0, 0] as Position, target: [412000, 2591300] as Position }],
+      kind: 'similarity' as const,
+    };
+    const result = refitSession(session);
+    expect(result.fit).toBeUndefined();
+    expect(result.session.affine).toEqual(session.affine);
+  });
+
+  it('refitSession adopts the fit once there are two points', () => {
+    const session = {
+      targetCrs: { epsg: 32644 } as never,
+      affine: translationAffine(0, 0),
+      gcps: CONTROL,
+      kind: 'similarity' as const,
+    };
+    const result = refitSession(session);
+    expect(result.fit).toBeDefined();
+    expect(result.session.affine).toEqual(result.fit!.affine);
+    expect(describeGeoreference(result.session.affine).preservesShape).toBe(true);
   });
 });

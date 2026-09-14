@@ -46,7 +46,7 @@
  * file matching no state the user ever saw.
  */
 
-import type { CirDataset, CirFeature, CirLayer, FieldDef, StyleHint } from './cir';
+import type { CirDataset, CirFeature, CirLayer, CrsRef, FieldDef, StyleHint } from './cir';
 import {
   applyAttributes,
   planAddField,
@@ -68,6 +68,9 @@ import {
   type SplitBy,
 } from './layers';
 import { applyEdit, type EditPlan } from './vertex-edit';
+import { applyGeoreference } from './georeference-apply';
+import { crsLabel } from '../crs/transform';
+import type { Affine } from './georeference';
 import {
   applyGeometryOperation,
   describeGeometryPlan,
@@ -106,7 +109,26 @@ export type EditCommand =
   // because a buffer previewed over 5,000 parcels must cover 40,000. A drawn
   // polygon has nothing to re-derive — the user placed those exact vertices,
   // and re-planning could only move them.
-  | { kind: 'draw'; layer: string; features: CirFeature[]; createLayer?: boolean };
+  | { kind: 'draw'; layer: string; features: CirFeature[]; createLayer?: boolean }
+  /**
+   * Placing a local-grid drawing on real coordinates.
+   *
+   * An edit command rather than something the panel does to the dataset,
+   * because the workspace only ever holds a SUMMARISED dataset — capped preview
+   * features, not the whole file. Placing that directly would move the features
+   * on screen and silently leave every feature beyond the preview cap on its
+   * original local grid. As a command it is replayed against the full dataset
+   * at conversion, like every other edit, and it lands in the project file and
+   * the workflow recorder for free.
+   */
+  | {
+      kind: 'georeference';
+      affine: Affine;
+      crs: CrsRef;
+      fitKind: 'similarity' | 'affine';
+      /** How many control points backed it; absent when placed by hand. */
+      gcpCount?: number;
+    };
 
 /**
  * The fields a drawn layer declares, from the attributes the drawings carry.
@@ -242,6 +264,20 @@ function applyOne(dataset: CirDataset, command: EditCommand, protectedLayers: st
       return fromLayers(dataset, planDeleteLayer(dataset, command.layer, options), `Deleted layer ${command.layer}`);
     case 'layer-style':
       return fromLayers(dataset, planStyleLayer(dataset, command.layer, command.style, options), `Restyled ${command.layer}`);
+
+    // ----------------------------------------------------- georeferencing
+    case 'georeference':
+      return {
+        dataset: applyGeoreference(dataset, {
+          affine: command.affine,
+          crs: command.crs,
+          kind: command.fitKind,
+          gcpCount: command.gcpCount,
+        }),
+        description: command.gcpCount
+          ? `Placed on ${command.gcpCount} control points in ${crsLabel(command.crs)}`
+          : `Placed by hand in ${crsLabel(command.crs)}`,
+      };
 
     // ---------------------------------------------------------- drawing
     case 'draw': {
@@ -387,6 +423,10 @@ export function describeCommand(command: EditCommand): string {
       return `Restyle "${command.layer}"`;
     case 'draw':
       return `Draw ${command.features.length} feature${command.features.length === 1 ? '' : 's'} into "${command.layer}"`;
+    case 'georeference':
+      return command.gcpCount
+        ? `Georeference to ${crsLabel(command.crs)} on ${command.gcpCount} control points`
+        : `Georeference to ${crsLabel(command.crs)} (placed by hand)`;
     case 'vertices':
       return `${command.plan.operation} ${command.plan.changes.length} vertex/vertices`;
     case 'geometry': {

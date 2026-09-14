@@ -130,6 +130,63 @@ export function fitSurveyControl(
   };
 }
 
+// ===========================================================================
+// Affine algebra for interactive placement.
+//
+// Dragging, rotating and scaling a drawing over a map is not a sequence of
+// separate operations applied to coordinates — it is one matrix being revised.
+// Keeping the algebra here, pure and separately tested, is what lets the canvas
+// stay a thin layer over it: the canvas turns pointer events into a pivot and
+// an angle, and everything that could be got subtly wrong lives where a test
+// can reach it without a browser.
+// ===========================================================================
+
+/** `outer ∘ inner`: apply inner first, then outer. */
+export function composeAffine(outer: Affine, inner: Affine): Affine {
+  return {
+    a: outer.a * inner.a + outer.b * inner.d,
+    b: outer.a * inner.b + outer.b * inner.e,
+    c: outer.a * inner.c + outer.b * inner.f + outer.c,
+    d: outer.d * inner.a + outer.e * inner.d,
+    e: outer.d * inner.b + outer.e * inner.e,
+    f: outer.d * inner.c + outer.e * inner.f + outer.f,
+  };
+}
+
+/** A pure shift, in target units. */
+export function translationAffine(dx: number, dy: number): Affine {
+  return { a: 1, b: 0, c: dx, d: 0, e: 1, f: dy };
+}
+
+/**
+ * Rotation about a fixed point, anticlockwise, in degrees.
+ *
+ * About a POINT, not the origin. Rotating a drawing about the coordinate origin
+ * of a projected grid would swing it hundreds of kilometres off the screen,
+ * because the origin of UTM is the equator and a central meridian. The pivot is
+ * what makes the gesture feel like turning the sheet under your hand.
+ */
+export function rotationAffineAbout(pivot: Position, degrees: number): Affine {
+  const theta = (degrees * Math.PI) / 180;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  const [px, py] = pivot;
+  return {
+    a: cos,
+    b: -sin,
+    c: px - cos * px + sin * py,
+    d: sin,
+    e: cos,
+    f: py - sin * px - cos * py,
+  };
+}
+
+/** Uniform scale about a fixed point. Uniform, so shape survives the gesture. */
+export function scaleAffineAbout(pivot: Position, factor: number): Affine {
+  const [px, py] = pivot;
+  return { a: factor, b: 0, c: px * (1 - factor), d: 0, e: factor, f: py * (1 - factor) };
+}
+
 /**
  * Least-squares 4-parameter Helmert: scale, rotation, and a shift in each axis.
  *
@@ -236,6 +293,55 @@ function fitLeastSquaresSimilarity(gcps: SurveyGcp[]): { fit?: GeoreferenceFit; 
       notes,
     },
   };
+}
+
+/**
+ * A placement in progress.
+ *
+ * Georeferencing is the one operation where the user must be able to see the
+ * answer being wrong. So nothing is committed while this exists: the dataset
+ * keeps its original local coordinates and this session carries a PROVISIONAL
+ * affine that the canvas draws through. Dragging revises the matrix, not the
+ * data, which is what makes the whole gesture free to abandon.
+ *
+ * `targetCrs` is needed before a single tile can be drawn — the basemap places
+ * imagery by transforming the dataset's CRS to WGS 84, and a local grid has
+ * none. Choosing it is therefore the first step, not a detail at the end.
+ */
+export interface GeorefSession {
+  targetCrs: CrsRef;
+  /** Local grid → target CRS, as it stands right now. */
+  affine: Affine;
+  /** Control collected so far. Empty while placing by hand. */
+  gcps: SurveyGcp[];
+  /** Which fit to use when control is present. */
+  kind: 'similarity' | 'affine';
+}
+
+/**
+ * The starting placement: drop the drawing's centre on a named coordinate.
+ *
+ * This is what "put one coordinate near the location and let the map zoom
+ * there" resolves to. Scale 1 and rotation 0 is the honest opening position —
+ * it asserts nothing about orientation that the user has not yet told us, and
+ * for a drawing already in metres it is very often nearly right.
+ */
+export function initialPlacement(localCentre: Position, targetCentre: Position): Affine {
+  return translationAffine(targetCentre[0] - localCentre[0], targetCentre[1] - localCentre[1]);
+}
+
+/**
+ * Re-fits the session from its control points, when it has enough.
+ *
+ * Returns the session unchanged when there are fewer than two: a single point
+ * fixes position only, and silently promoting it to a full placement would
+ * invent a scale and a rotation the user never supplied.
+ */
+export function refitSession(session: GeorefSession): { session: GeorefSession; fit?: GeoreferenceFit; refusal?: GeoreferenceRefusal } {
+  if (session.gcps.length < 2) return { session };
+  const { fit, refusal } = fitSurveyControl(session.gcps, { kind: session.kind });
+  if (!fit) return { session, refusal };
+  return { session: { ...session, affine: fit.affine }, fit };
 }
 
 /** How the drawing was placed, for the report and the QA trail. */
