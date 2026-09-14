@@ -1386,6 +1386,52 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
+/* FOLDED: the heading stays, everything under it goes.
+   The heading has to remain — a section folded to nothing is a section the
+   user cannot get back. */
+.section--closed > *:not(.section__title) {
+  display: none !important;
+}
+
+/* The heading is the control, so it must look like one and take a caret. */
+.section__title[role='button'] {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section__title[role='button']:hover {
+  color: var(--text);
+}
+
+.section__title[role='button']::before {
+  content: '▾';
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.12s ease;
+}
+
+.section--closed > .section__title[role='button']::before {
+  transform: rotate(-90deg);
+}
+
+.section__title[role='button']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+/* A pane folded by its own arrow — Files, Output. Same memory, same arrow. */
+.pane--closed {
+  display: none !important;
+}
+
+.pane__fold {
+  margin-left: 4px;
+}
+
 .section__title {
   font-size: 11px;
   font-weight: 600;
@@ -2600,4 +2646,64 @@ details.adv > div {
   color: var(--text-faint);
   margin-top: 4px;
   word-break: break-word;
+}
+
+/* THE LAYER CONTEXT MENU.
+   Right-clicking a layer is the fast path to the actions that used to sit in a
+   block of five mostly-disabled buttons below the list. Fixed to the viewport
+   because it is positioned at the pointer, which is a page coordinate. */
+.ctxmenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 190px;
+  padding: 4px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ctxmenu__item {
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ctxmenu__item:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+/* Shown rather than hidden when it cannot apply: a menu whose shape changes is
+   one the user has to read from scratch every time. */
+.ctxmenu__item--off {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.ctxmenu__rule {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--border);
+}
+
+/* Renaming happens on the row, in place, so the input has to sit in the space
+   the name occupied without pushing the row around. */
+.lm__rename {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
 }
