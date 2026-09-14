@@ -52,6 +52,15 @@ export const DEFAULT_DXF_OPTIONS: Omit<WriteDxfOptions, 'precision'> = {
 };
 
 /** DXF layer names reject these characters; AutoCAD refuses to open the file. */
+/**
+ * The application name the ring relationship is filed under.
+ *
+ * Short and specific: an APPID is a global name inside the drawing, and a
+ * generic one would collide with whatever else a surveyor's file has been
+ * through.
+ */
+export const RING_APPID = 'BHUNEX_RING';
+
 function sanitizeLayerName(name: string): string {
   const cleaned = name.replace(/[<>/\\":;?*|=`,]/g, '_').trim();
   return cleaned === '' ? '0' : cleaned.slice(0, 255);
@@ -174,6 +183,28 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
     builder.pair(6, 'CONTINUOUS');
   }
   builder.pair(0, 'ENDTAB');
+
+  // ---- APPID: the application name the ring XDATA below is filed under.
+  //
+  // DXF HAS NO POLYGON WITH A HOLE. A parcel with a tank excluded from the
+  // middle is two closed polylines, and nothing in the file says which is the
+  // boundary and which is the void. Re-importing such a drawing therefore
+  // produced TWO PARCELS: the holding at its GROSS area, and the tank as a plot
+  // in its own right. For a cadastral sheet that is not a cosmetic loss — 12/A
+  // reads 2,700 m² instead of 2,400 m², and a 300 m² plot exists that never did.
+  //
+  // So each ring carries XDATA naming the feature it belongs to and its index
+  // within that feature. CAD ignores XDATA filed under an APPID it does not
+  // know, so the drawing still opens as ordinary polylines anywhere; our own
+  // reader uses it to rebuild the polygon exactly.
+  builder.pair(0, 'TABLE');
+  builder.pair(2, 'APPID');
+  builder.pair(70, 1);
+  builder.pair(0, 'APPID');
+  builder.pair(2, RING_APPID);
+  builder.pair(70, 0);
+  builder.pair(0, 'ENDTAB');
+
   builder.endSection();
 
   builder.section('BLOCKS');
@@ -211,7 +242,14 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
 
   const hasZ = (positions: Position[]) => positions.some((position) => position.length > 2 && Number.isFinite(position[2]));
 
-  const writePolyline = (positions: Position[], closed: boolean, layer: string, feature: CirFeature): void => {
+  const writePolyline = (
+    positions: Position[],
+    closed: boolean,
+    layer: string,
+    feature: CirFeature,
+    /** "<featureIndex>:<ringIndex>" when this polyline is one ring of a polygon. */
+    ringTag?: string
+  ): void => {
     const use3d = options.preserveZ && (options.lineMode === 'polyline-3d' || hasZ(positions));
     if (use3d) {
       // A 3D POLYLINE carries a real Z per vertex; LWPOLYLINE has only a single
@@ -242,6 +280,11 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
     for (const position of positions) {
       builder.pair(10, fmt(position[0]));
       builder.pair(20, fmt(position[1]));
+    }
+    // XDATA closes the entity, so it goes last.
+    if (ringTag) {
+      builder.pair(1001, RING_APPID);
+      builder.pair(1000, ringTag);
     }
   };
 
@@ -289,10 +332,11 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
     return feature.id !== undefined ? String(feature.id) : null;
   };
 
-  for (const { feature, layer } of items) {
+  for (const [featureIndex, { feature, layer }] of items.entries()) {
     const geometry = feature.geometry!;
     const parts = flatten(geometry);
     if (!options.preserveZ && parts.some((part) => hasZ(part.positions))) droppedZ++;
+
 
     for (const part of parts) {
       switch (part.kind) {
@@ -313,7 +357,10 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
           writePolyline(part.positions, false, layer, feature);
           break;
         case 'ring':
-          writePolyline(part.positions, true, layer, feature);
+          // The ring tag is what survives the trip. Without it the reader sees
+          // N unrelated closed polylines and has no way to tell an excluded
+          // tank from a plot that happens to sit inside another.
+          writePolyline(part.positions, true, layer, feature, `${featureIndex}:${part.part ?? 0}:${part.ring ?? 0}`);
           break;
         default:
           break;
@@ -362,6 +409,10 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
 interface GeometryPart {
   kind: 'point' | 'line' | 'ring';
   positions: Position[];
+  /** Which polygon of a MultiPolygon this ring came from. Rings only. */
+  part?: number;
+  /** 0 is the outer boundary; anything above is a hole. Rings only. */
+  ring?: number;
 }
 
 function flatten(geometry: { type: string; coordinates?: any; geometries?: any[] }): GeometryPart[] {
@@ -375,11 +426,26 @@ function flatten(geometry: { type: string; coordinates?: any; geometries?: any[]
     case 'MultiLineString':
       return (geometry.coordinates as Position[][]).map((positions) => ({ kind: 'line' as const, positions }));
     case 'Polygon':
-      return (geometry.coordinates as Position[][]).map((ring) => ({ kind: 'ring' as const, positions: dropClosingVertex(ring) }));
+      // `part` and `ring` are carried so the ring tag can say not just WHICH
+      // feature a polyline belongs to but what role it plays in it. Without the
+      // part index a MultiPolygon and a polygon-with-a-hole are written
+      // identically — both are "some closed rings" — and reading them back
+      // would turn a holding in two parts into one part with a fake void.
+      return (geometry.coordinates as Position[][]).map((ring, index) => ({
+        kind: 'ring' as const,
+        positions: dropClosingVertex(ring),
+        part: 0,
+        ring: index,
+      }));
     case 'MultiPolygon':
-      return (geometry.coordinates as Position[][][])
-        .flat()
-        .map((ring) => ({ kind: 'ring' as const, positions: dropClosingVertex(ring) }));
+      return (geometry.coordinates as Position[][][]).flatMap((polygon, partIndex) =>
+        polygon.map((ring, index) => ({
+          kind: 'ring' as const,
+          positions: dropClosingVertex(ring),
+          part: partIndex,
+          ring: index,
+        }))
+      );
     case 'GeometryCollection':
       return (geometry.geometries ?? []).flatMap((child: any) => flatten(child));
     default:
