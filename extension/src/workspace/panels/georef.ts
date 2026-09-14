@@ -22,14 +22,18 @@
 import {
   applyGeoreference,
   describeGeoreference,
+  fitExtentToReference,
+  fitSurveyControl,
   type GeorefSession,
   initialPlacement,
+  pairsToControl,
   refitSession,
   type SurveyGcp,
 } from '../../core/georeference-apply';
 import { featuresBounds, isFiniteBounds } from '../../core/geometry';
 import type { CirDataset, CrsRef, Position } from '../../core/cir';
 import { crsLabel, planTransform } from '../../crs/transform';
+import { invertAffine } from '../../core/georeference';
 import { utmCrs, WGS84_CRS } from '../../crs/epsg';
 import { type QueueItem, store } from '../../state/store';
 import { element, ghostButton, messageBlock } from '../dom';
@@ -65,6 +69,31 @@ export function centreOf(dataset: CirDataset | null): Position | null {
 }
 
 /**
+ * The other loaded files that could serve as a reference.
+ *
+ * A drawing qualifies only if it declares a CRS and has geometry to match
+ * against. Offering a file that declares nothing would be asking the user to
+ * georeference one local grid onto another, which produces coordinates that
+ * look real and are not.
+ */
+export function referenceCandidates(items: QueueItem[], selfId: string): QueueItem[] {
+  return items.filter(
+    (candidate) =>
+      candidate.id !== selfId &&
+      Boolean(candidate.dataset?.crs) &&
+      ((candidate.dataset?.layers ?? []) as any[]).some(
+        (layer) => (layer.preview ?? layer.features ?? []).length > 0
+      )
+  );
+}
+
+/** The extent of a queue item, in its own CRS. */
+export function extentOfItem(item: QueueItem): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const bounds = featuresBounds(datasetForTools(item).layers.flatMap((layer: any) => layer.features));
+  return isFiniteBounds(bounds) ? bounds : null;
+}
+
+/**
  * Re-places the working dataset from the pristine original.
  *
  * TWO SHAPES, AND BOTH MATTER HERE.
@@ -83,6 +112,30 @@ export function centreOf(dataset: CirDataset | null): Position | null {
  * them, so the true count is whatever it already was — recounting would report
  * the preview cap as the file's size.
  */
+/**
+ * Records one half of a matching pair, in the ORIGINAL local grid.
+ *
+ * THE INVERSE MATTERS HERE, and getting it wrong is invisible.
+ *
+ * The user clicks the drawing where it currently SITS — in target units,
+ * because the working copy has already been placed. But a control point must be
+ * stated in the drawing's own local grid: the whole purpose of the fit is to
+ * compute the very transform that is currently in effect. Storing the placed
+ * coordinate would define the control in terms of the guess it is supposed to
+ * replace, and the fit would converge on wherever the drawing happened to be
+ * dragged to — a flawless residual against a meaningless answer.
+ *
+ * So the click is run back through the inverse of the live affine.
+ */
+export function pickToLocal(session: GeorefSession, clicked: Position): Position | null {
+  const inverse = invertAffine(session.affine);
+  if (!inverse) return null;
+  return [
+    inverse.a * clicked[0] + inverse.b * clicked[1] + inverse.c,
+    inverse.d * clicked[0] + inverse.e * clicked[1] + inverse.f,
+  ];
+}
+
 export function replaceFromOriginal(item: QueueItem, session: GeorefSession): void {
   const original = ui.georefOriginal as any;
   if (!original) return;
@@ -136,6 +189,8 @@ export function beginGeoref(item: QueueItem, targetCrs: CrsRef, targetCentre: Po
     affine: initialPlacement(localCentre, targetCentre),
     gcps: [],
     kind: 'similarity',
+    matchedBy: 'hand',
+    pairs: [],
   };
   ui.georefSession = session;
   replaceFromOriginal(item, session);
@@ -243,6 +298,146 @@ export function georefPanel(item: QueueItem): HTMLElement[] {
     })
   );
   wrap.append(status);
+
+  // --- match to another drawing -------------------------------------------
+  const candidates = referenceCandidates(store.get().items, item.id);
+  const reference = element('div', { class: 'section' });
+  reference.append(element('h3', { class: 'section__title', text: 'Match to a georeferenced drawing' }));
+
+  if (candidates.length === 0) {
+    reference.append(
+      element('p', {
+        class: 'small faint',
+        text: 'No other loaded file declares a coordinate system. Add the adjoining sheet — a shapefile with a .prj, or anything already on real coordinates — and it can be matched against here.',
+      })
+    );
+  } else {
+    reference.append(
+      element('p', {
+        class: 'small',
+        text: 'Align the extents as a starting position, then refine by dragging or with control points.',
+      })
+    );
+    for (const candidate of candidates) {
+      const row = element('div', { class: 'row' });
+      row.append(
+        element('span', {
+          class: 'small',
+          text: `${candidate.fileName} — ${crsLabel(candidate.dataset!.crs!)}`,
+        })
+      );
+      row.append(
+        ghostButton('Align extents', () => {
+          const source = ui.georefOriginal
+            ? extentOfItem({ ...item, dataset: ui.georefOriginal } as QueueItem)
+            : extentOfItem(item);
+          const target = extentOfItem(candidate);
+          if (!source || !target) {
+            store.log('warn', 'One of the two drawings has no measurable extent, so there is nothing to align.');
+            host.render();
+            return;
+          }
+          const fitted = fitExtentToReference(source, target);
+          if (!fitted) {
+            store.log('warn', 'These extents cannot be aligned — one of them is a single point or a straight line.');
+            host.render();
+            return;
+          }
+          const next: GeorefSession = {
+            ...session,
+            // The reference's CRS wins: matching onto a drawing means adopting
+            // the coordinate system that drawing is actually in. Placing into a
+            // different one would put the result somewhere neither file claims.
+            targetCrs: candidate.dataset!.crs!,
+            affine: fitted.affine,
+            matchedBy: 'extent',
+            referenceId: candidate.id,
+          };
+          ui.georefSession = next;
+          replaceFromOriginal(item, next);
+          store.log(
+            'warn',
+            `Extents aligned to ${candidate.fileName} at scale ${fitted.scale.toFixed(6)}. This is a STARTING POSITION, not a survey fit: bounding boxes carry no rotation and two drawings of the same ground rarely cover the same rectangle. Refine it by dragging or with control points before exporting.`
+          );
+          host.render();
+        })
+      );
+      reference.append(row);
+    }
+
+    // --- the survey-grade route: matching points ---------------------------
+    const picking = ui.georefCanvas?.isPicking() ?? false;
+    const pairs = session.pairs ?? [];
+    const half = pairs.length * 2 + (ui.georefPending ? 1 : 0);
+
+    reference.append(
+      element('p', {
+        class: 'small',
+        text: picking
+          ? ui.georefPending
+            ? 'Now click the SAME corner on the reference drawing.'
+            : 'Click a corner on the drawing being placed.'
+          : 'For a defensible fit, match corners instead: click a point on this drawing, then the same point on the reference. Two pairs are enough; three or more give a residual worth reading.',
+      })
+    );
+
+    const pickRow = element('div', { class: 'row' });
+    const pickButton = element('button', {
+      class: `btn btn--sm${picking ? ' btn--on' : ''}`,
+      type: 'button',
+      text: picking ? `Picking… (${pairs.length} pair${pairs.length === 1 ? '' : 's'})` : 'Pick matching points',
+    });
+    pickButton.addEventListener('click', () => {
+      const next = !(ui.georefCanvas?.isPicking() ?? false);
+      ui.georefCanvas?.setPicking(next);
+      ui.georefPending = null;
+      host.render();
+    });
+    pickRow.append(pickButton);
+
+    if (pairs.length > 0) {
+      pickRow.append(
+        ghostButton('Clear pairs', () => {
+          const current = ui.georefSession;
+          if (!current) return;
+          ui.georefSession = { ...current, pairs: [], gcps: [] };
+          ui.georefPending = null;
+          host.render();
+        })
+      );
+    }
+
+    if (pairs.length >= 2) {
+      pickRow.append(
+        ghostButton(`Fit to ${pairs.length} pairs`, () => {
+          const current = ui.georefSession;
+          if (!current) return;
+          const control = pairsToControl(current.pairs);
+          const { fit, refusal } = fitSurveyControl(control, { kind: current.kind });
+          if (!fit) {
+            store.log('warn', refusal ? `${refusal.what} ${refusal.why} ${refusal.action}` : 'Those pairs do not define a placement.');
+            host.render();
+            return;
+          }
+          const next: GeorefSession = { ...current, affine: fit.affine, gcps: control, matchedBy: 'reference-points' };
+          ui.georefSession = next;
+          replaceFromOriginal(item, next);
+          ui.georefCanvas?.setPicking(false);
+          ui.georefPending = null;
+          store.log(
+            'ok',
+            `Fitted to ${control.length} matched points — RMS ${fit.rms.toFixed(3)}, worst ${fit.worst.toFixed(3)}. This placement is only as accurate as the reference drawing.`
+          );
+          host.render();
+        })
+      );
+    }
+    reference.append(pickRow);
+    if (half > 0 && pairs.length < 2) {
+      reference.append(element('p', { class: 'small faint', text: 'At least two complete pairs are needed before a fit can be computed.' }));
+    }
+  }
+  wrap.append(reference);
 
   // --- control points ------------------------------------------------------
   const control = element('div', { class: 'section' });

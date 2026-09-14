@@ -316,6 +316,24 @@ export interface GeorefSession {
   gcps: SurveyGcp[];
   /** Which fit to use when control is present. */
   kind: 'similarity' | 'affine';
+  /**
+   * How this placement was arrived at.
+   *
+   * Carried all the way to the report because the four routes are NOT equally
+   * defensible and the output must not flatten them into "georeferenced":
+   *
+   *   'control'          surveyed control points — a residual per peg
+   *   'reference-points' points matched against a georeferenced drawing, which
+   *                      is only as good as that drawing
+   *   'extent'           bounding boxes matched — a starting guess, no survey
+   *                      meaning, no rotation
+   *   'hand'             dragged into place by eye — no residual exists
+   */
+  matchedBy: 'control' | 'reference-points' | 'extent' | 'hand';
+  /** The queue id of the drawing being matched against, when there is one. */
+  referenceId?: string;
+  /** Point pairs picked against the reference drawing. */
+  pairs: ReferencePair[];
 }
 
 /**
@@ -344,12 +362,101 @@ export function refitSession(session: GeorefSession): { session: GeorefSession; 
   return { session: { ...session, affine: fit.affine }, fit };
 }
 
+/**
+ * A rectangle, as the two helpers below pass it around.
+ *
+ * Deliberately a plain shape rather than the CIR `Bounds`: this file is
+ * geometry-agnostic and the caller already has the extent in hand.
+ */
+export interface Extent {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * A FIRST GUESS from an already-georeferenced drawing's extent.
+ *
+ * When a surveyor has the adjoining sheet on real coordinates, the fastest way
+ * to get a local drawing into roughly the right place is to drop it on the same
+ * ground the reference covers. This does exactly that: centre on centre, with
+ * ONE uniform scale chosen so the drawing fits inside the reference's extent.
+ *
+ * WHAT THIS IS NOT
+ *
+ * It is not a survey fit and must never be presented as one. Two drawings of
+ * the same ground can have quite different extents — a sheet covering three
+ * extra plots, a boundary traverse against a detail survey — and matching their
+ * bounding boxes then scales the drawing by a factor with no survey meaning at
+ * all. It also cannot find rotation: a bounding box is axis-aligned, so a sheet
+ * drawn on an assumed north is left exactly as crooked as it started.
+ *
+ * So it is offered as a STARTING POSITION to drag from, or to refine with
+ * control points — and `matchedBy: 'extent'` is carried through to the report
+ * so no output can claim control it never had. Uniform scale is what keeps it
+ * safe to use as a starting point: the parcel is in the wrong place and
+ * possibly the wrong size, but it is never the wrong SHAPE.
+ */
+export function fitExtentToReference(local: Extent, reference: Extent): { affine: Affine; scale: number } | null {
+  const localWidth = local.maxX - local.minX;
+  const localHeight = local.maxY - local.minY;
+  if (!(localWidth > 0) && !(localHeight > 0)) return null;
+
+  const referenceWidth = reference.maxX - reference.minX;
+  const referenceHeight = reference.maxY - reference.minY;
+  if (!(referenceWidth > 0) && !(referenceHeight > 0)) return null;
+
+  // The smaller ratio, so the drawing lands inside the reference rather than
+  // overhanging it. A zero-extent axis (a drawing that is one straight line) is
+  // skipped rather than dividing by zero.
+  const ratios: number[] = [];
+  if (localWidth > 0 && referenceWidth > 0) ratios.push(referenceWidth / localWidth);
+  if (localHeight > 0 && referenceHeight > 0) ratios.push(referenceHeight / localHeight);
+  if (ratios.length === 0) return null;
+  const scale = Math.min(...ratios);
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+
+  const localCentre: Position = [(local.minX + local.maxX) / 2, (local.minY + local.maxY) / 2];
+  const referenceCentre: Position = [(reference.minX + reference.maxX) / 2, (reference.minY + reference.maxY) / 2];
+
+  // Scale about the local centre, then shift that centre onto the reference's.
+  const scaled = scaleAffineAbout(localCentre, scale);
+  const shift = translationAffine(referenceCentre[0] - localCentre[0], referenceCentre[1] - localCentre[1]);
+  return { affine: composeAffine(shift, scaled), scale };
+}
+
+/**
+ * A pair of points the user has identified as the same physical place: one on
+ * the drawing being placed, one on the reference drawing.
+ *
+ * This is the survey-grade route. It is the same least-squares machinery as a
+ * control file — the only difference is where the target coordinate came from,
+ * which is why it converts straight to a `SurveyGcp` rather than getting a fit
+ * of its own.
+ */
+export interface ReferencePair {
+  local: Position;
+  reference: Position;
+  name?: string;
+}
+
+export function pairsToControl(pairs: ReferencePair[]): SurveyGcp[] {
+  return pairs.map((pair, index) => ({
+    local: pair.local,
+    target: pair.reference,
+    name: pair.name ?? `Match ${index + 1}`,
+  }));
+}
+
 /** How the drawing was placed, for the report and the QA trail. */
 export interface GeoreferenceRecord {
   affine: Affine;
   crs: CrsRef;
   /** 'similarity' preserves shape; 'affine' may shear. */
   kind: 'similarity' | 'affine';
+  /** How the placement was arrived at. See `GeorefSession.matchedBy`. */
+  matchedBy?: 'control' | 'reference-points' | 'extent' | 'hand';
   /** RMS residual at the control points, in target units. Absent for a manual placement. */
   rmsResidual?: number;
   /** Control points used, when the placement came from a fit rather than dragging. */

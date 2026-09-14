@@ -47,7 +47,7 @@ import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
 import { type CanvasToolId, engineOf, renderToolbar, setCanvasTool, toolForKey } from './panels/toolbar';
 import { GeorefCanvas } from '../ui/georef-canvas';
-import { centreOf, georefPanel, replaceFromOriginal } from './panels/georef';
+import { centreOf, georefPanel, pickToLocal, replaceFromOriginal } from './panels/georef';
 import { rebuildPreviewFrom } from './panels/edits';
 import { renderSelect, selectTab } from './panels/select-tab';
 import { openAboutDialog, openHelpDialog, openSettingsDialog } from './panels/settings';
@@ -238,6 +238,33 @@ function applyCanvasTool(selected: boolean): void {
           replaceFromOriginal(active, ui.georefSession);
           renderPreview(active);
           ui.previewCanvas?.render();
+        },
+        // Two clicks make a pair: the drawing half first, then the reference
+        // half. The drawing half is run back through the inverse of the live
+        // affine so control is stated in the ORIGINAL local grid rather than in
+        // terms of the placement it is meant to replace.
+        onPick: (position) => {
+          const current = ui.georefSession;
+          const active = store.selected();
+          if (!current || !active) return;
+          if (!ui.georefPending) {
+            const local = pickToLocal(current, position);
+            if (!local) {
+              store.log('warn', 'The current placement cannot be inverted, so that point cannot be turned into control.');
+              host.render();
+              return;
+            }
+            ui.georefPending = local;
+            store.log('ok', 'Drawing point recorded. Now click the same corner on the reference drawing.');
+          } else {
+            ui.georefSession = {
+              ...current,
+              pairs: [...current.pairs, { local: ui.georefPending, reference: position }],
+            };
+            ui.georefPending = null;
+            store.log('ok', `Pair ${ui.georefSession.pairs.length} recorded.`);
+          }
+          host.render();
         },
       });
     }

@@ -32,7 +32,7 @@
 import type { Basemap } from '../ui/basemap';
 import type { GeorefCanvas } from '../ui/georef-canvas';
 import type { GeorefSession } from '../core/georeference-apply';
-import type { CirDataset } from '../core/cir';
+import type { CirDataset, Position } from '../core/cir';
 import type { CommandPalette } from '../ui/command-palette';
 import type { DualCanvas } from '../ui/dual-canvas';
 import type { EditCanvas, EditTarget } from '../ui/edit-canvas';
@@ -74,6 +74,13 @@ export interface UiState {
    * compounding roundings — and cancelling is just dropping both fields.
    */
   georefSession: GeorefSession | null;
+  /**
+   * The drawing half of a pair, waiting for its reference half.
+   *
+   * Deliberately NOT on the session: a half-picked pair is interaction state
+   * that must never reach a fit or a committed placement.
+   */
+  georefPending?: Position | null;
   georefOriginal: CirDataset | null;
   /**
    * A local image or scanned sheet drawn UNDER the canvas.
@@ -143,6 +150,7 @@ export const ui: UiState = {
   toolCanvas: null,
   georefCanvas: null,
   georefSession: null,
+  georefPending: null,
   georefOriginal: null,
   backdrop: null,
   featureSelection: { refs: [], wholeLayers: [] },

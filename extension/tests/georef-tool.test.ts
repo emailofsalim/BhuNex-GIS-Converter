@@ -10,7 +10,13 @@
 import { describe, expect, it } from 'vitest';
 import { CANVAS_TOOLS, engineOf, toolForKey } from '../src/workspace/panels/toolbar';
 import { gestureAffine, gestureFor } from '../src/ui/georef-canvas';
-import { parseGcpCsv, utmZoneFor } from '../src/workspace/panels/georef';
+import { parseGcpCsv, pickToLocal, referenceCandidates, utmZoneFor } from '../src/workspace/panels/georef';
+import {
+  composeAffine,
+  rotationAffineAbout,
+  scaleAffineAbout,
+  translationAffine,
+} from '@core/georeference-apply';
 import { applyAffine } from '@core/georeference';
 import type { Position } from '@core/cir';
 
@@ -119,5 +125,63 @@ describe('reading a control CSV', () => {
     const { gcps, error } = parseGcpCsv('0,0,412000,2591300');
     expect(gcps).toHaveLength(0);
     expect(error).toMatch(/at least two/i);
+  });
+});
+
+describe('picking a point while the drawing is already placed', () => {
+  /**
+   * The trap this guards: the user clicks the drawing where it SITS, but
+   * control must be stated in the drawing's original local grid. Storing the
+   * clicked coordinate as-is defines the control in terms of the placement it
+   * is meant to replace, and the fit then reproduces the current guess with a
+   * flawless residual — the most convincing way to be wrong.
+   */
+  it('returns the original local coordinate, not the placed one', () => {
+    const session = {
+      targetCrs: { epsg: 32643 } as never,
+      // A realistic live placement: rotated, scaled and shifted.
+      affine: composeAffine(
+        composeAffine(rotationAffineAbout([412000, 2591300], 23.5), scaleAffineAbout([412000, 2591300], 1.0031)),
+        translationAffine(412000, 2591300)
+      ),
+      gcps: [],
+      kind: 'similarity' as const,
+      matchedBy: 'hand' as const,
+      pairs: [],
+    };
+
+    const localCorner: Position = [45.25, 38.4];
+    // Where that corner currently appears on screen.
+    const placed = applyAffine(session.affine, localCorner[0], localCorner[1]);
+    // Clicking it must give back the local coordinate we started from.
+    const recovered = pickToLocal(session, placed)!;
+    expect(recovered[0]).toBeCloseTo(localCorner[0], 6);
+    expect(recovered[1]).toBeCloseTo(localCorner[1], 6);
+  });
+
+  it('refuses rather than inventing a coordinate when the placement is singular', () => {
+    const collapsed = {
+      targetCrs: { epsg: 32643 } as never,
+      affine: { a: 0, b: 0, c: 412000, d: 0, e: 0, f: 2591300 },
+      gcps: [],
+      kind: 'similarity' as const,
+      matchedBy: 'hand' as const,
+      pairs: [],
+    };
+    expect(pickToLocal(collapsed, [412050, 2591350])).toBeNull();
+  });
+
+  it('only offers references that declare a CRS and carry geometry', () => {
+    const items = [
+      { id: 'self', fileName: 'local.dxf', dataset: { crs: null, layers: [{ preview: [1] }] } },
+      { id: 'good', fileName: 'adjoining.shp', dataset: { crs: { epsg: 32643 }, layers: [{ preview: [1, 2] }] } },
+      // Declares nothing: matching onto it would produce coordinates that look
+      // real and are not.
+      { id: 'nocrs', fileName: 'other-local.dxf', dataset: { crs: null, layers: [{ preview: [1] }] } },
+      // Has a CRS but nothing to match against.
+      { id: 'empty', fileName: 'empty.geojson', dataset: { crs: { epsg: 32643 }, layers: [{ preview: [] }] } },
+    ] as never[];
+    const names = referenceCandidates(items, 'self').map((item: any) => item.id);
+    expect(names).toEqual(['good']);
   });
 });

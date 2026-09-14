@@ -20,7 +20,9 @@ import {
   fitSurveyControl,
   revertGeoreference,
   composeAffine,
+  fitExtentToReference,
   initialPlacement,
+  pairsToControl,
   refitSession,
   rotationAffineAbout,
   scaleAffineAbout,
@@ -310,6 +312,8 @@ describe('interactive placement algebra', () => {
       affine: translationAffine(412000, 2591300),
       gcps: [{ local: [0, 0] as Position, target: [412000, 2591300] as Position }],
       kind: 'similarity' as const,
+      matchedBy: 'control' as const,
+      pairs: [],
     };
     const result = refitSession(session);
     expect(result.fit).toBeUndefined();
@@ -322,10 +326,73 @@ describe('interactive placement algebra', () => {
       affine: translationAffine(0, 0),
       gcps: CONTROL,
       kind: 'similarity' as const,
+      matchedBy: 'control' as const,
+      pairs: [],
     };
     const result = refitSession(session);
     expect(result.fit).toBeDefined();
     expect(result.session.affine).toEqual(result.fit!.affine);
     expect(describeGeoreference(result.session.affine).preservesShape).toBe(true);
+  });
+});
+
+describe('matching against a georeferenced drawing', () => {
+  it('aligns extents with ONE uniform scale, so the shape survives the guess', () => {
+    const local = { minX: 0, minY: 0, maxX: 100, maxY: 50 };
+    // Deliberately a different aspect ratio: a real adjoining sheet rarely
+    // covers the same rectangle.
+    const reference = { minX: 412000, minY: 2591300, maxX: 412400, maxY: 2591500 };
+    const fitted = fitExtentToReference(local, reference)!;
+    expect(fitted).not.toBeNull();
+
+    const described = describeGeoreference(fitted.affine);
+    // The whole safety argument for offering this at all.
+    expect(described.preservesShape).toBe(true);
+    // The smaller ratio wins, so the drawing lands INSIDE the reference.
+    expect(fitted.scale).toBeCloseTo(Math.min(400 / 100, 200 / 50), 9);
+  });
+
+  it('puts the local centre on the reference centre', () => {
+    const local = { minX: 0, minY: 0, maxX: 100, maxY: 50 };
+    const reference = { minX: 412000, minY: 2591300, maxX: 412400, maxY: 2591500 };
+    const fitted = fitExtentToReference(local, reference)!;
+    const [x, y] = applyAffine(fitted.affine, 50, 25);
+    expect(x).toBeCloseTo(412200, 6);
+    expect(y).toBeCloseTo(2591400, 6);
+  });
+
+  it('refuses a degenerate extent rather than dividing by zero', () => {
+    const point = { minX: 5, minY: 5, maxX: 5, maxY: 5 };
+    const real = { minX: 412000, minY: 2591300, maxX: 412400, maxY: 2591500 };
+    expect(fitExtentToReference(point, real)).toBeNull();
+    expect(fitExtentToReference(real, point)).toBeNull();
+  });
+
+  it('handles a drawing that is a straight line by using the axis that has extent', () => {
+    // Zero height, real width: the width ratio is the only one available.
+    const line = { minX: 0, minY: 10, maxX: 100, maxY: 10 };
+    const reference = { minX: 412000, minY: 2591300, maxX: 412400, maxY: 2591500 };
+    const fitted = fitExtentToReference(line, reference)!;
+    expect(fitted.scale).toBeCloseTo(4, 9);
+  });
+
+  it('converts matched pairs into control without reinterpreting them', () => {
+    const control = pairsToControl([
+      { local: [0, 0], reference: [412000, 2591300] },
+      { local: [45, 0], reference: [412043, 2591313], name: 'NE corner' },
+    ]);
+    expect(control[0].target).toEqual([412000, 2591300]);
+    expect(control[1].name).toBe('NE corner');
+    // Default names are 1-based, so "Match 1" is the first one a user picked.
+    expect(control[0].name).toBe('Match 1');
+  });
+
+  it('a fit from matched pairs preserves shape, like any other similarity', () => {
+    const control = pairsToControl(
+      CONTROL.map((gcp) => ({ local: gcp.local, reference: gcp.target }))
+    );
+    const { fit } = fitSurveyControl(control);
+    expect(fit).toBeDefined();
+    expect(describeGeoreference(fit!.affine).preservesShape).toBe(true);
   });
 });

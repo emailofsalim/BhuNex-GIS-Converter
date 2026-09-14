@@ -55,6 +55,15 @@ export interface GeorefHost {
   onChange(affine: GeorefSession['affine']): void;
   /** The centre of the drawing as currently placed, in target units. */
   centre(): Position | null;
+  /**
+   * A click while picking matching points, in TARGET units.
+   *
+   * The panel decides whether it is the drawing half or the reference half of
+   * a pair — the canvas only reports where the pointer went, because which
+   * half is expected next is a question about the panel's state, not the
+   * canvas's.
+   */
+  onPick?(position: Position): void;
 }
 
 /** Which gesture the modifier keys ask for. */
@@ -108,6 +117,8 @@ interface Drag {
 export class GeorefCanvas {
   private enabled = false;
   private drag: Drag | null = null;
+  /** While picking pairs, a click identifies a point instead of starting a drag. */
+  private picking = false;
 
   constructor(
     private readonly preview: PreviewCanvas,
@@ -120,9 +131,27 @@ export class GeorefCanvas {
     element.addEventListener('pointercancel', this.handlePointerUp, { capture: true });
   }
 
+  /**
+   * Turns point-picking on or off.
+   *
+   * Picking and dragging are mutually exclusive by construction rather than by
+   * convention: a click that is meant to identify a control point must not also
+   * shove the drawing sideways, which is exactly what would happen if both
+   * lived on the same pointerdown.
+   */
+  setPicking(picking: boolean): void {
+    this.picking = picking;
+    this.drag = null;
+  }
+
+  isPicking(): boolean {
+    return this.picking;
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     this.drag = null;
+    if (!enabled) this.picking = false;
     if (enabled) this.reattach();
     else if (this.preview.onOverlay) this.preview.onOverlay = undefined;
   }
@@ -151,6 +180,12 @@ export class GeorefCanvas {
 
     event.preventDefault();
     event.stopPropagation();
+
+    if (this.picking) {
+      this.host.onPick?.(from);
+      return;
+    }
+
     this.drag = { gesture: gestureFor(event), from, base: session.affine, pivot };
     this.preview.element.setPointerCapture?.(event.pointerId);
   };
