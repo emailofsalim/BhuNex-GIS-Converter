@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "vite build && node scripts/write-root-manifest.mjs",
-    "package": "node scripts/package-extension.mjs && node scripts/verify-package.mjs",
+    "package": "node scripts/package-extension.mjs && node scripts/verify-package.mjs && npm run package:host",
     "docs": "node --experimental-strip-types scripts/format-matrix.mjs",
     "docs:check": "node --experimental-strip-types scripts/format-matrix.mjs --check",
     "lint": "tsc --noEmit",
@@ -25,7 +25,8 @@
     "assets": "node scripts/make-store-assets.mjs",
     "package:check": "node scripts/verify-package.mjs",
     "bench": "vitest bench --run",
-    "build:check": "node scripts/assert-build-committed.mjs"
+    "build:check": "node scripts/assert-build-committed.mjs",
+    "package:host": "node scripts/package-native-host.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

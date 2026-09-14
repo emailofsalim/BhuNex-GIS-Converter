@@ -81,6 +81,13 @@ export interface FormatDef {
   dataKind: DataKind;
   support: { import: SupportLevel; export: SupportLevel };
   requiresNative?: boolean;
+  /**
+   * Needs software this project does not ship and cannot drive.
+   *
+   * Distinct from `requiresNative`, which means the bundled helper really does
+   * convert it. See core/helpers.ts for what each format actually needs.
+   */
+  requiresExternalTool?: boolean;
   requiresWasm?: boolean;
   supports2D: boolean;
   supports3D: boolean;
@@ -549,7 +556,11 @@ export const FORMATS: FormatDef[] = [
     category: 'cad',
     dataKind: 'vector',
     support: { import: 'adapter', export: 'adapter' },
-    requiresNative: T,
+    // Deliberately NOT requiresNative: the bundled helper drives ODA File
+    // Converter, which does DWG and DXF only. Claiming it here made the UI
+    // offer this format the moment the helper answered, and told the user to
+    // install it — an errand that could never make this format work.
+    requiresExternalTool: T,
     supports2D: T,
     supports3D: T,
     supportsZ: T,
@@ -957,7 +968,11 @@ export const FORMATS: FormatDef[] = [
     category: 'gis',
     dataKind: 'vector',
     support: { import: 'adapter', export: 'adapter' },
-    requiresNative: T,
+    // Deliberately NOT requiresNative: the bundled helper drives ODA File
+    // Converter, which does DWG and DXF only. Claiming it here made the UI
+    // offer this format the moment the helper answered, and told the user to
+    // install it — an errand that could never make this format work.
+    requiresExternalTool: T,
     supports2D: T,
     supports3D: T,
     supportsZ: T,

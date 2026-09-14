@@ -10,6 +10,7 @@
  * conversion takes.
  */
 
+import { requirementFor } from './helpers';
 import {
   collapseWarnings,
   createLayer,
@@ -556,13 +557,17 @@ function dispatchReader(
     case 'filegdb':
     case 'e57': {
       const format = getFormat(detection.formatId)!;
+      // The refusal reads from the helper catalogue rather than from a flag, so
+      // it cannot tell a DGN user to install a helper that only converts DWG.
+      const requirement = requirementFor(format.id);
       throw new ConversionError({
         code: 'FORMAT_REQUIRES_ADAPTER',
-        what: `${format.name} needs an engine that is not bundled with the extension.`,
-        why: format.requiresNative
-          ? 'It requires the local native helper, which is either not installed or not reachable.'
-          : 'It requires a WebAssembly engine that is not part of this build.',
-        action: format.id === 'dwg' ? 'Install the native helper (see docs/NATIVE_HOST.md), or convert the DWG to DXF first.' : 'Convert the file with QGIS or GDAL, then bring the result here.',
+        what: `${format.name} needs software that is not part of this extension.`,
+        why: requirement?.summary ?? 'No engine for it is bundled with this build.',
+        action:
+          requirement?.steps.length
+            ? requirement.steps.join(' ')
+            : 'Convert the file with QGIS or GDAL, then bring the result here.',
       });
     }
     default:
