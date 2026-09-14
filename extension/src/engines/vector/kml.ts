@@ -301,13 +301,35 @@ export function writeKml(dataset: CirDataset, options: WriteKmlOptions): { text:
   const elevationDecimals = options.precision.mode === 'full' ? 15 : options.precision.elevationDecimals;
   const hasAltitude = options.altitudeMode !== 'clampToGround';
 
+  /**
+   * Writes lon,lat,alt — with the REAL altitude whenever the vertex has one.
+   *
+   * `altitudeMode` says how Google Earth DRAWS the geometry; it says nothing
+   * about what the coordinate tuple is allowed to carry. KML coordinates are
+   * lon,lat,alt in every mode, and a clamped Placemark simply ignores the third
+   * number when drawing — it does not require it to be zero.
+   *
+   * Conflating the two meant the default mode (clampToGround) wrote `,0` for
+   * every vertex, so a levelled survey — contours, spot heights, a parcel with
+   * reduced levels on every corner — arrived in Google Earth with its levels
+   * replaced by zeros. Nothing on screen changes by keeping them: the drawing
+   * still clamps to terrain, and the levels are now there for whoever reads the
+   * file back or opens it in software that wants them.
+   *
+   * The altitude is OMITTED where the vertex has none. `lon,lat` is valid KML,
+   * and the alternative — writing `,0` — is not a neutral placeholder but a
+   * claim that the point sits at sea level. Read back, that claim becomes a
+   * real elevation: a flat cadastral sheet returned as a 3D drawing pinned to
+   * zero, its 2D honesty gone. Measured on the survey fixture, the round trip
+   * turned 115 levelled vertices into 376.
+   */
   const coordinate = (position: Position): string => {
     const lon = formatFixed(format.x(position[0]), decimals);
     const lat = formatFixed(format.y(position[1]), decimals);
-    if (hasAltitude && position.length > 2 && Number.isFinite(position[2])) {
+    if (position.length > 2 && Number.isFinite(position[2])) {
       return `${lon},${lat},${formatFixed(format.z(position[2]), elevationDecimals)}`;
     }
-    return `${lon},${lat},0`;
+    return `${lon},${lat}`;
   };
 
   const geometryXml = (geometry: CirGeometry): string => {

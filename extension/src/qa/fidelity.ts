@@ -47,11 +47,23 @@ export interface FidelityOptions {
   coordinateTolerance: number;
   /** Feature-count difference accepted, e.g. when a writer splits geometry. */
   allowFeatureCountChange: boolean;
+  /**
+   * Elevation difference accepted as rounding, in the dataset's vertical unit.
+   *
+   * Separate from `coordinateTolerance` because the two are not in the same
+   * unit whenever the output is geographic: a KML's horizontal tolerance is
+   * ~1e-6 DEGREES while its levels are metres, and judging metres by a degree
+   * tolerance would fail every file that rounds elevation to millimetres.
+   */
+  elevationTolerance?: number;
 }
 
 export const DEFAULT_FIDELITY_OPTIONS: FidelityOptions = {
   coordinateTolerance: 0.001,
   allowFeatureCountChange: false,
+  // One millimetre: finer than any survey level is recorded, coarse enough that
+  // writing 412.500 for 412.5 is not a finding.
+  elevationTolerance: 0.001,
 };
 
 function geometryHistogram(features: CirFeature[]): Record<string, number> {
@@ -336,16 +348,51 @@ export function compareVector(
     note: driftOk ? undefined : 'Coordinates moved by more than the output precision can explain.',
   });
 
+  // ---- Elevation, compared BY VALUE and not merely by presence.
+  //
+  // This asked one question: does any feature still have a third ordinate? A
+  // writer that kept the ordinate and replaced every level with zero therefore
+  // passed. That is not hypothetical — it is exactly what the KML writer did in
+  // its default mode, so a levelled drawing reported "Elevation (Z): pass" with
+  // every reduced level in it destroyed. The point-cloud comparison beside this
+  // one has always checked the range; the vector one now does the same.
   const sourceZ = sourceFeatures.some((feature) => hasZ(feature.geometry));
   const targetZ = targetFeatures.some((feature) => hasZ(feature.geometry));
+  const zTolerance = options.elevationTolerance ?? DEFAULT_FIDELITY_OPTIONS.elevationTolerance!;
+  let zOk = sourceZ === targetZ || !sourceZ;
+  let zNote = sourceZ && !targetZ ? 'Z values were dropped by the target format.' : undefined;
+  let zSeverity: 'warn' | 'fail' = 'warn';
+
+  if (sourceZ && targetZ) {
+    const sourceSpan = sourceBounds.maxZ - sourceBounds.minZ;
+    const targetSpan = targetBounds.maxZ - targetBounds.minZ;
+    const delta = Math.max(
+      Math.abs(sourceBounds.minZ - targetBounds.minZ),
+      Math.abs(sourceBounds.maxZ - targetBounds.maxZ)
+    );
+    if (sourceSpan > zTolerance && targetSpan <= zTolerance) {
+      // Levels that varied came back all the same. The ordinate survived and
+      // the survey did not, which is worse than an honest drop: a drop is
+      // reported, this looks like data.
+      zOk = false;
+      zSeverity = 'fail';
+      zNote =
+        `Every vertex came back at ${targetBounds.minZ.toFixed(3)}, but the source ranged ` +
+        `${formatRange(sourceBounds.minZ, sourceBounds.maxZ)}. The elevations were replaced, not kept.`;
+    } else if (delta > zTolerance) {
+      zOk = false;
+      zNote = `Elevations moved by up to ${delta.toPrecision(4)} — larger than the ${zTolerance} tolerance.`;
+    }
+  }
+
   checks.push(
     compare(
       'Elevation (Z)',
       sourceZ ? `present, ${formatRange(sourceBounds.minZ, sourceBounds.maxZ)}` : 'none',
       targetZ ? `present, ${formatRange(targetBounds.minZ, targetBounds.maxZ)}` : 'none',
-      sourceZ === targetZ || !sourceZ,
-      sourceZ && !targetZ ? 'Z values were dropped by the target format.' : undefined,
-      'warn'
+      zOk,
+      zNote,
+      zSeverity
     )
   );
 

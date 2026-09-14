@@ -464,7 +464,12 @@ export function readDxf(text: string, source: SourceInfo, options: ReadDxfOption
       }
       case 'POLYLINE': {
         const geometry = readPolyline(record, tolerance, curves);
-        emit(record, geometry, placement);
+        // Read the same way as LWPOLYLINE. A 3D POLYLINE carries the ring tag in
+        // its own pairs — everything before the first VERTEX — so the lookup is
+        // identical; this case simply never asked, and every hole in a levelled
+        // drawing was lost on the way back in.
+        const tag = ringTagOf(record);
+        emit(record, geometry, placement, tag ? { _ringTag: `${tag.feature}:${tag.part}:${tag.ring}` } : {});
         break;
       }
       case 'ARC': {

@@ -260,6 +260,20 @@ export function writeDxf(dataset: CirDataset, options: WriteDxfOptions): { text:
       builder.pair(20, '0.0');
       builder.pair(30, '0.0');
       builder.pair(70, 8 | (closed ? 1 : 0)); // 8 = 3D polyline
+      // The ring tag belongs here, BEFORE the first VERTEX: a POLYLINE's own
+      // record ends where its vertex sequence begins, so XDATA emitted after
+      // the vertices would attach to the last VERTEX instead of the polyline.
+      //
+      // Leaving it off — which this branch did — meant a polygon with a hole
+      // lost the hole whenever the drawing carried Z, because only the flat
+      // LWPOLYLINE path tagged its rings. A levelled cadastral parcel with an
+      // excluded tank came back as two separate parcels: the holding at its
+      // gross area, and the tank as a plot that does not exist. Survey data is
+      // 3D far more often than not, so this was the common case, not the edge.
+      if (ringTag) {
+        builder.pair(1001, RING_APPID);
+        builder.pair(1000, ringTag);
+      }
       for (const position of positions) {
         builder.pair(0, 'VERTEX');
         builder.pair(5, nextHandle());
