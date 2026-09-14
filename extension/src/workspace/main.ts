@@ -261,7 +261,11 @@ function applyCanvasTool(selected: boolean): void {
     if (!ui.georefCanvas && ui.previewCanvas) {
       ui.georefCanvas = new GeorefCanvas(ui.previewCanvas, {
         session: () => ui.georefSession,
-        centre: () => centreOf(store.selected()?.dataset as never),
+        // `?? null` rather than `as never`: the cast that used to be here hid
+        // the fact that a WORKSPACE dataset was being handed to a function
+        // typed for a CIR one, which is the shape mismatch that made every
+        // rotate and scale gesture throw. `centreOf` reads either shape now.
+        centre: () => centreOf(store.selected()?.dataset ?? null),
         onChange: (affine) => {
           const current = ui.georefSession;
           const active = store.selected();
