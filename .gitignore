@@ -14,3 +14,16 @@ node_modules/
 .DS_Store
 .vite/
 coverage/
+
+# Screenshots dropped in to report a bug or ask for a change.
+#
+# They are worth having in the moment and worth nothing afterwards, and they
+# are heavy: 44 of them had grown to 18 MB — nearly three quarters of the whole
+# repository, against 3.5 MB of actual source. Every person who cloned it, and
+# every "Code → Download ZIP" install (which the README offers as a supported
+# route), carried all of them.
+#
+# Ignored rather than merely deleted, so the next batch stays local.
+Screenshort_Feedback/
+Screenshot*/
+screenshots/
