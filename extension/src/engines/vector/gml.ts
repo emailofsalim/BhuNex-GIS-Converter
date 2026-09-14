@@ -42,6 +42,30 @@ const GEOMETRY_LOCALS = new Set([
   'surface',
 ]);
 
+/**
+ * Whether an element is a GML GEOMETRY rather than an attribute that merely
+ * shares its name.
+ *
+ * Matching on the local name alone is what broke this. A survey CSV's first
+ * column is very often called "Point" — the point number — and the writer
+ * correctly emits it as the application-namespaced `<ugc:Point>BM1</ugc:Point>`
+ * beside the real `<gml:Point>`. The reader then found `ugc:Point` first, saw
+ * no coordinates in it, and gave up on the whole document: "3 member elements
+ * but none carried a readable geometry". The file was perfectly good, and every
+ * feature was lost to a name collision.
+ *
+ * A prefixed element must therefore be prefixed `gml`. An UNPREFIXED one is
+ * still accepted: plenty of real GML declares the GML namespace as the default,
+ * and older hand-written files use bare `<Point>` with no namespace at all.
+ * Rejecting those would trade this bug for a worse one.
+ */
+function isGmlGeometry(node: XmlNode): boolean {
+  if (!GEOMETRY_LOCALS.has(node.local)) return false;
+  const colon = node.name.indexOf(':');
+  if (colon < 0) return true;
+  return node.name.slice(0, colon).toLowerCase() === 'gml';
+}
+
 interface AxisContext {
   /** True when the declared CRS stores latitude/northing first. */
   latitudeFirst: boolean;
@@ -220,7 +244,11 @@ export function readGml(text: string, source: SourceInfo): CirDataset {
 
     const properties: Record<string, unknown> = {};
     for (const candidate of member.children) {
-      if (GEOMETRY_LOCALS.has(candidate.local) || candidate.children.some((c) => GEOMETRY_LOCALS.has(c.local))) continue;
+      // Namespace-aware for the same reason as `findGeometry`: judged by local
+      // name alone, a column called "Point" looks like geometry and is skipped
+      // here — so even once the geometry is read correctly, the point NUMBER
+      // would quietly not make it into the attributes.
+      if (isGmlGeometry(candidate) || candidate.children.some((c) => isGmlGeometry(c))) continue;
       const value = candidate.text.trim();
       if (value) properties[candidate.name.replace(/^[^:]+:/, '')] = Number.isFinite(Number(value)) ? Number(value) : value;
     }
@@ -280,7 +308,7 @@ export function readGml(text: string, source: SourceInfo): CirDataset {
 
 function findGeometry(node: XmlNode): XmlNode | undefined {
   for (const candidate of node.children) {
-    if (GEOMETRY_LOCALS.has(candidate.local)) return candidate;
+    if (isGmlGeometry(candidate)) return candidate;
     const nested = findGeometry(candidate);
     if (nested) return nested;
   }
@@ -309,6 +337,10 @@ export function writeGml(dataset: CirDataset, options: WriteGmlOptions): { text:
   const geographic = dataset.crs?.kind === 'geographic';
   const format = coordinateFormatter(options.precision, geographic);
   const decimals = options.precision.mode === 'full' ? 15 : geographic ? options.precision.geographicDecimals : options.precision.linearDecimals;
+  // Height keeps its own precision: a geographic file rounds longitude to seven
+  // decimals of a degree and its levels to millimetres, which are not the same
+  // number of places.
+  const elevationDecimals = options.precision.mode === 'full' ? 15 : options.precision.elevationDecimals;
 
   const epsg = dataset.crs?.epsg;
   // The short form is written longitude-first, which is what almost every
@@ -331,30 +363,52 @@ export function writeGml(dataset: CirDataset, options: WriteGmlOptions): { text:
       .map((position) => {
         const x = formatFixed(format.x(position[0]), decimals);
         const y = formatFixed(format.y(position[1]), decimals);
-        return latitudeFirst ? `${y} ${x}` : `${x} ${y}`;
+        const xy = latitudeFirst ? `${y} ${x}` : `${x} ${y}`;
+        // The third ordinate goes last regardless of axis order: srsName swaps
+        // the horizontal pair, never the height.
+        return position.length > 2 && Number.isFinite(position[2])
+          ? `${xy} ${formatFixed(format.z(position[2]), elevationDecimals)}`
+          : xy;
       })
       .join(' ');
+
+  /**
+   * A `<gml:pos>` or `<gml:posList>`, declaring its own dimension.
+   *
+   * GML has always been able to carry a height — `srsDimension="3"` on the
+   * ordinate element, which THIS FILE'S OWN READER already honours. The writer
+   * simply never emitted one, so every reduced level was dropped on the way
+   * out: a levelled traverse exported to GML came back flat, and because the
+   * ordinate was gone rather than zeroed the loss at least showed up as a
+   * declared one. Declaring the dimension is what makes the height readable
+   * again, here and in QGIS or GDAL.
+   */
+  const pos = (tag: 'pos' | 'posList', positions: Position[]): string => {
+    const has3d = positions.some((position) => position.length > 2 && Number.isFinite(position[2]));
+    const dimension = has3d ? ' srsDimension="3"' : '';
+    return `<gml:${tag}${dimension}>${posList(positions)}</gml:${tag}>`;
+  };
 
   const geometryXml = (geometry: CirGeometry): string => {
     switch (geometry.type) {
       case 'Point':
-        return `<gml:Point${srsAttribute}><gml:pos>${posList([geometry.coordinates as Position])}</gml:pos></gml:Point>`;
+        return `<gml:Point${srsAttribute}>${pos('pos', [geometry.coordinates as Position])}</gml:Point>`;
       case 'MultiPoint':
         return `<gml:MultiPoint${srsAttribute}>${(geometry.coordinates as Position[])
-          .map((position) => `<gml:pointMember><gml:Point><gml:pos>${posList([position])}</gml:pos></gml:Point></gml:pointMember>`)
+          .map((position) => `<gml:pointMember><gml:Point>${pos('pos', [position])}</gml:Point></gml:pointMember>`)
           .join('')}</gml:MultiPoint>`;
       case 'LineString':
-        return `<gml:LineString${srsAttribute}><gml:posList>${posList(geometry.coordinates as Position[])}</gml:posList></gml:LineString>`;
+        return `<gml:LineString${srsAttribute}>${pos('posList', geometry.coordinates as Position[])}</gml:LineString>`;
       case 'MultiLineString':
         return `<gml:MultiLineString${srsAttribute}>${(geometry.coordinates as Position[][])
-          .map((line) => `<gml:lineStringMember><gml:LineString><gml:posList>${posList(line)}</gml:posList></gml:LineString></gml:lineStringMember>`)
+          .map((line) => `<gml:lineStringMember><gml:LineString>${pos('posList', line)}</gml:LineString></gml:lineStringMember>`)
           .join('')}</gml:MultiLineString>`;
       case 'Polygon': {
         const rings = geometry.coordinates as Position[][];
-        const exterior = `<gml:exterior><gml:LinearRing><gml:posList>${posList(rings[0] ?? [])}</gml:posList></gml:LinearRing></gml:exterior>`;
+        const exterior = `<gml:exterior><gml:LinearRing>${pos('posList', rings[0] ?? [])}</gml:LinearRing></gml:exterior>`;
         const interiors = rings
           .slice(1)
-          .map((ring) => `<gml:interior><gml:LinearRing><gml:posList>${posList(ring)}</gml:posList></gml:LinearRing></gml:interior>`)
+          .map((ring) => `<gml:interior><gml:LinearRing>${pos('posList', ring)}</gml:LinearRing></gml:interior>`)
           .join('');
         return `<gml:Polygon${srsAttribute}>${exterior}${interiors}</gml:Polygon>`;
       }

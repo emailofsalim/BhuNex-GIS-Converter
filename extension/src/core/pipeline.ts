@@ -872,6 +872,7 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     warnings.push(...converted.warnings);
   }
 
+
   // Attributes, or geometry alone.
   //
   // This setting has existed in the store since the first version and reached
@@ -1009,6 +1010,42 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
         ],
       };
     }
+  }
+
+  // A raster with nothing traced out of it becomes its footprint polygon.
+  //
+  // `rasterFootprint` has existed, and been exported from this module, since
+  // the raster engine landed. It was never CALLED. The prediction engine
+  // promised it in so many words — "Only the raster's footprint will be
+  // written as a polygon" — and `checkDataKind` let raster → vector through on
+  // the strength of it, so every writer received a dataset with no features and
+  // wrote an empty document. GeoJSON produced `{"features":[]}`, WKT a single
+  // newline, and WKB a FILE OF ZERO BYTES, each reported as a success. Only the
+  // shapefile writer refused, because it alone checks that it has something to
+  // write, and that refusal is what made the rest visible.
+  //
+  // After the vectoriser, and only when it produced nothing: tracing a
+  // classified raster into region polygons is the better answer whenever the
+  // user asked for it, and a footprint added beside those regions would return
+  // four shapes for three zones.
+  //
+  // An ungeoreferenced raster has no footprint to give, and is left alone
+  // rather than refused here: the failure the user needs to hear about is
+  // whatever the writer or reader says next, not a footprint that was never
+  // asked for by name.
+  if (
+    working.kind === 'raster' &&
+    target.dataKind === 'vector' &&
+    working.raster?.extent &&
+    working.layers.every((layer) => layer.features.length === 0)
+  ) {
+    working = rasterFootprint(working);
+    warnings.push(
+      warn('RASTER_FOOTPRINT_ONLY', 'The raster was written as its footprint polygon.', {
+        reason: 'A vector format stores geometry, not pixels.',
+        action: 'To keep the pixels choose GeoTIFF or ASCII Grid; to turn the values into shapes, enable Vectorise.',
+      })
+    );
   }
 
   // Rasterize (spec §16, the other direction).
@@ -1827,9 +1864,24 @@ async function runQa(
     }
     const reimported = mergeDatasets(parts);
 
-    if (source.pointcloud) return { report: comparePointCloud(source, reimported), outputDataset: reimported };
-    if (source.raster) return { report: compareRaster(source, reimported), outputDataset: reimported };
-    const prepared = source.kind === 'table' ? tableToPoints(source).dataset : source;
+    // WHAT THE OUTPUT IS COMPARED AGAINST is whatever `prepare` handed the
+    // writer, not the file the user dropped. A raster written to GeoJSON is a
+    // footprint polygon, and holding that up against the raster's pixel grid
+    // asks a question neither dataset can answer — which is why every raster to
+    // vector conversion reported NOT VALIDATED. The like-for-like comparison
+    // runs only while the kind is unchanged.
+    const toVector = target.dataKind === 'vector';
+    if (source.pointcloud && !toVector) return { report: comparePointCloud(source, reimported), outputDataset: reimported };
+    if (source.raster && !toVector) return { report: compareRaster(source, reimported), outputDataset: reimported };
+    const prepared =
+      source.kind === 'table' && toVector
+        ? tableToPoints(source).dataset
+        : source.kind === 'raster' &&
+            toVector &&
+            source.raster?.extent &&
+            source.layers.every((layer) => layer.features.length === 0)
+          ? rasterFootprint(source)
+          : source;
     const coordinateTolerance = settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.linearDecimals, 6);
     const report = compareVector(prepared, reimported, {
       coordinateTolerance,
