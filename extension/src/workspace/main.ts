@@ -33,7 +33,7 @@ import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
 import { backdropTab } from './panels/backdrop-tab';
-import { ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
+import { clearPreview, ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
@@ -105,6 +105,10 @@ function render(): void {
   // the workspace now; the sections change which TOOL is live on it, never
   // whether it exists.
   $('previewWrap').classList.toggle('hidden', !selected);
+  // Hiding the wrapper is not clearing the canvas. Without this the last
+  // file's layers stay painted behind the `hidden` class and reappear the
+  // moment anything reveals the canvas again.
+  if (!selected) clearPreview();
   renderToolbar($('canvasToolbar'), Boolean(selected));
   applyCanvasTool(Boolean(selected));
   updateMeasureBar(selected ?? undefined);
