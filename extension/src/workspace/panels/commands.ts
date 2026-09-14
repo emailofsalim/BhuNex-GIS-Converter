@@ -339,6 +339,7 @@ export function buildCommands(): Command[] {
     ['metadata', 'Source metadata'],
     ['select', 'Select & move'],
     ['backdrop', 'Backdrop'],
+    ['georef', 'Georeference (place a local-grid drawing)'],
     ['fidelity', 'What will be lost'],
     ['compare', 'Compare source and output'],
     ['warnings', 'Warnings'],

@@ -56,7 +56,8 @@ export type CanvasToolId =
   | 'draw-text'
   | 'measure-distance'
   | 'measure-area'
-  | 'info';
+  | 'info'
+  | 'georef';
 
 export interface CanvasToolDef {
   id: CanvasToolId;
@@ -67,7 +68,7 @@ export interface CanvasToolDef {
   /** What it does, in the tooltip and in Help. */
   hint: string;
   /** Buttons are separated into groups by a hairline. */
-  group: 'select' | 'draw' | 'measure';
+  group: 'select' | 'draw' | 'measure' | 'place';
 }
 
 /**
@@ -92,6 +93,11 @@ export const CANVAS_TOOLS: CanvasToolDef[] = [
   { id: 'measure-distance', label: 'Distance', key: 'D', hint: 'Click along a run of legs to measure length. Geodesic or planar is chosen from the CRS.', group: 'measure' },
   { id: 'measure-area', label: 'Area', key: 'A', hint: 'Click around an enclosed shape to measure its area.', group: 'measure' },
   { id: 'info', label: 'Info', key: 'I', hint: 'Click a feature for its area, perimeter, vertex count and attributes.', group: 'measure' },
+  // 'W' for world coordinates. Every letter with a better mnemonic — G for
+  // georeference, P for place — was already a drawing tool, and moving one of
+  // those to free up a letter would break muscle memory for a daily gesture to
+  // help an occasional one.
+  { id: 'georef', label: 'Georef', key: 'W', hint: 'Place a drawing that has no coordinate system: drag to move, Shift+drag to rotate, Alt+drag to scale, or fit it to control points.', group: 'place' },
 ];
 
 /** Actions that are not tools but share the bar and the shortcut table. */
@@ -138,14 +144,19 @@ export function toolForKey(key: string): CanvasToolDef | null {
  */
 export function setCanvasTool(id: CanvasToolId): void {
   store.set({ canvasTool: id });
+  // Georef is the one tool whose controls are not on the canvas: it cannot do
+  // anything until it is told which coordinate system to place into. Opening
+  // its panel with it is the difference between a tool and a lit button.
+  if (id === 'georef') ui.openPanel?.('edit', 'georef');
   host.render();
 }
 
 /** Which engine a tool belongs to. Used to decide what to stop and what to start. */
-export function engineOf(id: CanvasToolId): 'tool' | 'edit' | 'measure' | 'info' | 'none' {
+export function engineOf(id: CanvasToolId): 'tool' | 'edit' | 'measure' | 'info' | 'georef' | 'none' {
   if (id === 'pan') return 'none';
   if (id === 'vertex') return 'edit';
   if (id === 'info') return 'info';
+  if (id === 'georef') return 'georef';
   if (id.startsWith('measure-')) return 'measure';
   return 'tool';
 }

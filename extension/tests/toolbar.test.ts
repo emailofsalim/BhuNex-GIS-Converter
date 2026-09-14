@@ -74,7 +74,7 @@ describe('the tool list', () => {
 
   it('routes every tool to an engine that exists', () => {
     for (const tool of CANVAS_TOOLS) {
-      expect(['tool', 'edit', 'measure', 'info', 'none']).toContain(engineOf(tool.id));
+      expect(['tool', 'edit', 'measure', 'info', 'georef', 'none']).toContain(engineOf(tool.id));
     }
     // The specific routings that were wrong before: measuring is its own
     // engine, vertex editing is the edit canvas, and pan arms nothing.

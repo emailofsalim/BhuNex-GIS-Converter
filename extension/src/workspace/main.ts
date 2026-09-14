@@ -46,6 +46,8 @@ import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
 import { type CanvasToolId, engineOf, renderToolbar, setCanvasTool, toolForKey } from './panels/toolbar';
+import { GeorefCanvas } from '../ui/georef-canvas';
+import { centreOf, georefPanel, pickToLocal, replaceFromOriginal } from './panels/georef';
 import { rebuildPreviewFrom } from './panels/edits';
 import { renderSelect, selectTab } from './panels/select-tab';
 import { openAboutDialog, openHelpDialog, openSettingsDialog } from './panels/settings';
@@ -196,6 +198,7 @@ function applyCanvasTool(selected: boolean): void {
   // --- stop everything ---------------------------------------------------
   ui.editCanvas?.setEnabled(false);
   ui.toolCanvas?.setEnabled(false);
+  ui.georefCanvas?.setEnabled(false);
   if (engine !== 'measure') stopMeasuring();
 
   if (!item || engine === 'none') {
@@ -217,6 +220,55 @@ function applyCanvasTool(selected: boolean): void {
   } else if (engine === 'measure') {
     renderMeasure(item);
     setMeasureMode(tool === 'measure-area' ? 'area' : 'distance');
+  } else if (engine === 'georef') {
+    // No tab switching here: this runs on EVERY render, and showInspectorTab
+    // renders. `setCanvasTool` opens the panel instead, once, when the user
+    // actually picks the tool.
+    // Built lazily, like the other engines: a surveyor who never places a
+    // drawing never pays for the listeners.
+    if (!ui.georefCanvas && ui.previewCanvas) {
+      ui.georefCanvas = new GeorefCanvas(ui.previewCanvas, {
+        session: () => ui.georefSession,
+        centre: () => centreOf(store.selected()?.dataset as never),
+        onChange: (affine) => {
+          const current = ui.georefSession;
+          const active = store.selected();
+          if (!current || !active) return;
+          ui.georefSession = { ...current, affine };
+          replaceFromOriginal(active, ui.georefSession);
+          renderPreview(active);
+          ui.previewCanvas?.render();
+        },
+        // Two clicks make a pair: the drawing half first, then the reference
+        // half. The drawing half is run back through the inverse of the live
+        // affine so control is stated in the ORIGINAL local grid rather than in
+        // terms of the placement it is meant to replace.
+        onPick: (position) => {
+          const current = ui.georefSession;
+          const active = store.selected();
+          if (!current || !active) return;
+          if (!ui.georefPending) {
+            const local = pickToLocal(current, position);
+            if (!local) {
+              store.log('warn', 'The current placement cannot be inverted, so that point cannot be turned into control.');
+              host.render();
+              return;
+            }
+            ui.georefPending = local;
+            store.log('ok', 'Drawing point recorded. Now click the same corner on the reference drawing.');
+          } else {
+            ui.georefSession = {
+              ...current,
+              pairs: [...current.pairs, { local: ui.georefPending, reference: position }],
+            };
+            ui.georefPending = null;
+            store.log('ok', `Pair ${ui.georefSession.pairs.length} recorded.`);
+          }
+          host.render();
+        },
+      });
+    }
+    ui.georefCanvas?.setEnabled(true);
   } else if (engine === 'info') {
     // Feature info is a read-only click, so it rides the select engine rather
     // than having a fourth interaction layer of its own: the click that
@@ -283,6 +335,9 @@ function renderInspector(): void {
       body.append(...selectTab(item));
       renderSelect(item);
       break;
+    case 'georef':
+      body.append(...georefPanel(item));
+      break;
     case 'edit':
       body.append(...editTab(item));
       renderEdit(item);
@@ -326,6 +381,40 @@ function showInspectorTab(name: string): void {
     tab.setAttribute('aria-selected', String(on));
   }
   render();
+}
+
+/**
+ * Opens a dock group, and optionally a named section inside it.
+ *
+ * Extracted from the group tabs' click handler because a tool can need to open
+ * its own panel: picking Georef with the dock on "Data" would otherwise arm a
+ * tool whose only controls are two clicks away behind a group the user has no
+ * reason to suspect. `tab` is how the caller says which section, rather than
+ * taking the group's first.
+ */
+function showInspectorGroup(group: string, tab?: string): void {
+  store.set({ inspectorGroup: group });
+  for (const other of Array.from(document.querySelectorAll('[data-group]'))) {
+    const on = (other as HTMLElement).dataset.group === group;
+    other.classList.toggle('gtab--on', on);
+    other.setAttribute('aria-selected', String(on));
+  }
+  let first: HTMLElement | null = null;
+  for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
+    const on = (strip as HTMLElement).dataset.groupfor === group;
+    strip.classList.toggle('hidden', !on);
+    if (on) first = strip.querySelector('[data-tab]');
+  }
+  // Results is the old bottom dock, so it shows the other body.
+  const results = group === 'results';
+  $('inspectorBody').classList.toggle('hidden', results);
+  $('bottomBody').classList.toggle('hidden', !results);
+  if (results) {
+    renderBottom();
+    return;
+  }
+  const target = tab ?? first?.dataset.tab;
+  if (target) showInspectorTab(target);
 }
 
 function showBottomTab(name: string): void {
@@ -564,30 +653,7 @@ function wire(): void {
   // flow at a time, which is what keeps fourteen sections inside a 340px dock
   // without a five-row wrap or a scrollbar nobody can hit.
   for (const gtab of Array.from(document.querySelectorAll('[data-group]'))) {
-    gtab.addEventListener('click', () => {
-      const group = (gtab as HTMLElement).dataset.group!;
-      store.set({ inspectorGroup: group });
-      for (const other of Array.from(document.querySelectorAll('[data-group]'))) {
-        const on = other === gtab;
-        other.classList.toggle('gtab--on', on);
-        other.setAttribute('aria-selected', String(on));
-      }
-      let first: HTMLElement | null = null;
-      for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
-        const on = (strip as HTMLElement).dataset.groupfor === group;
-        strip.classList.toggle('hidden', !on);
-        if (on) first = strip.querySelector('[data-tab]');
-      }
-      // Results is the old bottom dock, so it shows the other body. Swapping
-      // which one is visible is all that moving it here took.
-      const results = group === 'results';
-      $('inspectorBody').classList.toggle('hidden', results);
-      $('bottomBody').classList.toggle('hidden', !results);
-      if (results) renderBottom();
-      // Switching group moves to its first section rather than leaving the
-      // body showing a panel whose tab is no longer on screen.
-      else if (first?.dataset.tab) showInspectorTab(first.dataset.tab);
-    });
+    gtab.addEventListener('click', () => showInspectorGroup((gtab as HTMLElement).dataset.group!));
   }
 
   // The toolbar builds Undo and Redo, so it needs to be able to call them.
@@ -595,6 +661,7 @@ function wire(): void {
   // toolbar keeps the dependency one-way.
   ui.undo = () => undoEdit();
   ui.redo = () => redoEdit();
+  ui.openPanel = (group, tab) => showInspectorGroup(group, tab);
 
   // Collapse toggles. The class does the work; the arrow is only a label.
   $('layersToggle').addEventListener('click', () => {

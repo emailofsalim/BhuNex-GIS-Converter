@@ -50,14 +50,7 @@ import { crsLabel } from '../../crs/transform';
 import { measureGeometry, METHOD_LABEL } from '../../core/measure';
 import { type QueueItem, store } from '../../state/store';
 import { planGeometryOperation } from '../../core/geometry-ops';
-import {
-  type CanvasTool,
-  DRAW_TOOLS,
-  kindOfTool,
-  TOOL_HINT,
-  TOOL_LABEL,
-  ToolCanvas,
-} from '../../ui/tool-canvas';
+import { kindOfTool, TOOL_HINT, TOOL_LABEL, ToolCanvas } from '../../ui/tool-canvas';
 import {
   buildDrawnFeature,
   DEFAULT_SNAP_SETTINGS,
@@ -75,9 +68,6 @@ import { host } from '../host';
 import { datasetForTools, protectedFor, viewOf } from './dataset';
 import { pendingEditsPanel, queueEdit } from './edits';
 import { ui } from '../ui-state';
-
-/** The tools, in the order a hand reaches for them. */
-const TOOLS: CanvasTool[] = ['select', 'lasso', 'move'];
 
 /**
  * Where a drawing goes, and what it is called.
@@ -110,51 +100,26 @@ export function selectTab(item: QueueItem): HTMLElement[] {
   const wrap = element('div', { class: 'stack', style: 'padding:12px' });
   const selection = ui.featureSelection;
 
-  // --- tools --------------------------------------------------------------
-  const bar = element('div', { class: 'toolbar' });
-  for (const tool of TOOLS) {
-    const active = ui.toolCanvas?.getTool() === tool;
-    const button = element('button', {
-      class: `btn btn--sm${active ? ' btn--on' : ''}`,
-      type: 'button',
-      text: TOOL_LABEL[tool],
-      title: TOOL_HINT[tool],
-    });
-    button.addEventListener('click', () => {
-      ui.toolCanvas?.setTool(tool);
-      host.renderInspector();
-    });
-    bar.append(button);
-  }
-  for (const tool of DRAW_TOOLS) {
-    const active = ui.toolCanvas?.getTool() === tool;
-    const button = element('button', {
-      class: `btn btn--sm${active ? ' btn--on' : ''}`,
-      type: 'button',
-      text: TOOL_LABEL[tool],
-      title: TOOL_HINT[tool],
-    });
-    button.addEventListener('click', () => {
-      ui.toolCanvas?.setTool(tool);
-      host.renderInspector();
-    });
-    bar.append(button);
-  }
-
-  const ortho = element('button', {
-    class: `btn btn--sm${ui.toolCanvas?.isOrtho() ? ' btn--on' : ''}`,
-    type: 'button',
-    text: 'Ortho',
-    title: 'Constrain each new segment to one axis (F8). Holding Shift does the same for one segment.',
-  });
-  ortho.addEventListener('click', () => {
-    ui.toolCanvas?.setOrtho(!ui.toolCanvas.isOrtho());
-    host.renderInspector();
-  });
-  bar.append(ortho);
-
-  wrap.append(bar);
-  wrap.append(element('p', { class: 'small faint', text: TOOL_HINT[ui.toolCanvas?.getTool() ?? 'select'] }));
+  // --- which tool is live -------------------------------------------------
+  //
+  // This panel used to carry its OWN row of Select/Lasso/Move, the five drawing
+  // tools and Ortho — a second copy of buttons that now live on the canvas
+  // toolbar. Two copies of one control is not merely clutter here: this row
+  // called `ui.toolCanvas.setTool()` DIRECTLY, bypassing the store that
+  // `setCanvasTool` writes and that the toolbar lights from. Picking a tool here
+  // therefore armed it on the canvas while the toolbar went on showing the
+  // previous one, and the two disagreed until something else forced a render.
+  //
+  // The toolbar is the only writer now. This panel reports the live tool and
+  // holds the settings that have nowhere else to live (what a drawn feature is
+  // added to, snapping targets, the selection itself).
+  const live = ui.toolCanvas?.getTool() ?? 'select';
+  wrap.append(
+    element('p', {
+      class: 'small faint',
+      text: `${TOOL_LABEL[live]} — ${TOOL_HINT[live]}`,
+    })
+  );
 
   // --- drawing (phases F and K) -------------------------------------------
   if (kindOfTool(ui.toolCanvas?.getTool() ?? 'select')) {

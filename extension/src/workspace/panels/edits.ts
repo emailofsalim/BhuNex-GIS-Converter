@@ -72,6 +72,8 @@ export function queueEdit(item: QueueItem, command: EditCommand, plan: Refusable
 export function layerOfCommand(command: EditCommand): string | null {
   if (command.kind === 'layer-merge') return command.layers[0];
   if (command.kind === 'vertices') return null;
+  // A placement moves the whole drawing, so it belongs to no single layer.
+  if (command.kind === 'georeference') return null;
   return command.layer;
 }
 
