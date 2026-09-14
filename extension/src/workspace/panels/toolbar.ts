@@ -128,6 +128,93 @@ export const GLOBAL_SHORTCUTS: CanvasActionDef[] = [
   { id: 'finish', label: 'Finish drawing', key: 'Enter', hint: 'Close the polyline or polygon being drawn.' },
 ];
 
+/**
+ * THE RIBBON.
+ *
+ * Twenty buttons on one line is a wall, and the six editing PANELS that belong
+ * with them were a floor away in the right dock — so arming Vertex and then
+ * reaching its settings meant crossing the window and opening two levels of
+ * tab. The tools and the panel that configures them are one thing and were in
+ * two places.
+ *
+ * A tab here is therefore a tool FAMILY and its PANEL together: picking
+ * Measure arms the measuring tools and opens the Measure panel in one click,
+ * the way a Word ribbon tab brings its whole group forward. Only the current
+ * tab's controls are on screen, so the bar stays one row whatever it holds.
+ *
+ * Order is the order of work: look at it, draw on it, change it, measure it,
+ * put it somewhere real.
+ */
+export interface RibbonTab {
+  id: string;
+  label: string;
+  /** What this tab is for, in its tooltip. */
+  hint: string;
+  /** Tools from CANVAS_TOOLS, by id, in the order they appear. */
+  tools: CanvasToolId[];
+  /** Action buttons from CANVAS_ACTIONS, by id. */
+  actions: string[];
+  /**
+   * Dock sections this family owns, opened from the ribbon rather than hunted
+   * for in the right-hand panel. `[group, tab]` as `ui.openPanel` takes them.
+   */
+  panels: { label: string; group: string; tab: string }[];
+}
+
+export const RIBBON_TABS: RibbonTab[] = [
+  {
+    id: 'home',
+    label: 'Home',
+    hint: 'Look at the drawing, and select what to work on.',
+    tools: ['pan', 'select', 'lasso', 'move'],
+    actions: ['fit', 'grid', 'undo', 'redo'],
+    panels: [{ label: 'Selection…', group: 'edit', tab: 'select' }],
+  },
+  {
+    id: 'draw',
+    label: 'Draw',
+    hint: 'Add new geometry, with snapping and orthogonal constraint.',
+    tools: ['draw-point', 'draw-line', 'draw-polygon', 'draw-text', 'draw-marker'],
+    actions: ['snap', 'ortho', 'undo', 'redo'],
+    panels: [{ label: 'Drawing…', group: 'edit', tab: 'select' }],
+  },
+  {
+    id: 'modify',
+    label: 'Modify',
+    hint: 'Change geometry that is already there.',
+    tools: ['vertex'],
+    actions: ['snap', 'ortho', 'undo', 'redo'],
+    panels: [
+      { label: 'Vertices…', group: 'edit', tab: 'edit' },
+      { label: 'Geometry tools…', group: 'edit', tab: 'geometry-ops' },
+    ],
+  },
+  {
+    id: 'measure',
+    label: 'Measure',
+    hint: 'Distance, area, and what a feature actually is.',
+    tools: ['measure-distance', 'measure-area', 'info'],
+    actions: ['snap'],
+    panels: [{ label: 'Measure…', group: 'edit', tab: 'measure' }],
+  },
+  {
+    id: 'place',
+    label: 'Place',
+    hint: 'Put a local-grid drawing onto real coordinates.',
+    tools: ['georef'],
+    actions: ['fit'],
+    panels: [
+      { label: 'Georeference…', group: 'edit', tab: 'georef' },
+      { label: 'Backdrop…', group: 'edit', tab: 'backdrop' },
+    ],
+  },
+];
+
+/** The ribbon tab a tool lives on, so a keyboard shortcut lights the right one. */
+export function ribbonTabFor(id: CanvasToolId): string {
+  return RIBBON_TABS.find((tab) => tab.tools.includes(id))?.id ?? 'home';
+}
+
 /** The tool a key selects, or null. Case-insensitive, single letters only. */
 export function toolForKey(key: string): CanvasToolDef | null {
   const upper = key.toUpperCase();
@@ -143,6 +230,10 @@ export function toolForKey(key: string): CanvasToolDef | null {
  * drawing as well.
  */
 export function setCanvasTool(id: CanvasToolId): void {
+  // The ribbon follows the tool, not only the other way round. Pressing E for
+  // Vertex from the Draw tab has to bring Modify forward, or the bar would be
+  // lit on a tab that does not contain the armed tool.
+  ui.ribbonTab = ribbonTabFor(id);
   store.set({ canvasTool: id });
   // Georef is the one tool whose controls are not on the canvas: it cannot do
   // anything until it is told which coordinate system to place into. Opening
@@ -179,58 +270,101 @@ export function renderToolbar(into: HTMLElement, enabled: boolean): void {
   };
 
   const separator = () => element('span', { class: 'cbar__sep' });
-
-  // --- view actions, which work with or without a tool -------------------
-  into.append(
-    button('Fit', `Fit to extent (F)`, false, () => {
-      ui.previewCanvas?.fit();
-      ui.previewCanvas?.render();
-    })
-  );
-  // `showGrid` is private to PreviewCanvas, so the canvas stays the owner of
-  // whether the grid is drawn and `ui.gridOn` only mirrors it for the button's
-  // lit state. Reading it back would need an accessor the canvas does not owe
-  // anyone; toggling both in step is honest and costs nothing.
-  into.append(
-    button('Grid', 'Show or hide the grid (R)', ui.gridOn !== false, () => {
-      ui.previewCanvas?.toggleGrid();
-      ui.gridOn = ui.gridOn === false;
-      host.render();
-    })
-  );
-
-  // --- the tools --------------------------------------------------------
-  let lastGroup: string | null = null;
-  for (const tool of CANVAS_TOOLS) {
-    if (tool.group !== lastGroup) {
-      into.append(separator());
-      lastGroup = tool.group;
-    }
-    into.append(button(tool.label, `${tool.hint} (${tool.key})`, active === tool.id, () => setCanvasTool(tool.id)));
-  }
-
-  // --- drawing aids -----------------------------------------------------
-  into.append(separator());
-  into.append(
-    button('Snap', 'Snap new geometry to existing vertices, midpoints and segments (S)', ui.snapOn === true, () => {
-      ui.snapOn = !ui.snapOn;
-      host.render();
-    })
-  );
-  into.append(
-    button('Ortho', 'Constrain new segments to one axis, as F8 does in AutoCAD (F8)', ui.orthoOn === true, () => {
-      ui.orthoOn = !ui.orthoOn;
-      ui.toolCanvas?.setOrtho(ui.orthoOn);
-      host.render();
-    })
-  );
-
-  // --- history ----------------------------------------------------------
   const item = store.selected();
-  into.append(separator());
-  const undo = button('Undo', 'Take back the last edit (Ctrl+Z)', false, () => ui.undo?.(), (item?.edits?.length ?? 0) === 0);
-  undo.id = 'undoBtn';
-  const redo = button('Redo', 'Reapply the edit that was taken back (Ctrl+Shift+Z)', false, () => ui.redo?.(), (state.redoStack?.length ?? 0) === 0);
-  redo.id = 'redoBtn';
-  into.append(undo, redo);
+
+  /** The action buttons, by id, so a tab can name the ones it wants. */
+  const actionButton = (id: string): HTMLElement | null => {
+    switch (id) {
+      case 'fit':
+        return button('Fit', 'Fit to extent (F)', false, () => {
+          ui.previewCanvas?.fit();
+          ui.previewCanvas?.render();
+        });
+      // `showGrid` is private to PreviewCanvas, so the canvas stays the owner of
+      // whether the grid is drawn and `ui.gridOn` only mirrors it for the
+      // button's lit state. Reading it back would need an accessor the canvas
+      // does not owe anyone; toggling both in step is honest and costs nothing.
+      case 'grid':
+        return button('Grid', 'Show or hide the grid (R)', ui.gridOn !== false, () => {
+          ui.previewCanvas?.toggleGrid();
+          ui.gridOn = ui.gridOn === false;
+          host.render();
+        });
+      case 'snap':
+        return button('Snap', 'Snap new geometry to existing vertices, midpoints and segments (S)', ui.snapOn === true, () => {
+          ui.snapOn = !ui.snapOn;
+          host.render();
+        });
+      case 'ortho':
+        return button('Ortho', 'Constrain new segments to one axis, as F8 does in AutoCAD (F8)', ui.orthoOn === true, () => {
+          ui.orthoOn = !ui.orthoOn;
+          ui.toolCanvas?.setOrtho(ui.orthoOn);
+          host.render();
+        });
+      case 'undo': {
+        const node = button('Undo', 'Take back the last edit (Ctrl+Z)', false, () => ui.undo?.(), (item?.edits?.length ?? 0) === 0);
+        node.id = 'undoBtn';
+        return node;
+      }
+      case 'redo': {
+        const node = button('Redo', 'Reapply the edit that was taken back (Ctrl+Shift+Z)', false, () => ui.redo?.(), (state.redoStack?.length ?? 0) === 0);
+        node.id = 'redoBtn';
+        return node;
+      }
+      default:
+        return null;
+    }
+  };
+
+  // --- the tab strip ----------------------------------------------------
+  // Always present, even with nothing loaded, so the shape of the tool does
+  // not change under the user between an empty workspace and a loaded one.
+  const tabs = element('div', { class: 'cbar__tabs', role: 'tablist' });
+  const current = RIBBON_TABS.find((tab) => tab.id === ui.ribbonTab) ?? RIBBON_TABS[0];
+  for (const tab of RIBBON_TABS) {
+    const on = tab.id === current.id;
+    const node = element('button', {
+      class: `rtab${on ? ' rtab--on' : ''}`,
+      title: tab.hint,
+      type: 'button',
+    }) as HTMLButtonElement;
+    node.textContent = tab.label;
+    node.setAttribute('role', 'tab');
+    node.setAttribute('aria-selected', String(on));
+    node.addEventListener('click', () => {
+      ui.ribbonTab = tab.id;
+      // A tab is the family AND its panel: bringing the group forward opens the
+      // settings that belong to it, which is the whole reason these were merged
+      // rather than left a window apart.
+      const panel = tab.panels[0];
+      if (panel && item) ui.openPanel?.(panel.group, panel.tab);
+      host.render();
+    });
+    tabs.append(node);
+  }
+  into.append(tabs);
+
+  // --- the current tab's controls ---------------------------------------
+  const row = element('div', { class: 'cbar__row' });
+  for (const id of current.tools) {
+    const tool = CANVAS_TOOLS.find((each) => each.id === id);
+    if (!tool) continue;
+    row.append(button(tool.label, `${tool.hint} (${tool.key})`, active === tool.id, () => setCanvasTool(tool.id)));
+  }
+  if (current.tools.length && current.actions.length) row.append(separator());
+  for (const id of current.actions) {
+    const node = actionButton(id);
+    if (node) row.append(node);
+  }
+  // The panels this family owns, reachable from the bar rather than from two
+  // levels of tab in the right-hand dock.
+  if (current.panels.length) {
+    row.append(separator());
+    for (const panel of current.panels) {
+      row.append(
+        button(panel.label, `Open the ${panel.label.replace(/…$/, '')} panel`, false, () => ui.openPanel?.(panel.group, panel.tab), !item)
+      );
+    }
+  }
+  into.append(row);
 }

@@ -94,16 +94,36 @@ export function layersTab(item: QueueItem): HTMLElement[] {
   nodes.push(list);
 
   // Operations ----------------------------------------------------------
+  //
+  // ONE LINE, NOT FIVE BUTTONS.
+  //
+  // Export, Merge, Rename, Split and Delete used to sit here as a block that
+  // wrapped to three rows and stood disabled most of the time, because four of
+  // the five need a selection — three rows of a narrow rail spent telling the
+  // user what they could not do yet. Every one of them is now on the layer's
+  // own right-click menu, where the action arrives already knowing what it
+  // applies to, and renaming is a double-click on the name.
+  //
+  // What stays is the part a menu cannot do: say that the menu is there, and
+  // report what is ticked. A context menu nobody discovers is a feature that
+  // does not exist, so this line is the discovery — not a second copy of the
+  // five actions.
   const selected = ui.layerSelection.filter((name) => data.layers.some((layer: any) => layer.name === name));
   const ops = element('div', { class: 'lm__ops' });
-  ops.append(element('div', { class: 'lm__opsTitle', text: `${selected.length} selected` }));
-
   ops.append(
-    ghostButton('Export selected…', () => exportSelectedLayers(item, selected), selected.length === 0),
-    ghostButton('Merge…', () => promptMergeLayers(item, selected), selected.length < 2),
-    ghostButton('Rename…', () => promptRenameLayer(item, selected[0]), selected.length !== 1),
-    ghostButton('Split…', () => promptSplitLayer(item, selected[0]), selected.length !== 1),
-    ghostButton('Delete', () => promptDeleteLayer(item, selected[0]), selected.length !== 1)
+    element('div', {
+      class: 'lm__opsTitle',
+      text: selected.length > 0 ? `${selected.length} selected` : 'Nothing ticked',
+    })
+  );
+  ops.append(
+    element('span', {
+      class: 'small faint',
+      text:
+        selected.length > 1
+          ? 'Right-click any ticked layer for export, merge and delete.'
+          : 'Right-click a layer for its actions · double-click its name to rename.',
+    })
   );
   nodes.push(ops);
 
@@ -132,6 +152,26 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
   const row = element('div', {
     class: `lm__row${ui.layerSelection.includes(entry.name) ? ' lm__row--on' : ''}`,
     style: `padding-left:${depth * 16 + 8}px`,
+  });
+
+  // RIGHT-CLICK IS WHERE THE ACTIONS LIVE.
+  //
+  // Every one of these already existed as a `plan*` command — this is wiring,
+  // not new machinery. What it replaces is a block of five buttons sitting
+  // permanently below the list, greyed out most of the time because four of
+  // them need a selection: three rows of the panel spent telling the user what
+  // they could not do yet. Put on the layer itself, each action arrives already
+  // knowing what it applies to.
+  //
+  // The button row stays, because a menu nobody right-clicks is a menu nobody
+  // finds. This is the fast path, not the only one.
+  row.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    // Right-clicking a layer that is not ticked acts on THAT layer, which is
+    // what every file manager does. Right-clicking one that is ticked acts on
+    // the whole ticked set, so a menu cannot silently drop a multi-selection.
+    const selection = ui.layerSelection.includes(entry.name) ? [...ui.layerSelection] : [entry.name];
+    openLayerMenu(item, selection, entry.name, event as MouseEvent);
   });
 
   const tick = element('input', { type: 'checkbox', 'aria-label': `Select ${entry.name}` }) as HTMLInputElement;
@@ -186,8 +226,24 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
   const meta = `${(truncationOf(item, entry.name)?.total ?? entry.featureCount ?? 0).toLocaleString()} · ${entry.geometryTypes.join(', ') || 'no geometry'} · ${entry.fieldCount ?? 0} field${entry.fieldCount === 1 ? '' : 's'}`;
   // Both lines are clipped to one line each in a narrow rail, so the full text
   // has to stay reachable somewhere: the title is that somewhere.
-  const label = element('button', { class: 'lm__name', title: `${entry.name} — ${meta}\nShow this layer in the attribute table` });
-  label.append(element('span', { class: 'lm__nameText', text: entry.name }));
+  const label = element('button', {
+    class: 'lm__name',
+    title: `${entry.name} — ${meta}\nClick to show in the attribute table; double-click the name to rename`,
+  });
+  const nameText = element('span', { class: 'lm__nameText', text: entry.name });
+  // DOUBLE-CLICK THE NAME TO RENAME IT, in place.
+  //
+  // Renaming meant ticking the layer, finding "Rename…" among five buttons
+  // below the list, and answering a dialog — three steps and a modal to change
+  // a word. Every file manager and every GIS renames in place on a double
+  // click, and the name is what the exported legend shows, so it gets edited
+  // often. The dialog stays on the menu for anyone who looks there.
+  nameText.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginInlineRename(item, entry.name, nameText);
+  });
+  label.append(nameText);
   label.append(
     element('span', {
       class: 'lm__meta',
@@ -201,11 +257,34 @@ export function renderLayerNode(node: LayerTreeNode, into: HTMLElement, item: Qu
       text: meta,
     })
   );
+  // THE SINGLE CLICK HAS TO WAIT FOR THE SECOND ONE.
+  //
+  // Showing the layer in the attribute table re-renders the whole panel, which
+  // throws this row away and builds a new one. The first click of a double
+  // click did exactly that, so the second click landed on a DIFFERENT element
+  // and the browser never paired them into a `dblclick` at all — double-click
+  // to rename simply did nothing, with no error to explain it. Measured: the
+  // inline input never appeared.
+  //
+  // So the single-click action is held for the length of a double click and
+  // cancelled if a second click arrives. 250ms is the usual platform threshold
+  // and is imperceptible for a click whose result is a panel changing.
+  let pendingOpen: ReturnType<typeof setTimeout> | null = null;
+  const cancelPendingOpen = (): void => {
+    if (pendingOpen === null) return;
+    clearTimeout(pendingOpen);
+    pendingOpen = null;
+  };
   label.addEventListener('click', () => {
-    store.updateItem(item.id, { table: { ...tableStateOf(item), layer: entry.name, selection: [] } });
-    store.set({ inspectorTab: 'attributes' });
-    host.render();
+    cancelPendingOpen();
+    pendingOpen = setTimeout(() => {
+      pendingOpen = null;
+      store.updateItem(item.id, { table: { ...tableStateOf(item), layer: entry.name, selection: [] } });
+      store.set({ inspectorTab: 'attributes' });
+      host.render();
+    }, 250);
   });
+  nameText.addEventListener('dblclick', cancelPendingOpen);
   row.append(label);
 
   // The style controls go on their own line inside the row.
@@ -346,6 +425,126 @@ function reorderLayer(item: QueueItem, name: string, toIndex: number): void {
 function indexOfLayer(item: QueueItem, name: string): number {
   const index = (item.dataset?.layers ?? []).findIndex((layer: any) => layer.name === name);
   return index < 0 ? 0 : index;
+}
+
+/**
+ * Renames a layer in place, on the row, without a dialog.
+ *
+ * Goes through exactly the same `planRenameLayer` gate as the dialog does —
+ * protected layers, name clashes and empty names are refused by the planner,
+ * not by this function — so the two routes cannot disagree about what is
+ * allowed. The only difference is where the user types.
+ */
+export function beginInlineRename(item: QueueItem, layerName: string, into: HTMLElement): void {
+  if (into.querySelector('input')) return; // already editing
+
+  const input = element('input', {
+    class: 'lm__rename',
+    type: 'text',
+    value: layerName,
+    'aria-label': `Rename ${layerName}`,
+  }) as HTMLInputElement;
+
+  let settled = false;
+  const finish = (commit: boolean): void => {
+    if (settled) return;
+    settled = true;
+    const next = input.value.trim();
+    // Escape, an empty name, or the name it already had: put the row back and
+    // change nothing. Renaming a layer to itself should not enter the history.
+    if (!commit || next === '' || next === layerName) {
+      host.renderInspector();
+      return;
+    }
+    const data = datasetForTools(item);
+    const plan = planRenameLayer(data, layerName, next, { protectedLayers: protectedFor(item) });
+    queueEdit(item, { kind: 'layer-rename', layer: layerName, to: next }, plan, describeLayerPlan(plan));
+    if (!plan.refusal) ui.layerSelection = ui.layerSelection.map((name) => (name === layerName ? next : name));
+    host.renderInspector();
+  };
+
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') finish(true);
+    else if (event.key === 'Escape') finish(false);
+    // The row is inside a button; without this, typing a space would press it.
+    event.stopPropagation();
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('click', (event) => event.stopPropagation());
+  input.addEventListener('dblclick', (event) => event.stopPropagation());
+
+  into.replaceChildren(input);
+  input.focus();
+  input.select();
+}
+
+/**
+ * The right-click menu for a layer.
+ *
+ * Built from the same `prompt*` functions the button row calls, so there is one
+ * implementation of each action and the menu cannot drift from the buttons.
+ * Items that cannot apply to this selection are shown disabled rather than
+ * hidden: a menu whose shape changes is a menu you have to read every time.
+ */
+export function openLayerMenu(item: QueueItem, selection: string[], layerName: string, event: MouseEvent): void {
+  document.querySelector('.ctxmenu')?.remove();
+
+  const menu = element('div', { class: 'ctxmenu', role: 'menu' });
+  const add = (label: string, enabled: boolean, run: () => void, hint?: string): void => {
+    const node = element('button', {
+      class: `ctxmenu__item${enabled ? '' : ' ctxmenu__item--off'}`,
+      type: 'button',
+      role: 'menuitem',
+      ...(hint ? { title: hint } : {}),
+    }) as HTMLButtonElement;
+    node.textContent = label;
+    node.disabled = !enabled;
+    node.addEventListener('click', () => {
+      menu.remove();
+      run();
+    });
+    menu.append(node);
+  };
+
+  const one = selection.length === 1;
+  add('Rename…', one, () => promptRenameLayer(item, selection[0]), 'Or double-click the name on the row');
+  add(`Export ${selection.length > 1 ? `${selection.length} layers` : 'this layer'}…`, selection.length > 0, () =>
+    exportSelectedLayers(item, selection)
+  );
+  // "Merge 1 layers…" is what counting without checking produces. The count is
+  // only worth showing once there is actually a set to merge.
+  add(
+    selection.length >= 2 ? `Merge ${selection.length} layers…` : 'Merge…',
+    selection.length >= 2,
+    () => promptMergeLayers(item, selection),
+    'Tick two or more layers to merge them'
+  );
+  add('Split…', one, () => promptSplitLayer(item, selection[0]), 'Split one layer by an attribute or by geometry type');
+  menu.append(element('div', { class: 'ctxmenu__rule' }));
+  add('Delete', one, () => promptDeleteLayer(item, selection[0]));
+
+  // Positioned at the pointer, then nudged back inside the window: a menu
+  // opened near the right or bottom edge would otherwise run off it.
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  document.body.append(menu);
+  const box = menu.getBoundingClientRect();
+  if (box.right > window.innerWidth) menu.style.left = `${Math.max(4, window.innerWidth - box.width - 4)}px`;
+  if (box.bottom > window.innerHeight) menu.style.top = `${Math.max(4, window.innerHeight - box.height - 4)}px`;
+
+  const dismiss = (e: Event): void => {
+    if (e.type === 'keydown' && (e as KeyboardEvent).key !== 'Escape') return;
+    menu.remove();
+    document.removeEventListener('pointerdown', dismiss, true);
+    document.removeEventListener('keydown', dismiss, true);
+  };
+  // Deferred a tick: the pointerup of the right-click that opened this would
+  // otherwise dismiss it immediately.
+  setTimeout(() => {
+    document.addEventListener('pointerdown', dismiss, true);
+    document.addEventListener('keydown', dismiss, true);
+  }, 0);
+  void layerName;
 }
 
 export function promptRenameLayer(item: QueueItem, layerName: string): void {

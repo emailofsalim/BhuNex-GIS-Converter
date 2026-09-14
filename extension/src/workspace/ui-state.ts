@@ -71,6 +71,15 @@ export interface UiState {
    */
   editTrace?: CirDataset | null;
   /**
+   * Which ribbon tab is forward — Home, Draw, Modify, Measure or Place.
+   *
+   * On the UI state rather than in the store because it is where the user is
+   * LOOKING, not what the file is: it must not be written into a project, and
+   * reopening a file should not restore someone else's idea of which tools they
+   * wanted forward.
+   */
+  ribbonTab?: string;
+  /**
    * The placement in progress, and the untouched source it is placed FROM.
    *
    * `georefOriginal` is the surveyor's original local-grid dataset and is never

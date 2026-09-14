@@ -30,6 +30,7 @@ import {
   toggleBatchPause,
 } from './conversion';
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
+import { installCollapse, makeCollapsible } from './collapse';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
 import { backdropTab } from './panels/backdrop-tab';
@@ -767,6 +768,21 @@ function wire(): void {
     const closed = $('queueRail').classList.toggle('rail--nolayers');
     $('layersToggle').textContent = closed ? '▸' : '▾';
   });
+
+  // EVERYTHING FOLDS, by one mechanism and one remembered state.
+  //
+  // Layers was the only pane that folded, so a long panel — Georeference is
+  // the worst — pushed Convert off the bottom of the dock, and the only way
+  // past a section you were not using was to scroll through it. Files and
+  // Output could not be folded at all.
+  //
+  // `installCollapse` makes every `.section__title` in the app a fold control,
+  // including in panels written later, and re-applies the remembered state
+  // when a panel rebuilds. The two panes that are not `.section` blocks get
+  // the same arrow and the same memory here.
+  installCollapse(document);
+  makeCollapsible($('queueRail').querySelector('.rail__head'), $('queue'), 'files');
+  makeCollapsible($('rightDock').querySelector('.dock__head'), $('rightDock').querySelector('.dock__formats'), 'output formats');
   $('railToggle').addEventListener('click', () => {
     const rail = $('queueRail');
     rail.classList.toggle('rail--closed');
@@ -843,7 +859,16 @@ function wire(): void {
     // Single-letter tool keys make this rule load-bearing rather than polite:
     // without it, typing a layer name containing "v" would drop the user into
     // the Select tool mid-word. Checked once, at the top, for every branch.
-    const typing = Boolean((event.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable]'));
+    //
+    // `event.target` is not always an Element, and the cast said otherwise. A
+    // keydown whose target is the Document — dispatched programmatically, or
+    // arriving with nothing focused — has no `closest`, so this line threw
+    // "target?.closest is not a function" and took the WHOLE handler with it:
+    // every shortcut below, on that keystroke, silently did nothing. The `?.`
+    // guarded a null target and not a target of the wrong kind, which is the
+    // case that actually occurs.
+    const focused = event.target instanceof Element ? event.target : null;
+    const typing = Boolean(focused?.closest('input, textarea, select, [contenteditable]'));
     const accel = event.ctrlKey || event.metaKey;
 
     if (accel && event.key.toLowerCase() === 'o') {
