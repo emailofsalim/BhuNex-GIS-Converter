@@ -872,6 +872,7 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     warnings.push(...converted.warnings);
   }
 
+
   // Attributes, or geometry alone.
   //
   // This setting has existed in the store since the first version and reached
@@ -1009,6 +1010,42 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
         ],
       };
     }
+  }
+
+  // A raster with nothing traced out of it becomes its footprint polygon.
+  //
+  // `rasterFootprint` has existed, and been exported from this module, since
+  // the raster engine landed. It was never CALLED. The prediction engine
+  // promised it in so many words — "Only the raster's footprint will be
+  // written as a polygon" — and `checkDataKind` let raster → vector through on
+  // the strength of it, so every writer received a dataset with no features and
+  // wrote an empty document. GeoJSON produced `{"features":[]}`, WKT a single
+  // newline, and WKB a FILE OF ZERO BYTES, each reported as a success. Only the
+  // shapefile writer refused, because it alone checks that it has something to
+  // write, and that refusal is what made the rest visible.
+  //
+  // After the vectoriser, and only when it produced nothing: tracing a
+  // classified raster into region polygons is the better answer whenever the
+  // user asked for it, and a footprint added beside those regions would return
+  // four shapes for three zones.
+  //
+  // An ungeoreferenced raster has no footprint to give, and is left alone
+  // rather than refused here: the failure the user needs to hear about is
+  // whatever the writer or reader says next, not a footprint that was never
+  // asked for by name.
+  if (
+    working.kind === 'raster' &&
+    target.dataKind === 'vector' &&
+    working.raster?.extent &&
+    working.layers.every((layer) => layer.features.length === 0)
+  ) {
+    working = rasterFootprint(working);
+    warnings.push(
+      warn('RASTER_FOOTPRINT_ONLY', 'The raster was written as its footprint polygon.', {
+        reason: 'A vector format stores geometry, not pixels.',
+        action: 'To keep the pixels choose GeoTIFF or ASCII Grid; to turn the values into shapes, enable Vectorise.',
+      })
+    );
   }
 
   // Rasterize (spec §16, the other direction).
@@ -1702,6 +1739,75 @@ function isZip(bytes: Uint8Array): boolean {
 }
 
 /**
+ * Splits a package's files into the SETS a reader can actually open.
+ *
+ * One shapefile holds exactly one geometry type, so a drawing with a parcel, a
+ * road and a benchmark is written as three complete shapefiles — each with its
+ * own .shx, .dbf, .cpg and .prj — and the writer says so in `SHP_SPLIT_BY_TYPE`.
+ * Grouping is by stem (`survey_polygon`, `survey_line`, `survey_point`), which
+ * is the same rule a recipient's eye uses on the unzipped folder.
+ *
+ * The bug this replaces: the old code took the FIRST file matching the primary
+ * extension as "the" output and keyed every other file into one companion map
+ * BY EXTENSION. With three sets present, `_line.dbf` overwrote `_polygon.dbf`
+ * and `_point.dbf` overwrote that — so QA re-imported the polygon's geometry
+ * carrying the POINT's attribute table, then compared that chimera against the
+ * whole source. Two of three features were invisible to it, the bounds could
+ * not match, and a flawless export was reported to the user as FAILED.
+ */
+interface NamedBytes {
+  name: string;
+  bytes: Uint8Array;
+}
+
+function packageSets<T extends NamedBytes>(files: readonly T[], primaryExtension: string): T[][] {
+  const byStem = new Map<string, T[]>();
+  for (const file of files) {
+    const stem = baseNameOf(file.name);
+    const group = byStem.get(stem);
+    if (group) group.push(file);
+    else byStem.set(stem, [file]);
+  }
+  // Only a stem that actually carries the primary file is openable: a stray
+  // sidecar with no .shp beside it is not a dataset.
+  const sets = [...byStem.values()].filter((group) =>
+    group.some((file) => extensionOf(file.name) === primaryExtension)
+  );
+  return sets.length > 0 ? sets : [[...files]];
+}
+
+/** One set as the reader wants it: the primary file, with its own companions. */
+function inputForSet<T extends NamedBytes>(set: T[], primaryExtension: string): ConversionInput {
+  const main = set.find((file) => extensionOf(file.name) === primaryExtension) ?? set[0];
+  const companions = new Map<string, Uint8Array>();
+  for (const file of set) {
+    if (file === main) continue;
+    companions.set(extensionOf(file.name), file.bytes);
+  }
+  return { fileName: main.name, bytes: main.bytes, companions };
+}
+
+/**
+ * Rejoins the sets into the one dataset the source is compared against.
+ *
+ * The three shapefiles are three files on disk and one drawing in meaning. QA
+ * asks "did the export keep everything?", and that question is about the
+ * package, not about whichever member happens to sort first.
+ */
+function mergeDatasets(datasets: CirDataset[]): CirDataset {
+  if (datasets.length === 1) return datasets[0];
+  const first = datasets[0];
+  return {
+    ...first,
+    layers: datasets.flatMap((dataset) => dataset.layers),
+    warnings: datasets.flatMap((dataset) => dataset.warnings),
+    // A declared CRS on any member is the package's CRS: every set carries the
+    // same .prj, and a member that failed to declare one must not erase it.
+    crs: datasets.find((dataset) => dataset.crs)?.crs ?? null,
+  };
+}
+
+/**
  * Re-imports the written output and compares it with the source.
  *
  * A packaged target (Shapefile, MIF/MID) arrives here as the LOOSE files the
@@ -1720,7 +1826,8 @@ async function runQa(
   }
 
   try {
-    let reimportInput: ConversionInput;
+    const primary = target.extensions[0].toLowerCase();
+    let reimportInputs: ConversionInput[];
 
     if (files.length > 1) {
       // A multi-file package as the WRITER returned it: loose files. This is
@@ -1730,39 +1837,58 @@ async function runQa(
       // .shp; readZip threw "no ZIP signature", the throw was caught, and every
       // shapefile export in the tool's history reported NOT VALIDATED. The
       // bytes were fine — the check never ran on them.
-      const main = files.find((file) => file.name.toLowerCase().endsWith(`.${target.extensions[0]}`)) ?? files[0];
-      const companions = new Map<string, Uint8Array>();
-      for (const file of files) {
-        if (file === main) continue;
-        companions.set(extensionOf(file.name), file.bytes);
-      }
-      reimportInput = { fileName: main.name, bytes: main.bytes, companions };
+      reimportInputs = packageSets(files, primary).map((set) => inputForSet(set, primary));
     } else if (target.packaging === 'zip' && target.id !== 'kmz' && isZip(files[0].bytes)) {
       // A single file that really is a ZIP — the writer packaged it itself.
       const entries = await readZip(files[0].bytes);
-      const main = entries.find((entry) => entry.name.toLowerCase().endsWith(`.${target.extensions[0]}`));
-      if (!main) return { report: notValidated('The output package did not contain a readable primary file.') };
-      const companions = new Map<string, Uint8Array>();
-      for (const entry of entries) {
-        if (entry === main) continue;
-        companions.set(extensionOf(entry.name), entry.bytes);
+      if (!entries.some((entry) => extensionOf(entry.name) === primary)) {
+        return { report: notValidated('The output package did not contain a readable primary file.') };
       }
-      reimportInput = { fileName: main.name, bytes: main.bytes, companions };
+      reimportInputs = packageSets(entries, primary).map((set) => inputForSet(set, primary));
     } else {
-      reimportInput = { fileName: files[0].name, bytes: files[0].bytes };
+      reimportInputs = [{ fileName: files[0].name, bytes: files[0].bytes }];
     }
 
-    const detection = detectFormat({ fileName: reimportInput.fileName, bytes: reimportInput.bytes });
     // Trust the target id over detection here: the file was just written by this
     // very writer, so its identity is known even if the sniffer is unsure.
-    const reimported = await readSource(reimportInput, { ...detection, formatId: target.id, formatName: target.name, confidence: 1, requiresConfirmation: false }, settings);
+    const parts: CirDataset[] = [];
+    for (const reimportInput of reimportInputs) {
+      const detection = detectFormat({ fileName: reimportInput.fileName, bytes: reimportInput.bytes });
+      parts.push(
+        await readSource(
+          reimportInput,
+          { ...detection, formatId: target.id, formatName: target.name, confidence: 1, requiresConfirmation: false },
+          settings
+        )
+      );
+    }
+    const reimported = mergeDatasets(parts);
 
-    if (source.pointcloud) return { report: comparePointCloud(source, reimported), outputDataset: reimported };
-    if (source.raster) return { report: compareRaster(source, reimported), outputDataset: reimported };
-    const prepared = source.kind === 'table' ? tableToPoints(source).dataset : source;
+    // WHAT THE OUTPUT IS COMPARED AGAINST is whatever `prepare` handed the
+    // writer, not the file the user dropped. A raster written to GeoJSON is a
+    // footprint polygon, and holding that up against the raster's pixel grid
+    // asks a question neither dataset can answer — which is why every raster to
+    // vector conversion reported NOT VALIDATED. The like-for-like comparison
+    // runs only while the kind is unchanged.
+    const toVector = target.dataKind === 'vector';
+    if (source.pointcloud && !toVector) return { report: comparePointCloud(source, reimported), outputDataset: reimported };
+    if (source.raster && !toVector) return { report: compareRaster(source, reimported), outputDataset: reimported };
+    const prepared =
+      source.kind === 'table' && toVector
+        ? tableToPoints(source).dataset
+        : source.kind === 'raster' &&
+            toVector &&
+            source.raster?.extent &&
+            source.layers.every((layer) => layer.features.length === 0)
+          ? rasterFootprint(source)
+          : source;
     const coordinateTolerance = settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.linearDecimals, 6);
     const report = compareVector(prepared, reimported, {
       coordinateTolerance,
+      // Elevation is metres even when the horizontal tolerance is degrees, so
+      // it gets its own number, taken from the precision the writer used.
+      elevationTolerance:
+        settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.elevationDecimals, 6),
       // ASKED OF THE REGISTRY, not of a list of three format ids.
       //
       // This was `target.id === 'shapefile' || 'csv' || 'xlsx'`. Shapefile
@@ -1787,7 +1913,11 @@ async function runQa(
     // it can never describe different bytes.
     const diff = diffDatasets(prepared, reimported, {
       coordinateTolerance,
-      featureCountTolerance: target.id === 'shapefile' || target.id === 'csv' || target.id === 'xlsx' ? Number.MAX_SAFE_INTEGER : 0,
+      // The same question the check above asks, asked the same way. It used to
+      // name shapefile, csv and xlsx — the three formats someone had hit — so
+      // the diff panel flagged GPX, OSM, LandXML and Surpac splits as
+      // differences while the verdict beside it called them expected.
+      featureCountTolerance: target.supportsMultiGeometry !== true ? Number.MAX_SAFE_INTEGER : 0,
     });
     // Where the differences are, for the second canvas to draw. Judged against
     // the same coordinate tolerance the diff used, so a coordinate the numbers
