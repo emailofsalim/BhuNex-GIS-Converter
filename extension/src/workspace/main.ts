@@ -67,6 +67,24 @@ function render(): void {
   ($('progressBar') as HTMLElement).style.width = `${Math.round(state.progress * 100)}%`;
   $('perfBadge').textContent = state.perf;
 
+  // THE DWG HELPER BADGE IS ONLY SHOWN WHEN IT MEANS SOMETHING.
+  //
+  // It read "Native engine: unknown" permanently, which is literally true —
+  // the helper is never probed until it is needed, because probing asks for a
+  // permission nobody should face until they actually open a DWG. But a
+  // permanent "unknown" in the top bar hangs a question mark over a tool that
+  // is working perfectly, for the great majority of users who will never
+  // convert a DWG at all.
+  //
+  // So it appears when it has something to say: the helper answered (worth
+  // confirming), it was asked and failed (worth fixing), or a DWG is in the
+  // queue (when the answer decides whether the conversion can run at all).
+  const dwgQueued = state.items.some(
+    (queued) => queued.detection?.formatId === 'dwg' || /\.dwg$/i.test(queued.fileName)
+  );
+  const nativeStatus = state.native?.status ?? 'UNKNOWN';
+  $('nativeBadge').classList.toggle('hidden', nativeStatus === 'UNKNOWN' && !dwgQueued);
+
   const selected = store.selected();
   const canConvert = Boolean(selected && (selected.status === 'ready' || selected.status === 'done') && (selected.targetFormatId ?? state.settings.globalTargetFormatId));
   ($('convertBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;

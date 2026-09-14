@@ -557,7 +557,20 @@ export class Basemap {
       if (!a || !b || !c) continue;
 
       context.save();
-      context.setTransform(
+      // `transform`, which MULTIPLIES onto whatever is already there — not
+      // `setTransform`, which replaces it absolutely.
+      //
+      // `PreviewCanvas` scales the context by `devicePixelRatio` so a CSS pixel
+      // of geometry lands on the right number of device pixels. `setTransform`
+      // threw that scale away for every tile, so on any HiDPI screen the
+      // imagery was drawn at 1/ratio of its correct size and offset from the
+      // data — and because the error is multiplicative, the map appeared to
+      // FLOAT AND SHIFT as the user zoomed, while the geometry stayed put.
+      //
+      // It is invisible at devicePixelRatio 1, which is what a headless browser
+      // reports, which is why every automated check of this passed.
+      // `Backdrop.draw` had it right and was the model for this.
+      context.transform(
         (b.x - a.x) / TILE_SIZE,
         (b.y - a.y) / TILE_SIZE,
         (c.x - a.x) / TILE_SIZE,
@@ -597,7 +610,11 @@ export class Basemap {
     const text = this.options.provider.attribution;
     if (!text) return;
     context.save();
-    context.setTransform(1, 0, 0, 1, 0, 0);
+    // NOT reset to identity. `width` and `height` here are CSS pixels, and the
+    // context is already scaled by devicePixelRatio — forcing identity drew the
+    // credit at device-pixel coordinates, which on a 2x screen put it in the
+    // middle of the canvas instead of the bottom-right corner. Every tile above
+    // restores its own transform, so what is in effect here is already the base.
     context.font = '10px ui-sans-serif, system-ui, sans-serif';
     const metrics = context.measureText(text);
     const padding = 4;
