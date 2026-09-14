@@ -131,10 +131,15 @@ describe('the conversion matrix', () => {
           // knowing what to do next, or they are stuck with a tool that says no.
           const message = (error as Error).message;
           expect(message.length, `${from.id} → ${to.id} refused with an empty message`).toBeGreaterThan(30);
+          //
+          // Deliberately NOT matching the word "convert": these messages open
+          // by naming the conversion that was refused, so accepting it would
+          // let a message pass on its own subject line rather than on an
+          // instruction. What has to be present is a verb aimed at the user.
           expect(
             message,
             `${from.id} → ${to.id} refused without saying what to do: ${message}`
-          ).toMatch(/expand|choose|set |use |select|provide|convert/i);
+          ).toMatch(/expand|choose|set |use |select|provide|enable/i);
           return;
         }
 
