@@ -96,17 +96,129 @@ function formatHistogram(histogram: Record<string, number>): string {
 function coordinateDrift(source: CirFeature[], target: CirFeature[]): number | null {
   const limit = Math.min(source.length, target.length);
   if (limit === 0) return null;
+
+  // WHEN THE FEATURE LISTS DO NOT LINE UP, INDEX PAIRING IS MEANINGLESS.
+  //
+  // The sorted-vertex fix above solved this one level down. The same mistake
+  // survived one level up: pairing source[i] with target[i] assumes the writer
+  // kept both the count and the order, and several formats legitimately keep
+  // neither.
+  //
+  // GPX has no polygons at all — every ring becomes a track, and waypoints are
+  // written first — so a four-feature sheet comes back as six with a point at
+  // index 0. The comparison then measured a parcel corner against a benchmark
+  // and called the difference drift. Measured: GPX and Surpac STR both round-
+  // tripped every one of 24 vertices EXACTLY, and both were reported FAILED,
+  // with a fabricated "0.001026°" and a suspiciously round "125.0" — which is
+  // precisely the width of the test sheet, i.e. one feature against another.
+  //
+  // A red verdict on a perfect conversion is worse than no verdict: it teaches
+  // the user to ignore the one signal that would have told them about a real
+  // loss. So when the counts differ, fall back to a nearest-vertex measure,
+  // which is invariant to regrouping and still sees a vertex that genuinely
+  // moved — nothing near it will match. Loss is not this check's job; the
+  // feature-count and vertex-count checks report that, separately and already.
+  if (source.length !== target.length) return nearestVertexDrift(source, target);
+
   let worst = 0;
   for (let index = 0; index < limit; index++) {
     const a = sortVertices(flatten(source[index]));
     const b = sortVertices(flatten(target[index]));
-    const vertexLimit = Math.min(a.length, b.length);
-    for (let vertex = 0; vertex < vertexLimit; vertex++) {
+    // Same reasoning within a feature: differing vertex counts mean the writer
+    // restructured this geometry, so index pairing cannot be trusted here
+    // either.
+    if (a.length !== b.length) return nearestVertexDrift(source, target);
+    for (let vertex = 0; vertex < a.length; vertex++) {
       const dx = Math.abs(a[vertex][0] - b[vertex][0]);
       const dy = Math.abs(a[vertex][1] - b[vertex][1]);
       if (dx > worst) worst = dx;
       if (dy > worst) worst = dy;
     }
+  }
+  return worst;
+}
+
+/**
+ * Worst distance from an OUTPUT vertex to the nearest source vertex.
+ *
+ * Used when the writer regrouped the features, so there is no correspondence
+ * to pair by.
+ *
+ * THE DIRECTION IS THE WHOLE POINT, and the obvious one is wrong. Measuring
+ * source → output asks "did every source vertex survive", which is a question
+ * about LOSS, and loss is what the feature-count and vertex-count checks
+ * already report. Pointed that way it double-counts: LandXML cannot store an
+ * interior ring, so a dropped 20 m hole left its five vertices with nothing
+ * near them and drift read "20.00" — a displacement that never happened, on a
+ * conversion whose every written vertex was exact.
+ *
+ * Output → source asks the question this check is actually for: every vertex
+ * the writer DID emit should sit on a source vertex. A coordinate that moved
+ * lands away from all of them and is caught; a systematic shift moves them all
+ * and is caught; a declared, honest omission contributes no output vertices
+ * and correctly says nothing here.
+ *
+ * The known limit, written down rather than papered over: a reader that
+ * densifies — turning an arc into segments — invents vertices that sit on no
+ * source vertex, and this would read them as drift. No engine here densifies
+ * on read, so it is left alone.
+ *
+ * Bucketed into a grid so this stays linear rather than quadratic: a survey
+ * sheet can carry hundreds of thousands of vertices, and QA runs on every
+ * conversion.
+ */
+function nearestVertexDrift(source: CirFeature[], target: CirFeature[]): number | null {
+  const from = target.flatMap(flatten);
+  const to = source.flatMap(flatten);
+  if (from.length === 0 || to.length === 0) return null;
+
+  // Cell size from the target's own spread, so the grid adapts to degrees and
+  // to metres without being told which it is holding.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of to) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  const span = Math.max(maxX - minX, maxY - minY);
+  const cell = span > 0 ? span / Math.max(1, Math.floor(Math.sqrt(to.length))) : 1;
+
+  const buckets = new Map<string, number[][]>();
+  const key = (x: number, y: number) => `${Math.floor(x / cell)}:${Math.floor(y / cell)}`;
+  for (const position of to) {
+    const k = key(position[0], position[1]);
+    const bucket = buckets.get(k);
+    if (bucket) bucket.push(position);
+    else buckets.set(k, [position]);
+  }
+
+  let worst = 0;
+  for (const position of from) {
+    const cx = Math.floor(position[0] / cell);
+    const cy = Math.floor(position[1] / cell);
+    let best = Infinity;
+    // Widen the search until something is found: a vertex with no near
+    // neighbour is exactly the case this must still measure, not skip.
+    for (let radius = 1; radius <= 3 && best === Infinity; radius++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (const other of buckets.get(`${cx + dx}:${cy + dy}`) ?? []) {
+            const d = Math.max(Math.abs(position[0] - other[0]), Math.abs(position[1] - other[1]));
+            if (d < best) best = d;
+          }
+        }
+      }
+    }
+    if (best === Infinity) {
+      // Nothing within three cells. Fall back to the honest full scan for this
+      // vertex rather than reporting a number the grid invented.
+      for (const other of to) {
+        const d = Math.max(Math.abs(position[0] - other[0]), Math.abs(position[1] - other[1]));
+        if (d < best) best = d;
+      }
+    }
+    if (best > worst) worst = best;
   }
   return worst;
 }

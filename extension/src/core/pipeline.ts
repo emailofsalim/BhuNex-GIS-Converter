@@ -1763,9 +1763,24 @@ async function runQa(
     const coordinateTolerance = settings.precision.mode === 'full' ? 1e-6 : 10 ** -Math.min(settings.precision.linearDecimals, 6);
     const report = compareVector(prepared, reimported, {
       coordinateTolerance,
-      // Shapefile splits mixed geometry across files, so the count legitimately
-      // differs on re-import of the primary one.
-      allowFeatureCountChange: target.id === 'shapefile' || target.id === 'csv' || target.id === 'xlsx',
+      // ASKED OF THE REGISTRY, not of a list of three format ids.
+      //
+      // This was `target.id === 'shapefile' || 'csv' || 'xlsx'`. Shapefile
+      // splits mixed geometry across files and CSV/XLSX flatten to rows, so
+      // those three were right — and every OTHER format that cannot hold a
+      // multi-part geometry was wrong. GPX has no polygons, Surpac STR stores
+      // strings, LandXML parcels are single boundaries: each correctly splits
+      // a two-part holding into two features, each says so in the check's own
+      // note ("The target format split multi-part geometry into separate
+      // features") — and each was then marked FAIL, which drove the whole
+      // verdict to FAILED on conversions whose every vertex was exact.
+      //
+      // `supportsMultiGeometry` is the registry's existing answer to precisely
+      // this question, so a format added later gets the right behaviour without
+      // anyone remembering to extend a list here. A count that changes for any
+      // OTHER reason still fails: the check only stops treating a declared,
+      // structural split as a defect.
+      allowFeatureCountChange: target.supportsMultiGeometry !== true,
     });
     // The measured comparison, computed from the same re-import rather than by
     // reading the output a second time — so the verdict and the numbers beside

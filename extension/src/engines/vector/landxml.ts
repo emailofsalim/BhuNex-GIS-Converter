@@ -346,17 +346,46 @@ export function writeLandXml(dataset: CirDataset, options: WriteLandXmlOptions):
           break;
         case 'Polygon':
         case 'MultiPolygon': {
-          const rings = geometry.type === 'Polygon' ? (geometry.coordinates as Position[][]) : (geometry.coordinates as Position[][][]).flat();
-          const outer = rings[0] ?? [];
-          if (outer.length < 3) break;
-          const segments: string[] = [];
-          for (let vertex = 0; vertex + 1 < outer.length; vertex++) {
-            segments.push(`<Line><Start>${point(outer[vertex])}</Start><End>${point(outer[vertex + 1])}</End></Line>`);
+          // ONE PARCEL PER PART, not one parcel per feature.
+          //
+          // This used to flatten every part's rings into a single list and
+          // write `rings[0]`. For a Polygon that is the outer ring and right.
+          // For a MultiPolygon — a holding split by a road, which is an
+          // ordinary cadastral shape — it wrote the first part and silently
+          // discarded every other one, under a warning that said "interior
+          // rings were not written". A second parcel is not a hole, so the
+          // warning named the wrong loss and the land simply vanished:
+          // measured at 14 vertices out of 24 on a two-parcel sheet.
+          //
+          // A LandXML Parcel genuinely cannot hold an interior ring, so holes
+          // are still dropped — but now only holes are, and the warning says
+          // so only when there is actually a hole.
+          const parts: Position[][][] =
+            geometry.type === 'Polygon'
+              ? [geometry.coordinates as Position[][]]
+              : (geometry.coordinates as Position[][][]);
+
+          let holes = 0;
+          let written = 0;
+          for (const [index, rings] of parts.entries()) {
+            const outer = rings[0] ?? [];
+            if (outer.length < 3) continue;
+            const segments: string[] = [];
+            for (let vertex = 0; vertex + 1 < outer.length; vertex++) {
+              segments.push(`<Line><Start>${point(outer[vertex])}</Start><End>${point(outer[vertex + 1])}</End></Line>`);
+            }
+            // Parts are named so a two-part holding reads as two parcels of the
+            // same holding rather than two unrelated ones.
+            const partName = parts.length > 1 ? `${name}-${index + 1}` : name;
+            parcels.push(`<Parcel name="${partName}" parcelType="Single"><CoordGeom>${segments.join('')}</CoordGeom></Parcel>`);
+            written++;
+            holes += Math.max(0, rings.length - 1);
           }
-          parcels.push(`<Parcel name="${name}" parcelType="Single"><CoordGeom>${segments.join('')}</CoordGeom></Parcel>`);
-          if (rings.length > 1) {
+
+          if (written === 0) break;
+          if (holes > 0) {
             warnings.push(
-              warn('LANDXML_HOLES_DROPPED', `Interior rings on parcel "${name}" were not written.`, {
+              warn('LANDXML_HOLES_DROPPED', `${holes} interior ring(s) on parcel "${name}" were not written.`, {
                 reason: 'A LandXML Parcel CoordGeom describes a single closed boundary; it has no interior-ring container.',
                 action: 'Export to Shapefile, GeoPackage or GeoJSON to keep holes.',
               })
