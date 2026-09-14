@@ -208,13 +208,33 @@ export function diffDatasets(before: CirDataset, after: CirDataset): ChangeSet {
   return { features, layers, dataset };
 }
 
+/**
+ * The features of a layer, whichever shape it arrives in.
+ *
+ * History is recorded from the WORKSPACE, whose layers carry `preview` rather
+ * than `features` — the summarised shape the canvas reads. `diffLayer` assumed
+ * CIR and went straight for `.features`, so the first drag of a parcel threw
+ * "Cannot read properties of undefined (reading 'length')" out of the history
+ * recorder, after the move had already been queued.
+ *
+ * It never surfaced because the Move tool was unreachable: its engine was
+ * never enabled, so no drag ever reached `commitMove`. Switching the tools on
+ * is what exposed it.
+ */
+function featuresOf(layer: CirLayer): CirFeature[] {
+  const shaped = layer as CirLayer & { preview?: CirFeature[] };
+  return shaped.features ?? shaped.preview ?? [];
+}
+
 function diffLayer(name: string, before: CirLayer, after: CirLayer): FeaturePatch[] {
   const patches: FeaturePatch[] = [];
-  const length = Math.max(before.features.length, after.features.length);
+  const beforeFeatures = featuresOf(before);
+  const afterFeatures = featuresOf(after);
+  const length = Math.max(beforeFeatures.length, afterFeatures.length);
 
   for (let index = 0; index < length; index++) {
-    const left = before.features[index] ?? null;
-    const right = after.features[index] ?? null;
+    const left = beforeFeatures[index] ?? null;
+    const right = afterFeatures[index] ?? null;
     if (left === right) continue;
     if (left && right && sameFeature(left, right)) continue;
     patches.push({ layer: name, index, before: left, after: right });

@@ -41,6 +41,7 @@ import { ui } from '../ui-state';
 export function clearPreview(): void {
   ui.featureSelection = EMPTY_SELECTION;
   ui.basemap = undefined;
+  ui.editTrace = null;
   const canvas = ui.previewCanvas;
   if (!canvas) return;
 
@@ -107,6 +108,21 @@ export function renderPreview(item: QueueItem): void {
   // would be worse than drawing nothing.
   ui.previewCanvas.onOverlay =
     store.get().inspectorTab === 'geometry-ops' ? geometryPlanOverlay(item) : undefined;
+
+  // The pre-edit ghost, styled like the live layers so shapes are comparable
+  // rather than merely present.
+  const trace = ui.editTrace as { layers?: any[] } | null | undefined;
+  data.trace = trace?.layers?.length
+    ? trace.layers.map((layer: any, index: number) => ({
+        name: layer.name,
+        visible: true,
+        color: LAYER_COLORS[index % LAYER_COLORS.length],
+        features: layer.preview ?? layer.features ?? [],
+        lineWidth: 1,
+        lineDash: [],
+        opacity: 1,
+      }))
+    : undefined;
 
   attachBasemap(ui.previewCanvas, dataset);
 

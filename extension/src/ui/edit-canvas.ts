@@ -84,6 +84,16 @@ const HANDLE_COLOR = '#58a6ff';
 const HANDLE_SELECTED = '#f5b041';
 const HANDLE_HOVER = '#ffffff';
 const SEGMENT_HINT = '#3fb950';
+/**
+ * Where the geometry WAS, before the edit in progress.
+ *
+ * Deliberately grey and deliberately thin: a trace is a reference, not data.
+ * It has to be legible against both themes and against imagery, and it must
+ * never be mistaken for a feature that is actually there — a surveyor glancing
+ * at a parcel should be able to tell the ghost from the boundary without
+ * thinking about it.
+ */
+const TRACE_COLOR = 'rgba(140, 148, 158, 0.85)';
 
 export class EditCanvas {
   private target: EditTarget | null = null;
@@ -352,6 +362,13 @@ export class EditCanvas {
     if (!this.enabled || !this.target) return;
     context.save();
 
+    // WHERE IT WAS, then where it is going.
+    //
+    // Order matters: the trace goes down first so the live edit is drawn over
+    // it, which is the way round that reads as "this moved from there" rather
+    // than "something is drawn on top of my parcel".
+    if (this.drag) this.drawOriginTrace(context, project);
+
     // The dragged geometry, previewed in place before it is committed.
     if (this.drag) this.drawDragPreview(context, project);
 
@@ -408,6 +425,54 @@ export class EditCanvas {
   }
 
   /** The dragged ring, drawn dashed in its proposed position. */
+  /**
+   * The ring at its ORIGINAL vertex positions, as a grey dashed ghost.
+   *
+   * Dragging a boundary used to leave nothing to compare against: the live
+   * geometry moved under the cursor and the position it came from was simply
+   * gone, so a surveyor nudging a corner could not see how far it had gone or
+   * put it back by eye. The ghost stays until the drag is released.
+   *
+   * It draws every ring that has a vertex in the drag, not only the moved
+   * vertex, because a corner is judged against the two edges that meet at it.
+   */
+  private drawOriginTrace(context: CanvasRenderingContext2D, project: (x: number, y: number) => { x: number; y: number }): void {
+    if (!this.target || !this.drag) return;
+    const moving = new Set(this.drag.refs.map((ref) => `${ref.ring}/${ref.vertex}`));
+
+    context.save();
+    context.strokeStyle = TRACE_COLOR;
+    context.lineWidth = 1.4;
+    context.setLineDash([4, 4]);
+
+    for (const [ringIndex, ring] of this.target.rings.entries()) {
+      if (!ring.some((_, vertexIndex) => moving.has(`${ringIndex}/${vertexIndex}`))) continue;
+      context.beginPath();
+      for (const [vertexIndex, position] of ring.entries()) {
+        // No offset applied anywhere: this is the geometry exactly as it stood
+        // when the drag began.
+        const screen = project(position[0], position[1]);
+        if (vertexIndex === 0) context.moveTo(screen.x, screen.y);
+        else context.lineTo(screen.x, screen.y);
+      }
+      context.stroke();
+    }
+
+    // A hollow marker on the vertex's own starting point, so the distance moved
+    // is readable even when the two rings nearly overlap.
+    for (const ref of this.drag.refs) {
+      const ring = this.target.rings[ref.ring];
+      const position = ring?.[ref.vertex];
+      if (!position) continue;
+      const screen = project(position[0], position[1]);
+      context.beginPath();
+      context.arc(screen.x, screen.y, 4, 0, Math.PI * 2);
+      context.stroke();
+    }
+
+    context.restore();
+  }
+
   private drawDragPreview(context: CanvasRenderingContext2D, project: (x: number, y: number) => { x: number; y: number }): void {
     if (!this.target || !this.drag) return;
     const moving = new Set(this.drag.refs.map((ref) => `${ref.ring}/${ref.vertex}`));

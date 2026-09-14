@@ -66,6 +66,11 @@ export interface UiState {
   /** Opens a dock group and section. Set by main.ts; used by tools that own a panel. */
   openPanel?: (group: string, tab?: string) => void;
   /**
+   * The dataset as it stood before the first pending edit, drawn as a grey
+   * dashed ghost so an edit can be compared with what was there.
+   */
+  editTrace?: CirDataset | null;
+  /**
    * The placement in progress, and the untouched source it is placed FROM.
    *
    * `georefOriginal` is the surveyor's original local-grid dataset and is never
@@ -149,6 +154,7 @@ export const ui: UiState = {
   editTarget: null,
   toolCanvas: null,
   georefCanvas: null,
+  editTrace: null,
   georefSession: null,
   georefPending: null,
   georefOriginal: null,
