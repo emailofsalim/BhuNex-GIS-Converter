@@ -256,11 +256,11 @@ covering test fails the build (`extension/tests/registry.test.ts`).
 | Format | Reason |
 |---|---|
 | AutoCAD DWG | Needs a native helper or licensed SDK on your machine. |
-| MicroStation DGN | Needs a native helper or licensed SDK on your machine. |
+| MicroStation DGN | Needs a WebAssembly engine that is not part of this build. |
 | LAZ compressed point cloud | Needs a WebAssembly engine that is not part of this build. |
 | E57 point cloud | Needs a WebAssembly engine that is not part of this build. |
 | GeoPackage | Needs a WebAssembly engine that is not part of this build. |
 | GeoParquet | Needs a WebAssembly engine that is not part of this build. |
-| File Geodatabase | Needs a native helper or licensed SDK on your machine. |
+| File Geodatabase | Needs a WebAssembly engine that is not part of this build. |
 
 Closing any of these is tracked in `docs/BUILD_STATE.md`.

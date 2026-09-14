@@ -83,12 +83,20 @@ describe('format registry integrity', () => {
     expect(unbacked.filter((id) => !coveredIndirectly.includes(id))).toEqual([]);
   });
 
-  it('marks every adapter format as needing a native or WASM engine', () => {
+  it('marks every adapter format with the reason it is one', () => {
+    // Three reasons are legitimate, and the third is the point: `requiresNative`
+    // means the helper this project ships really does convert it, and only DWG
+    // qualifies. DGN and File Geodatabase used to claim it too, which made the
+    // UI offer them the moment the helper answered and told the user to install
+    // a helper that converts DWG and nothing else. They declare
+    // `requiresExternalTool` now. See core/helpers.ts.
     for (const format of FORMATS) {
       if (format.support.import !== 'adapter' && format.support.export !== 'adapter') continue;
       expect(
-        format.requiresNative === true || format.requiresWasm === true,
-        `${format.id} is an adapter but declares neither requiresNative nor requiresWasm`
+        format.requiresNative === true ||
+          format.requiresWasm === true ||
+          (format as { requiresExternalTool?: boolean }).requiresExternalTool === true,
+        `${format.id} is an adapter but does not declare why`
       ).toBe(true);
     }
   });

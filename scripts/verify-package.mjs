@@ -56,9 +56,18 @@ if (!existsSync(zipDir)) {
   process.exit(1);
 }
 
-const archives = readdirSync(zipDir).filter((name) => name.endsWith('.zip'));
+// The EXTENSION archive, chosen by name rather than by position.
+//
+// This used to take the alphabetically last .zip in the directory, which was
+// unambiguous while the extension was the only thing packaged. The DWG helper
+// now ships beside it as `bhunex-native-host-<version>.zip`, and "native-host"
+// sorts after "gis-converter" — so the check picked up the helper and reported
+// that the package had no manifest.json. It was right about the helper and
+// asking the wrong question of it.
+const EXTENSION_PREFIX = 'bhunex-gis-converter-';
+const archives = readdirSync(zipDir).filter((name) => name.endsWith('.zip') && name.startsWith(EXTENSION_PREFIX));
 if (archives.length === 0) {
-  console.error('No .zip in dist-zip/ — run `npm run package` first.');
+  console.error(`No ${EXTENSION_PREFIX}*.zip in dist-zip/ — run \`npm run package\` first.`);
   process.exit(1);
 }
 

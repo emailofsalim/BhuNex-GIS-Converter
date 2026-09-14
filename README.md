@@ -138,6 +138,65 @@ Full detail, with every limitation stated, is in
 
 ---
 
+## Formats that need something installed
+
+Everything above runs in the browser with nothing installed. Four entries in the
+format list cannot, and the difference between them matters.
+
+### DWG — a helper this project ships
+
+A browser extension cannot execute a file converter, so DWG goes through a small
+local program that drives the **ODA File Converter** you install yourself. The
+helper is on your machine, makes no network request, and passes bytes to a
+converter already on your disk.
+
+**It is entirely optional.** Install it only if you need DWG; nothing else
+changes either way.
+
+You will need first:
+
+- Python 3.9 or newer
+- [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)
+  — free, from the Open Design Alliance
+
+Then:
+
+1. Download the helper — the `bhunex-native-host-<version>.zip` attached to any
+   [release](https://github.com/emailofsalim/BhuNex-GIS-Converter/releases), or
+   the `native-host/` folder if you cloned the repository.
+2. Unzip it and run `python install.py` inside that folder. It registers the
+   helper with Chrome and Edge, for this extension only.
+3. If ODA File Converter did not land somewhere the installer looks, put its
+   full path into `host-config.json` under `"odaExecutable"`.
+4. Reopen the workspace. The top bar reads **Native engine: ready** once the
+   helper answers.
+
+To remove it: `python install.py --uninstall`. DWG support switches off and
+nothing else changes.
+
+`docs/NATIVE_HOST.md` has the protocol detail and the troubleshooting list.
+
+### DGN, File Geodatabase, GeoPackage, GeoParquet, E57 — another tool
+
+**The DWG helper does not cover these**, and installing it will not make them
+work: it drives ODA File Converter, which handles DWG and DXF only. These need
+software this project does not ship and cannot drive, so it says so instead of
+sending you on an errand.
+
+| Format | Convert it with | Bring back |
+|---|---|---|
+| MicroStation DGN | QGIS, or GDAL `ogr2ogr` | DXF, Shapefile or GeoPackage |
+| Esri File Geodatabase | QGIS (opens a `.gdb` folder directly) | Shapefile or GeoPackage |
+| GeoPackage, GeoParquet | QGIS | GeoJSON, Shapefile or FlatGeobuf |
+| E57 point cloud | CloudCompare or PDAL | LAS |
+
+The same list, with the same wording, is in the workspace under **Help →
+Formats that need something installed**. Both are generated from one catalogue
+in `extension/src/core/helpers.ts`, so neither can drift from the other or from
+what the converter actually does.
+
+---
+
 ## Structure in, structure out
 
 A conversion is not just a format change — the way your data is *organised* is

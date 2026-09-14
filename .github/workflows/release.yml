@@ -61,6 +61,13 @@ jobs:
       - name: Package extension
         run: npm run package
 
+      - name: Package the DWG helper
+        # Shipped as its own asset rather than inside the extension archive: a
+        # browser cannot run Python, and an executable script inside an
+        # extension package is what a store review flags. It is offered from
+        # the Help dialog, so it has to actually be on the release page.
+        run: npm run package:host
+
       - name: Resolve the tag
         id: tag
         run: echo "value=${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
@@ -131,11 +138,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.value }}
         run: |
-          keep="bhunex-gis-converter-$(node -p "require('./extension/manifest.json').version").zip"
-          echo "keeping: $keep"
+          version="$(node -p "require('./extension/manifest.json').version")"
+          keep="bhunex-gis-converter-$version.zip"
+          keep_host="bhunex-native-host-$version.zip"
+          echo "keeping: $keep and $keep_host"
           gh release view "$TAG" --json assets --jq '.assets[].name' | while read -r asset; do
             case "$asset" in
-              "$keep") ;;
+              "$keep"|"$keep_host") ;;
               *.zip)
                 echo "removing a stale archive: $asset"
                 gh release delete-asset "$TAG" "$asset" --yes

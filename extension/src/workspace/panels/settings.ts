@@ -2,6 +2,7 @@
 
 import { NATIVE_STATUS_LABEL } from '../../adapters/native-messaging/client';
 import { OUTPUT_LAYOUT_DESCRIPTION, OUTPUT_LAYOUT_LABEL, type OutputLayout } from '../../core/layout';
+import { ALL_REQUIREMENTS } from '../../core/helpers';
 import { getFormat } from '../../core/registry';
 import {
   KML_TEMPLATE_DESCRIPTION,
@@ -867,6 +868,7 @@ export function openHelpDialog(): void {
   // top bar's "MIT · Md Salim Ansari" button called `openHelpDialog`, so the
   // credit button showed a page about conversion behaviour and the licence was
   // a section two screens down it.
+  body.append(installSection());
   body.append(shortcutSection());
 
   const foot = element('div', { class: 'dialog__foot' });
@@ -887,6 +889,71 @@ export function openHelpDialog(): void {
  * documenting a shortcut that was renamed a release ago — which is exactly the
  * class of confident-but-false claim this project keeps having to remove.
  */
+/**
+ * What needs installing, for which formats, and whether installing helps.
+ *
+ * Built from `core/helpers.ts` rather than written out here, because this text
+ * was previously duplicated across the registry, the format card, the pipeline
+ * refusal and the prediction remedy — and it had drifted. DGN was described as
+ * needing "the local native helper" in three of those places; the helper
+ * converts DWG and nothing else.
+ */
+function installSection(): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'FORMATS THAT NEED SOMETHING INSTALLED' }));
+  section.append(
+    element('p', {
+      class: 'small',
+      text: 'Everything else runs in this browser with nothing installed. These few formats cannot, and the difference between them matters: one is unlocked by a helper this project ships, and the rest need software it does not.',
+    })
+  );
+
+  for (const requirement of ALL_REQUIREMENTS) {
+    const card = element('div', { class: 'section' });
+    const heading = requirement.formats.map((id: string) => getFormat(id)?.name ?? id).join(', ');
+    card.append(element('h3', { class: 'section__title', text: heading }));
+    card.append(element('p', { class: 'small', text: requirement.summary }));
+
+    if (requirement.kind === 'bundled-helper') {
+      card.append(
+        element('p', {
+          class: 'small',
+          text: `Optional. Install it only if you need ${heading}; nothing else changes either way. The helper is a program on your own machine and makes no network request — it passes bytes to a converter already on your disk and passes the result back.`,
+        })
+      );
+      if (requirement.prerequisite) {
+        card.append(element('p', { class: 'small faint', text: `You will need first: ${requirement.prerequisite}` }));
+      }
+      if (requirement.source) {
+        card.append(element('p', { class: 'small faint', text: `Where to get it: ${requirement.source}` }));
+      }
+    } else {
+      card.append(
+        element('p', {
+          class: 'small faint',
+          text: 'Installing the DWG helper does NOT make this format work — it converts DWG only. Use the tool named below and bring the result back here.',
+        })
+      );
+      if (requirement.source) card.append(element('p', { class: 'small faint', text: requirement.source }));
+    }
+
+    if (requirement.steps.length > 0) {
+      const list = element('ol', { class: 'small' });
+      for (const step of requirement.steps) list.append(element('li', { text: step }));
+      card.append(list);
+    }
+    section.append(card);
+  }
+
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text: 'Full instructions, including how to remove the helper again, are in docs/NATIVE_HOST.md and in the README inside the helper archive.',
+    })
+  );
+  return section;
+}
+
 function shortcutSection(): HTMLElement {
   const section = element('div', { class: 'section' });
   section.append(element('h3', { class: 'section__title', text: 'Keyboard shortcuts' }));

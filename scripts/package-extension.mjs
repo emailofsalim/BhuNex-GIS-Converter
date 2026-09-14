@@ -196,9 +196,14 @@ console.log(`packaged ${entries.length} entries -> ${relative(root, target)}`);
  * The directory is committed too, so this also stops it growing by a version
  * every release.
  */
+// The DWG helper ships as its own asset beside the extension, so BOTH current
+// archives survive the prune. Keeping only the extension zip here would delete
+// the helper the moment either script ran after the other, and the Help dialog
+// offers that helper as a download.
+const keep = new Set([`bhunex-gis-converter-${version}.zip`, `bhunex-native-host-${version}.zip`]);
 for (const name of readdirSync(outDir)) {
   if (!name.endsWith('.zip')) continue;
-  if (name === `bhunex-gis-converter-${version}.zip`) continue;
+  if (keep.has(name)) continue;
   rmSync(resolve(outDir, name));
   console.log(`removed a stale archive from a previous version: ${name}`);
 }
