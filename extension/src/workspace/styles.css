@@ -399,6 +399,57 @@ textarea {
 .cbar--tools {
   top: 10px;
   left: 10px;
+  /* The ribbon is two stacked rows — tabs, then that tab's controls — rather
+     than one wrapping line of twenty buttons. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+}
+
+/* THE TAB STRIP.
+   Reads as a row of labels rather than a row of buttons: these switch what the
+   bar is showing, and making them look like the tools underneath would invite
+   clicking one expecting a tool. */
+.cbar__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rtab {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.rtab:hover {
+  color: var(--text);
+}
+
+.rtab--on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Only the current tab's controls, so the bar is one row whatever it holds.
+   It still wraps rather than clipping on a narrow window: a tool that cannot
+   be reached is worse than a bar two lines tall. */
+.cbar__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  flex-wrap: wrap;
 }
 
 /* One positioned column holding the tool line and its readout. Stacking them
