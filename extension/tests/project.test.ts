@@ -834,10 +834,28 @@ describe('geometry overlay', () => {
       ],
     });
 
+    // A PROJECTED pair, deliberately.
+    //
+    // This used to write GeoJSON, whose CRS is mandated WGS 84 — so the
+    // coordinates were DEGREES and `fixedPrecision(1)` meant a tenth of a
+    // degree, eleven kilometres. The test passed by asserting that eleven
+    // kilometres of damage was the rounding the user asked for. It was not:
+    // `fixedPrecision` now floors geographic output at seven decimals, so a
+    // request phrased in millimetres cannot demolish a parcel.
+    //
+    // The property being checked — that requested rounding is silent in the
+    // overlay and still findable under a tighter tolerance — is about LINEAR
+    // decimals, so the pair is now one that keeps a projected CRS. The numbers
+    // below are metres, and one decimal place means a decimetre.
     const result = await convert({
       input: { fileName: 'plots.geojson', bytes: new TextEncoder().encode(geojson) },
-      targetFormatId: 'geojson',
-      settings: { ...PIPELINE_DEFAULTS, precision: fixedPrecision(1), runQa: true },
+      targetFormatId: 'dxf',
+      settings: {
+        ...PIPELINE_DEFAULTS,
+        sourceCrs: crsFromEpsg(32644),
+        precision: fixedPrecision(1),
+        runQa: true,
+      },
     });
 
     // Writing at one decimal place cannot move a vertex by more than 0.05, and

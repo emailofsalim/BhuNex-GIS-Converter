@@ -68,6 +68,7 @@ import { host } from '../host';
 import { datasetForTools, protectedFor, viewOf } from './dataset';
 import { pendingEditsPanel, queueEdit } from './edits';
 import { ui } from '../ui-state';
+import { openCanvasMenu } from './canvas-menu';
 
 /**
  * Where a drawing goes, and what it is called.
@@ -137,23 +138,7 @@ export function selectTab(item: QueueItem): HTMLElement[] {
       setSelection(EMPTY_SELECTION);
     })
   );
-  actions.append(
-    ghostButton('Zoom to selection', () => {
-      const bounds = selectionBounds(selection, layers);
-      if (!bounds) {
-        store.log('warn', 'Nothing is selected, so there is nothing to zoom to.');
-        host.render();
-        return;
-      }
-      ui.previewCanvas?.setView({
-        // A little wider than the selection itself, so its edges are visible
-        // rather than flush against the frame.
-        scale: viewScaleFor(bounds),
-        centreX: (bounds.minX + bounds.maxX) / 2,
-        centreY: (bounds.minY + bounds.maxY) / 2,
-      });
-    })
-  );
+  actions.append(ghostButton('Zoom to selection', () => zoomToSelection()));
   summary.append(actions);
   wrap.append(summary);
 
@@ -489,6 +474,9 @@ export function renderSelect(item: QueueItem): void {
         return current ? selectableLayers(current) : [];
       },
       selection: () => ui.featureSelection,
+      // A right-click that did not drag opens the canvas menu. The band owns
+      // the right button while it is being dragged; this is the other case.
+      onContextMenu: (screenX, screenY, world) => openCanvasMenu(screenX, screenY, { x: world[0], y: world[1] }),
       onSelectionChange: (selection) => {
         ui.featureSelection = selection;
         // `render`, not `renderInspector`: a feature selection is read by more
@@ -617,6 +605,32 @@ export function selectableLayers(item: QueueItem): SelectableLayer[] {
     locked: isLocked(view, layer.name) || protectedNames.has(layer.name),
     visible: isVisible(view, layer.name),
   }));
+}
+
+/**
+ * Fills the canvas with whatever is selected.
+ *
+ * Exported because the canvas's right-click menu offers the same thing, and a
+ * second implementation there would be a second idea of how much margin to
+ * leave — which is exactly how two controls with one label come to frame a
+ * parcel differently.
+ */
+export function zoomToSelection(): void {
+  const item = store.selected();
+  if (!item) return;
+  const bounds = selectionBounds(ui.featureSelection, selectableLayers(item));
+  if (!bounds) {
+    store.log('warn', 'Nothing is selected, so there is nothing to zoom to.');
+    host.render();
+    return;
+  }
+  ui.previewCanvas?.setView({
+    // A little wider than the selection itself, so its edges are visible
+    // rather than flush against the frame.
+    scale: viewScaleFor(bounds),
+    centreX: (bounds.minX + bounds.maxX) / 2,
+    centreY: (bounds.minY + bounds.maxY) / 2,
+  });
 }
 
 function setSelection(selection: Selection): void {

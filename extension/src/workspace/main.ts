@@ -51,6 +51,7 @@ import { GeorefCanvas } from '../ui/georef-canvas';
 import { centreOf, georefPanel, pickToLocal, replaceFromOriginal } from './panels/georef';
 import { rebuildPreviewFrom } from './panels/edits';
 import { renderSelect, selectTab } from './panels/select-tab';
+import { closeCanvasMenu, installCanvasGestures } from './panels/canvas-menu';
 import { openAboutDialog, openHelpDialog, openSettingsDialog } from './panels/settings';
 import { openProject, workflowsPanel } from './panels/workflows';
 import { ui } from './ui-state';
@@ -321,6 +322,19 @@ function renderInspector(): void {
   const item = store.selected();
   body.replaceChildren();
 
+  // THE LAYER RAIL IS EMPTIED FIRST, BEFORE ANY EARLY RETURN.
+  //
+  // Layers live in the left panel, so they are not part of the inspector body
+  // that `replaceChildren` above clears — they need clearing of their own. This
+  // used to happen further down, AFTER the `if (!item) return` below, which is
+  // the one path that matters: clearing the queue selects nothing, so the
+  // function returned before reaching it and the rail kept the layers of a file
+  // that was no longer loaded. The drawing went, the file list went, and a list
+  // of layers belonging to nothing stayed on screen offering to hide and
+  // recolour them.
+  const rail = $('layerRail');
+  rail.replaceChildren();
+
   if (!item) {
     body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Select a queued file to inspect it.' }));
     return;
@@ -330,10 +344,6 @@ function renderInspector(): void {
     body.append(messageBlock('error', item.error.what, item.error.why, item.error.action));
   }
 
-  // Layers live in the left panel now, beside the drawing they control, so
-  // they are rendered every time rather than only when a tab is open.
-  const rail = $('layerRail');
-  rail.replaceChildren();
   // Only once there is a dataset to describe. Rendering during inspection is
   // what surfaced the crash above, and a half-built layer list is not
   // information anyone can use anyway.
@@ -668,7 +678,26 @@ function wire(): void {
   });
 
   $('clearQueueBtn').addEventListener('click', () => {
-    store.set({ items: [], selectedId: null, manifestCsv: undefined });
+    // CLEARING THE QUEUE CLEARS EVERYTHING THAT DESCRIBED IT.
+    //
+    // The items and the selection were dropped and nothing else was, so state
+    // belonging to a file that no longer exists outlived it: a redo stack whose
+    // commands addressed layers and feature indices that had gone, and a vertex
+    // editor still holding a target inside them. Both would have been replayed
+    // against whatever occupied those indices next.
+    //
+    // `clearPreview` — reached through `render` once nothing is selected —
+    // handles the canvas, the selection and the pre-edit ghost; the layer rail
+    // is emptied by `renderInspector`. What is left is the state those two do
+    // not own, and it is cleared here.
+    store.set({ items: [], selectedId: null, manifestCsv: undefined, redoStack: [] });
+    ui.editTarget = null;
+    ui.editSelection = [];
+    ui.editCanvas?.setTarget(null);
+    ui.georefSession = null;
+    ui.georefPending = undefined;
+    // The menu is about a feature under a pointer, and there is no longer one.
+    closeCanvasMenu();
     store.log('info', 'Queue cleared.');
     render();
   });
@@ -758,6 +787,14 @@ function wire(): void {
       toggleRibbonFold();
     }
   });
+
+  // DOUBLE-CLICK TO SELECT, AND RIGHT-CLICK FOR THE CANVAS MENU.
+  //
+  // Both live on the canvas element rather than inside a tool, because the
+  // point of them is that they work whichever tool is armed — including Pan,
+  // where every tool engine is switched off and `ToolCanvas` would never see
+  // the event.
+  installCanvasGestures($('previewCanvas'));
 
   // A PEEKED RIBBON FOLDS AGAIN AT THE NEXT CLICK ON THE DRAWING.
   //
