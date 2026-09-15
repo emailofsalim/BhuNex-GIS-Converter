@@ -11,7 +11,7 @@ import {
   opacityOf,
 } from '../../core/layers';
 import { crsFromEpsg, WGS84_CRS } from '../../crs/epsg';
-import { crsGridUnit, crsLabel, crsShortLabel, planTransform } from '../../crs/transform';
+import { crsGridUnit, crsLabel, crsShortLabel, planTransform, sameCrs, transformDataset } from '../../crs/transform';
 import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-overlay';
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
@@ -342,6 +342,18 @@ function sameService(url: string, template: string): boolean {
 /** Builds the drawable form of a worker-summarised dataset. */
 export function previewDataFor(dataset: any): PreviewData {
   const data: PreviewData = { layers: [], truncated: false };
+
+  // EACH PANE DECLARES ITS OWN FRAME.
+  //
+  // The two compare panes usually hold the SAME data in DIFFERENT coordinate
+  // systems — a projected source beside a WGS 84 output, because KML and its
+  // family have nowhere to record anything else. Without this the output pane
+  // plotted degrees straight onto x/y and drew the world stretched sideways by
+  // 1/cos(latitude), so an untouched conversion looked like it had reshaped
+  // every elongated feature. The canvas corrects for it, and can only do so if
+  // it is told which unit it is drawing.
+  const crs = (dataset?.crs ?? null) as CrsRef | null;
+  data.crs = { label: crsShortLabel(crs), unit: crsGridUnit(crs) };
   if (dataset?.layers?.length) {
     dataset.layers.forEach((layer: any, index: number) => {
       data.layers.push({
@@ -414,7 +426,23 @@ export function renderCompare(item: QueueItem): void {
   sourceData.overlay = overlay.source;
 
   const hasOutput = Boolean(item.outputDataset);
-  const outputData = hasOutput ? previewDataFor(item.outputDataset) : null;
+  // BOTH PANES ARE DRAWN IN THE SOURCE'S FRAME.
+  //
+  // They usually hold the SAME geometry in DIFFERENT coordinate systems: a
+  // projected survey on the left, and on the right the same survey as KML and
+  // its family are obliged to store it, in WGS 84. Shown each in its own frame
+  // they do not look alike, and the difference is not damage — it is geodesy.
+  // Measured on a real DXF → KML with a PASSing QA and identical vertex counts
+  // on every ring: a 0.34° rotation between the panes from meridian
+  // convergence (grid north is not true north), and an 8% horizontal squeeze
+  // from cos(latitude). Both are real, neither is a conversion defect, and
+  // together they make an untouched conversion look reshaped.
+  //
+  // A compare view whose two halves cannot be laid over each other is not
+  // comparing anything, so the output is brought back into the source's frame
+  // for DISPLAY. Nothing here touches what is exported; the file on disk stays
+  // in the CRS the format requires.
+  const outputData = hasOutput ? previewDataFor(comparableOutput(item)) : null;
   if (outputData) outputData.overlay = overlay.output;
 
   ui.dualCanvas.setData(sourceData, outputData);
@@ -431,6 +459,43 @@ export function renderCompare(item: QueueItem): void {
 
   renderOverlayLegend(item.overlay);
   updateLinkButton();
+}
+
+/**
+ * The output dataset in the SOURCE's coordinate system, for the compare panes.
+ *
+ * Returns the output unchanged when the two already share a CRS, when either
+ * declares none, or when the transform cannot be built — a refusal to
+ * reproject is not a reason to draw nothing, and the pane's own caption still
+ * names the CRS it is in either way.
+ */
+function comparableOutput(item: QueueItem): any {
+  const output = item.outputDataset as any;
+  const from = (output?.crs ?? null) as CrsRef | null;
+  const to = ((item.dataset as any)?.crs ?? null) as CrsRef | null;
+  if (!output || !from || !to || sameCrs(from, to)) return output;
+
+  try {
+    // The preview features are what the pane draws, so they are what has to
+    // move. `transformDataset` works on `features`, hence the swap in and back.
+    const shaped = {
+      ...output,
+      layers: (output.layers ?? []).map((layer: any) => ({ ...layer, features: layer.preview ?? [] })),
+    };
+    const moved = transformDataset(shaped as never, to) as any;
+    return {
+      ...output,
+      crs: to,
+      layers: (moved.layers ?? []).map((layer: any, index: number) => ({
+        ...(output.layers ?? [])[index],
+        preview: layer.features ?? [],
+      })),
+    };
+  } catch {
+    // A datum with no bundled shift, most often. Drawing the output in its own
+    // frame is still better than an empty pane.
+    return output;
+  }
 }
 
 export function describeDatasetShort(dataset: any): string {
