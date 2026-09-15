@@ -981,11 +981,25 @@ function wire(): void {
         render();
         return;
       }
-      // Escape falls THROUGH to ToolCanvas, which cancels a drawing in
-      // progress first and clears the selection second. Returning to Pan is
-      // the last step, and only once it has nothing left of its own to undo.
-      if (event.key === 'Escape' && !ui.toolCanvas?.isDrawing()) {
-        setCanvasTool('pan');
+      // ESCAPE IS A LADDER, NOT A SHORTCUT TO PAN.
+      //
+      // Each engine gives up ONE thing per press — a part-drawn polygon, then
+      // the rubber band, then the tool, then the selection; or for the vertex
+      // editor, the selected grips and then the open feature. Returning to Pan
+      // is the last rung, taken only when every live engine says it has
+      // nothing left of its own.
+      //
+      // This used to be guarded by `isDrawing()` alone, which made every rung
+      // below the first unreachable: one Escape while vertex-editing closed
+      // the entire tool, and one while selecting threw the tool away instead
+      // of the selection. The engines are asked FIRST, before their own
+      // handlers run, because this listener is registered before theirs.
+      if (event.key === 'Escape') {
+        const busy =
+          ui.toolCanvas?.consumesEscape() === true ||
+          ui.editCanvas?.consumesEscape() === true ||
+          ui.measureCanvas?.consumesEscape() === true;
+        if (!busy) setCanvasTool('pan');
       }
     }
   });

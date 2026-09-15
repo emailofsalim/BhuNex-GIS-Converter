@@ -20,7 +20,8 @@ import {
 } from '../../core/vertex-edit';
 import { planVertexSnap } from '../../qa/snap';
 import { type QueueItem, store } from '../../state/store';
-import { EditCanvas, editTargetFor } from '../../ui/edit-canvas';
+import { hitTest } from '../../core/selection';
+import { EditCanvas, editTargetFor, PICK_RADIUS_PX } from '../../ui/edit-canvas';
 import { $, element, keyValues } from '../dom';
 import { host } from '../host';
 import { historyOf } from './history';
@@ -88,10 +89,7 @@ export function editTab(item: QueueItem): HTMLElement[] {
       host.render();
       return;
     }
-    ui.editTarget = target;
-    ui.editCanvas?.setTarget(target);
-    ui.editCanvas?.setEnabled(true);
-    updateEditBar();
+    openForVertexEdit(layerSelect.value, index, feature?.geometry);
     host.render();
   };
   open.addEventListener('click', openSelected);
@@ -107,6 +105,110 @@ export function editTab(item: QueueItem): HTMLElement[] {
   }
 
   return [wrap];
+}
+
+/**
+ * Opens one feature for vertex editing, wherever the request came from.
+ *
+ * The panel's "Open on the canvas" button and a click on the drawing itself
+ * both land here, so the two routes cannot drift — the click is not a second,
+ * looser path that skips the geometry check the button makes.
+ */
+export function openForVertexEdit(layerName: string, index: number, geometry: unknown): boolean {
+  const target = editTargetFor(layerName, index, geometry as never);
+  if (!target) return false;
+  ui.editTarget = target;
+  ui.editCanvas?.setTarget(target);
+  ui.editCanvas?.setEnabled(true);
+  updateEditBar();
+  return true;
+}
+
+/**
+ * The feature under a world position, in the preview the canvas draws.
+ *
+ * ONE hit test behind three callers — the click that opens a feature, the
+ * hover that pre-highlights it, and (through `hitTest`) the Select tool — so
+ * "what is under the cursor" cannot be answered differently depending on which
+ * gesture asked. The pick radius is converted from the canvas's screen
+ * tolerance, so the target stays the same size under the finger at any zoom.
+ */
+function featureUnder(world: { x: number; y: number }): { layer: string; index: number; geometry: unknown } | null {
+  const item = store.selected();
+  const layers = (item?.dataset?.layers ?? []).map((layer: any) => ({
+    name: layer.name,
+    visible: layer.visible !== false,
+    features: layer.preview ?? [],
+  }));
+  if (layers.length === 0) return null;
+
+  const scale = ui.previewCanvas?.getView().scale ?? 1;
+  const tolerance = PICK_RADIUS_PX / (Number.isFinite(scale) && scale > 0 ? scale : 1);
+  const hit = hitTest(layers as never, [world.x, world.y], tolerance);
+  if (!hit) return null;
+
+  const layer = layers.find((candidate: any) => candidate.name === hit.ref.layer);
+  return { layer: hit.ref.layer, index: hit.ref.index, geometry: (layer?.features ?? [])[hit.ref.index]?.geometry };
+}
+
+/**
+ * The rings a click would open, for the canvas's pre-highlight.
+ *
+ * Deliberately built through `editTargetFor`, the same function the click
+ * uses: a feature that cannot be vertex-edited produces no target and so
+ * lights up nothing, rather than inviting a click that would only log a
+ * refusal.
+ */
+export function ringsUnderPointer(world: { x: number; y: number }): number[][][] | null {
+  const hit = featureUnder(world);
+  if (!hit) return null;
+  return editTargetFor(hit.layer, hit.index, hit.geometry as never)?.rings ?? null;
+}
+
+/**
+ * Closes the open feature and goes back to picking one.
+ *
+ * `ui.editTarget` is the panel's copy; clearing only the canvas's would let
+ * the next render re-open the feature Escape just dismissed.
+ */
+export function closeVertexEdit(): void {
+  ui.editTarget = null;
+  ui.editSelection = [];
+  updateEditBar();
+  host.render();
+}
+
+/**
+ * The feature under the pointer, opened for editing.
+ *
+ * Hit-tests the same preview dataset the canvas draws, with the same helper
+ * `ToolCanvas` uses to decide what a click selected — so "what the Vertex tool
+ * opens" and "what the Select tool picks" can never disagree about which
+ * feature is under the cursor.
+ */
+export function pickFeatureForEdit(world: { x: number; y: number }): boolean {
+  const hit = featureUnder(world);
+  if (!hit) return false;
+
+  const opened = openForVertexEdit(hit.layer, hit.index, hit.geometry);
+  if (!opened) {
+    store.log('warn', `${hit.layer}: that geometry has no editable vertices — a point or a geometry collection cannot be vertex-edited.`);
+  }
+  host.render();
+
+  // RE-CLAIM THE OVERLAY, AFTER the render and not before it.
+  //
+  // The canvas has ONE overlay hook and `renderPreview` resets it, which is why
+  // `renderEdit` takes it back rather than relying on the constructor. Calling
+  // `host.render()` here therefore handed the hook away a moment after the
+  // editor had been armed: the target was set, the panel updated, and the
+  // vertices were not drawn — the tool looked exactly as dead as before the
+  // fix, for a completely different reason.
+  if (opened) {
+    ui.editCanvas?.reattach();
+    ui.previewCanvas?.render();
+  }
+  return opened;
 }
 
 /** Creates the interaction layer the first time the Edit tab is opened. */
@@ -135,6 +237,9 @@ export function renderEdit(item: QueueItem): void {
         $('editReadout').textContent = `${position[0].toFixed(3)}, ${position[1].toFixed(3)}`;
       },
       snap: (ref, to) => snapDuringDrag(ref, to),
+      onPickFeature: (world) => pickFeatureForEdit(world),
+      ringsUnder: (world) => ringsUnderPointer(world) as never,
+      onCloseTarget: () => closeVertexEdit(),
     });
   }
 
