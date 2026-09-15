@@ -23,6 +23,7 @@ import { ui } from '../ui-state';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
 import { boundaryRings, describeBoundary } from '../conversion';
+import { makeCollapsible } from '../collapse';
 import { host } from '../host';
 
 /**
@@ -48,59 +49,44 @@ export function renderSettingsPanel(into: HTMLElement): void {
   if (!target) return;
 
   const common = element('div', { class: 'section' });
-  common.append(element('h3', { class: 'section__title', text: 'Conversion settings' }));
-  common.append(
-    checkbox('Preserve Z (elevations)', state.settings.preserveZ, (value) => void store.patchSettings({ preserveZ: value }))
-  );
-  common.append(
-    checkbox(
-      'Write attributes',
-      state.settings.preserveAttributes,
-      (value) => void store.patchSettings({ preserveAttributes: value }),
-      'Off writes geometry alone — for a boundary shared with someone who has no business seeing the owner names attached to it. The fields left out are listed in the warnings.'
-    )
-  );
-  common.append(
-    checkbox('Run QA after conversion', state.settings.runQa, (value) => void store.patchSettings({ runQa: value }), 'Re-imports the output and compares it with the source.')
-  );
-  common.append(
-    checkbox(
-      'Assess project health',
-      state.settings.assessHealth,
-      (value) => void store.patchSettings({ assessHealth: value }),
-      'Scores CRS, geometry, topology, duplicates, attributes, conversion risk and warnings, each expandable into the items behind it.'
-    )
-  );
-  // Sits directly under "Assess project health" because it is a part of that
-  // scan rather than a separate feature, and it only means anything when the
-  // scan runs at all.
-  if (state.settings.assessHealth) {
-    common.append(
-      checkbox(
-        'Look for missing parcels inside the coverage',
-        state.settings.checkCoverageGaps,
-        (value) => void store.patchSettings({ checkCoverageGaps: value }),
-        'Unions every polygon in a layer and reports each enclosed area nothing covers — the un-digitised plot that no pairwise check can see, because it is consistent with all four of its neighbours. Slower than the other checks: seconds on a full sheet rather than milliseconds.'
-      )
-    );
-  }
+  // NO "Conversion settings" heading here. This renders inside the dialog's
+  // own "Conversion" section, so the two stacked as "CONVERSION" directly above
+  // "CONVERSION SETTINGS" — a heading repeated in different words, which is
+  // noise of exactly the kind this pass exists to remove. The groups below name
+  // themselves and fold individually.
 
-  common.append(
-    checkbox(
-      'Attach a conversion report',
-      state.settings.embedReport,
-      (value) => void store.patchSettings({ embedReport: value }),
-      'Adds a self-contained HTML and text report to the delivery, for whoever receives it without this tool.'
-    )
-  );
-  common.append(
-    checkbox(
-      'Attach a legend',
-      state.settings.includeLegend,
-      (value) => void store.patchSettings({ includeLegend: value }),
-      'An SVG of the layers, their colours and their line types, built from the file as written — including any renames. The same colours are written into the output itself where the format can carry them, so the legend and the file cannot disagree.'
-    )
-  );
+  /**
+   * One named group of related controls.
+   *
+   * These settings were a flat run of nine controls under a single heading,
+   * inside a dialog that already carried fourteen headings and forty-six
+   * controls in one scroll. Nothing was mislabelled and nothing was missing —
+   * the owner's words were "confusing, too many options scattered everywhere",
+   * and a flat list is exactly how that feels once it is long enough to need
+   * scrolling to compare two of its entries.
+   *
+   * So each group answers ONE question a person actually holds in their head
+   * while setting up a conversion — what comes out, what travels with it,
+   * whether to check it — rather than sorting by which engine reads the flag.
+   * Groups are collapsible and remember their state through `makeCollapsible`,
+   * so the ones a given job never touches stay shut.
+   */
+  const group = (title: string, hint: string): HTMLElement => {
+    const wrap = element('div', { class: 'setgroup' });
+    const head = element('h4', { class: 'setgroup__title', text: title });
+    const body = element('div', { class: 'setgroup__body' });
+    body.append(element('p', { class: 'small faint', text: hint }));
+    wrap.append(head, body);
+    makeCollapsible(head, body, `settings.${title}`);
+    common.append(wrap);
+    return body;
+  };
+
+  // ---- What comes out ---------------------------------------------------
+  //
+  // First because it is the decision every other one is downstream of: one
+  // file or a tree, and at what precision.
+  const output = group('Output', 'The shape of the delivery, and how precise its coordinates are.');
 
   // Output structure sits beside precision because it is a first-class choice,
   // not an advanced one: it decides whether the delivery is one file or a tree.
@@ -126,7 +112,7 @@ export function renderSettingsPanel(into: HTMLElement): void {
       })
     );
   }
-  common.append(layoutField);
+  output.append(layoutField);
 
   const precision = element('div', { class: 'field' });
   precision.append(element('label', { class: 'field__label', text: 'Output precision' }));
@@ -146,7 +132,71 @@ export function renderSettingsPanel(into: HTMLElement): void {
     void store.patchSettings(value === 'full' ? { precisionMode: 'full' } : { precisionMode: 'fixed', precisionDecimals: Number(value) });
   });
   precision.append(precisionSelect);
-  common.append(precision);
+  output.append(precision);
+
+  // ---- What travels with the geometry -----------------------------------
+  const carried = group(
+    'What travels',
+    'Whether the levels and the attribute table go with the geometry, where the format can hold them.'
+  );
+  carried.append(
+    checkbox('Preserve Z (elevations)', state.settings.preserveZ, (value) => void store.patchSettings({ preserveZ: value }))
+  );
+  carried.append(
+    checkbox(
+      'Write attributes',
+      state.settings.preserveAttributes,
+      (value) => void store.patchSettings({ preserveAttributes: value }),
+      'Off writes geometry alone — for a boundary shared with someone who has no business seeing the owner names attached to it. The fields left out are listed in the warnings.'
+    )
+  );
+
+  // ---- Checking ---------------------------------------------------------
+  const checks = group('Checking', 'What the tool verifies for you, and reports afterwards.');
+  checks.append(
+    checkbox('Run QA after conversion', state.settings.runQa, (value) => void store.patchSettings({ runQa: value }), 'Re-imports the output and compares it with the source.')
+  );
+  checks.append(
+    checkbox(
+      'Assess project health',
+      state.settings.assessHealth,
+      (value) => void store.patchSettings({ assessHealth: value }),
+      'Scores CRS, geometry, topology, duplicates, attributes, conversion risk and warnings, each expandable into the items behind it.'
+    )
+  );
+  // Sits directly under "Assess project health" because it is a part of that
+  // scan rather than a separate feature, and it only means anything when the
+  // scan runs at all.
+  if (state.settings.assessHealth) {
+    checks.append(
+      checkbox(
+        'Look for missing parcels inside the coverage',
+        state.settings.checkCoverageGaps,
+        (value) => void store.patchSettings({ checkCoverageGaps: value }),
+        'Unions every polygon in a layer and reports each enclosed area nothing covers — the un-digitised plot that no pairwise check can see, because it is consistent with all four of its neighbours. Slower than the other checks: seconds on a full sheet rather than milliseconds.'
+      )
+    );
+  }
+
+  // ---- Packed alongside --------------------------------------------------
+  const alongside = group('Packed alongside', 'Extra files placed in the delivery beside the converted data.');
+  alongside.append(
+    checkbox(
+      'Attach a conversion report',
+      state.settings.embedReport,
+      (value) => void store.patchSettings({ embedReport: value }),
+      'Adds a self-contained HTML and text report to the delivery, for whoever receives it without this tool.'
+    )
+  );
+  alongside.append(
+    checkbox(
+      'Attach a legend',
+      state.settings.includeLegend,
+      (value) => void store.patchSettings({ includeLegend: value }),
+      'An SVG of the layers, their colours and their line types, built from the file as written — including any renames. The same colours are written into the output itself where the format can carry them, so the legend and the file cannot disagree.'
+    )
+  );
+
   panel.append(common);
 
   // Target-specific settings, so the panel only ever shows what applies.
@@ -758,7 +808,12 @@ export function openSettingsDialog(): void {
   );
   body.append(numberField('Maximum archive expansion (MB)', state.settings.maxArchiveMb, 64, (value) => void store.patchSettings({ maxArchiveMb: value })));
 
-  body.append(element('h3', { class: 'section__title', text: 'Delivery structure' }));
+  // NOT "Delivery structure": that read as a synonym of "Output structure" in
+  // the Conversion group above, which is a different setting entirely — one
+  // decides single file vs per-layer tree, this one decides whether a BATCH
+  // keeps the folders its inputs came from. Two headings a person could not
+  // tell apart is most of what "scattered" meant.
+  body.append(element('h3', { class: 'section__title', text: 'Batch folders' }));
   body.append(
     checkbox(
       'Mirror the input folder tree in a batch ZIP',
