@@ -2707,3 +2707,46 @@ details.adv > div {
   color: var(--text);
   font: inherit;
 }
+
+/* ---- Settings groups --------------------------------------------------
+   The conversion settings were a flat run of nine controls under one
+   heading, inside a dialog already carrying fourteen headings in a single
+   scroll. Each group now answers one question — what comes out, what
+   travels, what is checked — and folds, so the ones a job never touches
+   stay shut. The fold itself is `makeCollapsible`, which is the same
+   mechanism the panes and layer list use; only the framing is new. */
+.setgroup {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 10px 0 0;
+  overflow: hidden;
+}
+
+.setgroup__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+  border-bottom: 1px solid var(--border);
+}
+
+.setgroup__body {
+  padding: 8px 10px 10px;
+}
+
+/* Folded: the heading is the way back, so the border under it goes with
+   the body rather than leaving a rule floating under nothing. */
+.setgroup__body.pane--closed {
+  display: none;
+}
+
+.setgroup:has(> .setgroup__body.pane--closed) .setgroup__title {
+  border-bottom: 0;
+}
