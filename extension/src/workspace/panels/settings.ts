@@ -18,7 +18,7 @@ import {
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
 import { applyPreset, isOnline, TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
-import { CANVAS_ACTIONS, CANVAS_TOOLS, GLOBAL_SHORTCUTS } from './toolbar';
+import { CANVAS_ACTIONS, CANVAS_TOOLS, GLOBAL_SHORTCUTS, PANEL_TABS, RIBBON_TABS } from './toolbar';
 import { ui } from '../ui-state';
 import { configurePool, poolStatus } from '../../workers/client';
 import { $, checkbox, element, keyValues, messageBlock, numberField, textField } from '../dom';
@@ -915,6 +915,18 @@ export function openHelpDialog(): void {
       'A digitised point is the coordinate you snapped to',
       'When a drawing tool snaps to an existing vertex, the vertex is copied exactly rather than re-derived from the pixel you clicked. Snapping to a surveyed corner gives back that corner, bit for bit, not a value rounded through the screen.',
     ],
+    [
+      'The grid names the frame its numbers are in',
+      'The caption under the drawing says which coordinate system the axes are counted in — "UTM 44N", "WGS 84", "Local grid" — and states the grid interval in THAT system\'s unit, so degrees are never reported as metres and a plan in feet is never captioned in metres. A CRS you assigned in Settings, rather than one the file declared, is marked "(assumed)": a DXF labelled UTM 44N that never said so is a claim the file does not support.',
+    ],
+    [
+      'Selection follows the CAD conventions your hand already knows',
+      'Left-drag right-to-left takes anything the band touches, drawn dashed; left-drag left-to-right takes only what is wholly inside, drawn solid. The right button is the explicit form of the same question: dragged either way it takes only what is WHOLLY INSIDE, and it starts from anywhere, including on top of geometry, which is the case it exists for on a dense sheet. A right-click that does not drag changes nothing, so a mis-aimed one cannot throw away a selection.',
+    ],
+    [
+      'Escape steps back one level, not all the way out',
+      'One press gives up one thing: the part-drawn polygon, then the rubber band, then the selected vertices, then the feature open for editing, then the selection. Returning to Pan is the last rung, and only once nothing else is left — so a press meant to cancel a click cannot also close the tool you were working in.',
+    ],
   ];
   for (const [title, text] of rules) body.append(messageBlock('info', title, text));
 
@@ -923,6 +935,10 @@ export function openHelpDialog(): void {
   // top bar's "MIT · Md Salim Ansari" button called `openHelpDialog`, so the
   // credit button showed a page about conversion behaviour and the licence was
   // a section two screens down it.
+  // WHERE THINGS ARE, before what they do. The ribbon carries every tab in the
+  // workspace, and a reader who cannot find the Vertices panel is not helped by
+  // a paragraph explaining what vertex editing guarantees.
+  body.append(ribbonSection());
   body.append(installSection());
   body.append(shortcutSection());
 
@@ -1009,6 +1025,74 @@ function installSection(): HTMLElement {
   return section;
 }
 
+/**
+ * Where everything is, generated from the ribbon itself.
+ *
+ * Same rule as the shortcut table below: `RIBBON_TABS` and `PANEL_TABS` are the
+ * lists the caption is BUILT from, so a tab described here is a tab that
+ * exists. Typing this out by hand is how a help page comes to describe a strip
+ * of tabs that was deleted two releases ago — which is precisely what happened
+ * to the dock's own group row, and the reason this section is generated.
+ */
+function ribbonSection(): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Finding your way around' }));
+  section.append(
+    element('p', {
+      class: 'small',
+      text:
+        'One ribbon across the top carries every tab in the workspace, and nothing is hidden anywhere else. ' +
+        'Its left half is the tool families — what the pointer does on the drawing. Past the hairline, its ' +
+        'right half is the panels — what the right-hand side is showing about the file. Picking a tool family ' +
+        'also brings its own settings panel forward, so a tool and the controls that configure it are never a ' +
+        'window apart.',
+    })
+  );
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text:
+        'The ribbon folds: press Ctrl+F1, double-click any tab, or use the chevron at the end of the row, and it ' +
+        'drops to just its tabs so the drawing gets the space. While folded, clicking a tab shows that tab\'s ' +
+        'controls until the next click on the drawing — so a folded ribbon is still usable rather than something ' +
+        'you have to unfold first. It stays as you left it across a reload.',
+    })
+  );
+
+  const table = element('table', { class: 'table' });
+  const rows = element('tbody');
+  const row = (name: string, kind: string, holds: string) =>
+    rows.append(
+      element('tr', {}, [
+        element('td', { text: name }),
+        element('td', { class: 'small muted', text: kind }),
+        element('td', { class: 'small muted', text: holds }),
+      ])
+    );
+
+  for (const tab of RIBBON_TABS) {
+    const tools = tab.tools.map((id) => CANVAS_TOOLS.find((tool) => tool.id === id)?.label ?? id);
+    row(tab.label, 'Tools', `${tab.hint} ${tools.join(', ')}.`);
+  }
+  for (const tab of PANEL_TABS) {
+    row(tab.label, 'Panel', `${tab.hint} ${tab.sections.map((section) => section.label).join(', ')}.`);
+  }
+
+  table.append(rows);
+  section.append(element('div', { class: 'scroll-x' }, [table]));
+
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text:
+        'The file list and the layers are on the left (Ctrl+1 hides them); the output format, the panel a ribbon ' +
+        'tab selected, and Convert are on the right (Ctrl+2). Ctrl+K searches every command by name, which is the ' +
+        'fastest route to anything named in this table.',
+    })
+  );
+  return section;
+}
+
 function shortcutSection(): HTMLElement {
   const section = element('div', { class: 'section' });
   section.append(element('h3', { class: 'section__title', text: 'Keyboard shortcuts' }));
@@ -1066,9 +1150,10 @@ export function openAboutDialog(): void {
     element('p', {
       class: 'small',
       text:
-        'A converter for GIS, CAD, survey, LiDAR and mining data that runs entirely in your browser. ' +
-        'Import a file, see it on the canvas, edit it, and export it to another format — with every conversion ' +
-        'checked by re-importing the output and comparing it against the source.',
+        'A converter and editing workstation for GIS, CAD, survey, LiDAR and mining data that runs entirely in ' +
+        'your browser. Import a file, see it on the canvas, measure it, draw on it, move its vertices, place it ' +
+        'on real coordinates — then export it to another format, with the conversion checked by re-importing the ' +
+        'output and comparing it against the source. Nothing you open leaves this machine.',
     })
   );
   body.append(aboutSection());
@@ -1245,6 +1330,14 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
 /** Author, licence and where to send feedback. */
 export const AUTHOR = 'Md Salim Ansari';
 export const FEEDBACK_EMAIL = 'emailofsalim@gmail.com';
+/**
+ * Where the source and the release notes live.
+ *
+ * One constant rather than a URL typed into each place that wants it: the
+ * repository has already been renamed once, and a link that was right when it
+ * was written is the commonest kind of stale documentation.
+ */
+export const REPOSITORY_URL = 'https://github.com/emailofsalim/BhuNex-GIS-Converter';
 
 /**
  * The About block: who wrote this, under what licence, and how to reach them.
@@ -1272,6 +1365,30 @@ function aboutSection(): HTMLElement {
       ['Licence', `MIT — Copyright © ${AUTHOR}`],
     ])
   );
+
+  // WHAT CHANGED IN THIS BUILD, without a changelog to keep in step.
+  //
+  // The notes are written once, on the release, and this links the running
+  // version to its own. A "what's new" list maintained here would be a second
+  // copy of them — and the copy nobody updates is always the one on screen.
+  if (version) {
+    const notes = element('p', { class: 'small', style: 'margin:10px 0 0' });
+    notes.append(document.createTextNode('Release notes for this version: '));
+    notes.append(
+      element('a', {
+        href: `${REPOSITORY_URL}/releases/tag/v${version}`,
+        target: '_blank',
+        rel: 'noreferrer',
+        text: `v${version}`,
+      })
+    );
+    notes.append(document.createTextNode('. Every version and its notes are at '));
+    notes.append(
+      element('a', { href: `${REPOSITORY_URL}/releases`, target: '_blank', rel: 'noreferrer', text: 'the releases page' })
+    );
+    notes.append(document.createTextNode('.'));
+    section.append(notes);
+  }
 
   const feedback = element('p', { class: 'small', style: 'margin:10px 0 0' });
   feedback.append(document.createTextNode('Found something wrong, or need a format that is not here? Write to '));

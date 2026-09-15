@@ -1,9 +1,11 @@
 # The editing workstation — plan of record
 
-**Status: in progress.** This document is the durable record of a feature set
-the owner specified in full on 2026-09-09. It exists so the work survives a
-context reset: any session picking it up reads this file, checks the phase
-table, and continues from the first unfinished row.
+**Status: all eleven phases built and shipped.** This document is the durable
+record of a feature set the owner specified in full on 2026-09-09. It exists so
+the work survives a context reset: any session picking it up reads this file,
+checks the phase table, and continues from the first unfinished row — there are
+none left, so it now serves as the record of WHY each piece is shaped the way it
+is, which is the part that would otherwise be lost.
 
 ---
 
@@ -94,19 +96,31 @@ does not exist — and they did.
 
 **All eleven phases are built.** Where each lives:
 
+Interface locations are given as they are reached now: every tab in the
+workspace is on the one ribbon (`Home Draw Modify Measure Place │ Data Edit
+Export Results`), written here as `Ribbon ▸ tab ▸ section`. They were two levels
+of tab inside the right-hand dock until 1.11.6.
+
 | Phase | Engine | Interface |
 |---|---|---|
-| A | `core/geometry-ops.ts` (`translate`, `scale`, `rotate`) | Geometry tools tab |
-| B | `core/selection.ts` | Select & move tab |
-| C | `ui/tool-canvas.ts` | Select & move tab, canvas toolbar |
-| D | `core/layers.ts` (`lineWidthOf`, `lineTypeOf`, `colourOf`) | Layers tab, per row |
-| E | `core/measure.ts` (`measureGeometry`) | Select & move tab, "This feature" |
-| F | `core/drawing.ts` | Select & move tab, draw tools |
-| G | `core/georeference.ts`, `engines/raster/pdf-image.ts`, `ui/backdrop.ts` | Backdrop tab |
+| A | `core/geometry-ops.ts` (`translate`, `scale`, `rotate`) | Ribbon ▸ Edit ▸ Geometry tools |
+| B | `core/selection.ts` | Ribbon ▸ Edit ▸ Select & move |
+| C | `ui/tool-canvas.ts` | Ribbon ▸ Home (Select, Lasso, Move) |
+| D | `core/layers.ts` (`lineWidthOf`, `lineTypeOf`, `colourOf`) | Layers list in the left rail, per row |
+| E | `core/measure.ts` (`measureGeometry`) | Ribbon ▸ Measure ▸ Info; Edit ▸ Select & move, "This feature" |
+| F | `core/drawing.ts` | Ribbon ▸ Draw |
+| G | `core/georeference.ts`, `engines/raster/pdf-image.ts`, `ui/backdrop.ts` | Ribbon ▸ Place; Edit ▸ Backdrop |
 | H | `core/legend.ts` | Settings → "Attach a legend" |
-| I | `core/geometry-ops.ts` (`OffsetSide`) | Geometry tools → Offset → "Which side" |
+| I | `core/geometry-ops.ts` (`OffsetSide`) | Edit ▸ Geometry tools → Offset → "Which side" |
 | J | `ui/basemap.ts` (`TILE_PROVIDERS`, `TILE_PRESETS`) | Settings → basemap |
-| K | `core/drawing.ts` (`pointSnapSources`) | Select & move → "Only snap to imported points" |
+| K | `core/drawing.ts` (`pointSnapSources`) | Edit ▸ Select & move → "Only snap to imported points" |
+
+Vertex editing predates this plan and is not a phase in it, but it belongs in
+the same table: `ui/edit-canvas.ts` and `core/vertex-edit.ts`, reached at
+Ribbon ▸ Modify ▸ Vertex, with its readout at Edit ▸ Vertices. Since 1.11.6 a
+click on the drawing opens the feature under the pointer — before that the only
+way to open one was a two-dropdown-and-a-button flow in the panel, so the tool
+armed, lit, and ignored the canvas.
 
 ---
 

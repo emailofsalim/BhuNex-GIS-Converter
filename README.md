@@ -316,6 +316,38 @@ minimal.
 
 The canvas is not a preview you look at — it is where the survey gets fixed.
 
+### Where everything is
+
+One ribbon across the top carries every tab in the workspace, and nothing is
+hidden anywhere else:
+
+```
+Home  Draw  Modify  Measure  Place  │  Data  Edit  Export  Results
+└──────── what the pointer does ────┘  └──── what the panel shows ───┘
+```
+
+The left half is the tool families; picking one arms its tools **and** brings
+its own settings panel forward, so a tool and the controls that configure it are
+never a window apart. Past the hairline, the right half selects what the
+right-hand panel is showing about the file — the sections appear as the row
+underneath.
+
+The ribbon folds. **Ctrl+F1**, a double-click on any tab, or the chevron at the
+end of the row drops it to just its tabs and gives the row back to the drawing;
+while folded, clicking a tab shows that tab's controls until your next click on
+the drawing. It stays as you left it across a reload.
+
+The file list and the layers are on the left (**Ctrl+1**); the output format,
+the selected panel and Convert are on the right (**Ctrl+2**). **Ctrl+K** searches
+every command by name. The full table of tabs and shortcuts is in **Help**,
+generated from the same lists the buttons are built from — so a key documented
+there is a key that works.
+
+The drawing starts just below the ribbon, and the caption in its corner names
+the coordinate system the axes are counted in — `UTM 44N`, `WGS 84`,
+`Local grid` — with the grid interval in **that system's** unit. A CRS you
+assigned in Settings rather than one the file declared is marked `(assumed)`.
+
 **Correct a shift against the basemap.** Turn the tiles on, see that your
 parcels sit six metres east of where the road is, select them — click,
 Shift-click, a rubber band, or a lasso — and drag them onto place. The tool
@@ -326,8 +358,26 @@ would move an eighth of a 40,000-parcel sheet and leave the rest behind.
 
 A rubber band dragged left to right takes only what is wholly inside; right to
 left takes anything it touches — the CAD convention, drawn solid and dashed so
-you can see which you are getting before you release. Shift while dragging
+you can see which you are getting before you release. The **right button** is
+the explicit form of the same question: dragged either way it takes only what is
+wholly inside, and unlike the left button it starts from anywhere, including on
+top of geometry, which is the case it exists for on a dense sheet. A right-click
+that does not drag changes nothing, so a mis-aimed one cannot throw away a
+selection you spent a dozen Shift-clicks building. Shift while dragging
 constrains to one axis.
+
+**Move vertices by clicking the thing you want to move.** Pick the Vertex tool
+and hover: the feature under the pointer lights up with hollow ghosts on the
+vertices you are about to get. Click and they become handles — drag one, Alt-
+click a segment to insert one, Delete to remove one. Clicking a different
+feature moves the editor there rather than making you close the first, the way
+grips work in CAD. Geometry that has no editable vertices — a point, a geometry
+collection — lights up nothing, so a click is never an invitation to a refusal.
+
+Escape steps back **one level per press**: the part-drawn polygon, then the
+rubber band, then the selected vertices, then the feature open for editing, then
+the selection, and only then back to Pan. A press meant to cancel a click cannot
+also close the tool you were working in.
 
 The tool also says, every time, what a shift against a basemap can mean: a
 wrong or missing datum shift (fix the CRS instead), an old local grid with no
