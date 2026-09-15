@@ -49,6 +49,16 @@ const N = 2591300;
  * The hole is the point of the first feature: a polygon whose ring count
  * survives is a polygon whose MEANING survives, and a converter that drops the
  * inner ring returns the same vertices with the tank turned into land.
+ *
+ * THE OUTER RING IS DELIBERATELY IRREGULAR.
+ *
+ * It was a 60x45 RECTANGLE, and a rectangle is the one shape that cannot detect
+ * the failure people actually report: geometry that arrives as its own bounding
+ * box. Every pair in this file passed while being structurally unable to notice
+ * it — a converter that replaced the parcel with its envelope would have
+ * returned the identical five vertices. Eleven vertices at eleven different
+ * distances from the centre make a box detectably not the shape it replaced,
+ * and `shapeOf` below turns that into an assertion.
  */
 const SOURCE = JSON.stringify({
   type: 'FeatureCollection',
@@ -60,8 +70,12 @@ const SOURCE = JSON.stringify({
       geometry: {
         type: 'Polygon',
         coordinates: [
-          [[E, N], [E + 60, N], [E + 60, N + 45], [E, N + 45], [E, N]],
-          [[E + 20, N + 15], [E + 20, N + 30], [E + 40, N + 30], [E + 40, N + 15], [E + 20, N + 15]],
+          [
+            [E, N], [E + 37, N + 4], [E + 52, N + 21], [E + 48, N + 44], [E + 61, N + 63],
+            [E + 40, N + 78], [E + 19, N + 71], [E + 7, N + 55], [E + 14, N + 38],
+            [E + 3, N + 25], [E + 11, N + 12], [E, N],
+          ],
+          [[E + 22, N + 30], [E + 22, N + 45], [E + 38, N + 45], [E + 38, N + 30], [E + 22, N + 30]],
         ],
       },
     },
@@ -87,8 +101,31 @@ function featureCount(dataset: unknown): number {
   return layers.reduce((total, layer) => total + (layer.features ?? []).length, 0);
 }
 
+/**
+ * Seeds are written from a source that DECLARES EPSG:32644, so the override is
+ * only ever needed there.
+ */
 async function write(targetFormatId: string, input: { fileName: string; bytes: Uint8Array }): Promise<any> {
   return convert({ input, targetFormatId, settings: { sourceCrs: UTM44N } } as never);
+}
+
+/**
+ * A pair conversion, letting each seed's own CRS stand.
+ *
+ * The pairs used to go through `write` too, forcing EPSG:32644 onto every
+ * input — including the seeds that are WGS 84 BY MANDATE. GPX, KML and OSM can
+ * store nothing else, so their files hold degrees; declaring those degrees to
+ * be UTM metres made the writer round them with the millimetre policy meant for
+ * metres, and 0.001° is 111 m. A twelve-vertex parcel came out of gpx →
+ * landxml as three points.
+ *
+ * That was the harness lying to the pipeline, not the pipeline failing — the
+ * conversion even warned `CRS_OVERRIDDEN`. A matrix that mislabels its own
+ * fixtures cannot tell a real defect from its own setup, so the pairs now pass
+ * no CRS at all and every seed is read as what it says it is.
+ */
+async function pair(targetFormatId: string, input: { fileName: string; bytes: Uint8Array }): Promise<any> {
+  return convert({ input, targetFormatId, settings: {} } as never);
 }
 
 /**
@@ -124,7 +161,7 @@ describe('the conversion matrix', () => {
 
         let result: any;
         try {
-          result = await write(to.id, input);
+          result = await pair(to.id, input);
         } catch (error) {
           // A refusal is a valid outcome — it is half of the promise. What it
           // may not be is a bare failure: the message has to leave the user
