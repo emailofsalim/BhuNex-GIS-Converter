@@ -78,7 +78,7 @@ that way.
 
 **4. Read the source.**
 The complete source is public at
-<https://github.com/emailofsalim/Universal-Converter>. The build pipeline runs a
+<https://github.com/emailofsalim/BhuNex-GIS-Converter>. The build pipeline runs a
 check (`scripts/assert-offline.mjs`) that **fails the build** if any remote
 script, stylesheet, font or network call appears in the packaged extension —
 including a map tile URL from a service that has not been reviewed.
@@ -191,8 +191,8 @@ itself would show you.
 
 Questions, or a privacy problem to report:
 
-- **Issues:** <https://github.com/emailofsalim/Universal-Converter/issues>
-- **Repository:** <https://github.com/emailofsalim/Universal-Converter>
+- **Issues:** <https://github.com/emailofsalim/BhuNex-GIS-Converter/issues>
+- **Repository:** <https://github.com/emailofsalim/BhuNex-GIS-Converter>
 
 ---
 

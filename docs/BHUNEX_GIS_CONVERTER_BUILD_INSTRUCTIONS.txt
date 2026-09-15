@@ -4,7 +4,7 @@ GIS / GEOMATICS / LAND SURVEY / CAD / LiDAR / MINE SURVEY CONVERSION SUITE
 CHROME MANIFEST V3 EXTENSION
 --------------------------------------------------------------------------------
 COMPLETE TECHNICAL IMPLEMENTATION INSTRUCTION
-Repository : emailofsalim/Universal-Converter
+Repository : emailofsalim/BhuNex-GIS-Converter
 Branch     : claude/gis-cad-chrome-converter-hk8uwg
 Base       : Universal-Conveter.zip (Pakhar CAD GIS Local Server prototype)
 Engines    : ported/adapted from Geo-Studio-Pro-main.zip

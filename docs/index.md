@@ -8,16 +8,16 @@ Nothing is uploaded.
 - **[Privacy policy](PRIVACY.html)** — nothing is collected, and how to verify that
 - **[Format matrix](FORMAT_MATRIX.html)** — every format, with its limits stated
 - **[Native host](NATIVE_HOST.html)** — optional, for DWG only
-- **[Source](https://github.com/emailofsalim/Universal-Converter)**
+- **[Source](https://github.com/emailofsalim/BhuNex-GIS-Converter)**
 
 ## Install
 
 **No Node, no npm, no build step.** The built extension is committed to the
 repository, so downloading it gives you something the browser can load directly.
 
-1. **[Download the repository](https://github.com/emailofsalim/Universal-Converter/archive/refs/heads/main.zip)**
+1. **[Download the repository](https://github.com/emailofsalim/BhuNex-GIS-Converter/archive/refs/heads/main.zip)**
    (or a packaged archive from
-   **[Releases](https://github.com/emailofsalim/Universal-Converter/releases)**).
+   **[Releases](https://github.com/emailofsalim/BhuNex-GIS-Converter/releases)**).
 2. Extract it to a plain local folder such as `C:\Extensions\` — **not**
    OneDrive, Desktop, Documents or Downloads.
 3. `edge://extensions` or `chrome://extensions` → turn on **Developer mode**.

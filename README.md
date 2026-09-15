@@ -60,7 +60,7 @@ its own manifest — so there is no wrong folder to pick.
 
 ### From a release
 
-**[Releases](https://github.com/emailofsalim/Universal-Converter/releases)** has
+**[Releases](https://github.com/emailofsalim/BhuNex-GIS-Converter/releases)** has
 `bhunex-gis-converter-<version>.zip` — the same build, already unwrapped
 so `manifest.json` sits at the top of the archive. Extract it and select the
 folder itself. `INSTALL-FIRST.txt` inside repeats these steps.
