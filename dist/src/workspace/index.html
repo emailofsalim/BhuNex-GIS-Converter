@@ -25,9 +25,13 @@
 
       The rules that keep it from coming back:
         1. Only ONE element in the centre can grow, and it is the canvas.
-        2. Tool bars FLOAT over the canvas; they never take a row from it.
+        2. The centre holds exactly TWO rows: the ribbon and the canvas. The
+           ribbon folds to its caption, so the row it takes is one the user can
+           have back; every other bar floats or does not exist.
         3. There is no bottom dock. Its panels are a group in the right one.
         4. One control adds files, and it is in the left panel.
+        5. Tabs live in the ribbon and NOWHERE else. Two places to choose the
+           same section is how four rows of tabs accumulated above the content.
     -->
     <div class="app">
       <header class="topbar">
@@ -89,63 +93,69 @@
           <div class="rail__layers" id="layerRail"></div>
         </section>
 
-        <!-- CENTRE: the canvas. Display, editing, drawing, measuring, tiles. -->
+        <!-- CENTRE: the ribbon, then the canvas. -->
         <section class="stage" aria-label="Canvas">
-          <div class="preview" id="previewWrap">
-            <canvas id="previewCanvas"></canvas>
+          <!--
+            THE RIBBON. ONE STRIP, EVERY TAB, NOTHING ANYWHERE ELSE.
 
-            <!--
-              ONE TOOLBAR, EVERY TOOL, FLOATING OVER THE CANVAS.
+            It carries two families of tab side by side: the tool families
+            (Home, Draw, Modify, Measure, Place) and the right-hand panel's
+            groups (Data, Edit, Export, Results). Those four used to be a
+            SECOND pair of tab rows inside the dock, stacked under this bar's
+            own two — four rows of tabs between the top of the window and
+            anything worth reading, two of them saying the same kind of thing
+            in two different places. The dock has no tabs at all now.
 
-              This replaces four bars: a Fit/Grid/Undo/Redo strip plus three
-              that were each `hidden` unless a particular tab was open in the
-              right-hand dock. Selecting, drawing, vertex editing and measuring
-              all existed and all worked; reaching any of them meant opening the
-              dock and choosing the matching tab, so the canvas had tools that
-              could not be picked from the canvas.
+            It is also DOCKED rather than floating. It used to hover over the
+            top-left of the drawing, which kept the canvas full-height and put
+            a translucent bar across the part of the sheet most people start
+            reading. It takes a row now, gives that row back when folded, and
+            the drawing starts just below it.
 
-              Its contents are BUILT IN `panels/toolbar.ts`, from one list that
-              also generates the shortcut table in Help — so a key documented
-              there and a button here cannot describe different things.
-            -->
-            <!-- The bar and its readout are STACKED in one positioned column,
-                 never placed independently. Pinning the readout at a fixed
-                 offset from the top put it straight through the toolbar's
-                 second row the moment the bar wrapped, hiding the last three
-                 tools behind it. -->
-            <div class="cstack">
-              <div class="cbar cbar--tools" id="canvasToolbar" role="toolbar" aria-label="Canvas tools"></div>
+            Its contents are BUILT IN `panels/toolbar.ts`, from one list that
+            also generates the shortcut table in Help — so a key documented
+            there and a button here cannot describe different things.
+          -->
+          <div class="ribbon" id="canvasToolbar" role="toolbar" aria-label="Ribbon"></div>
+
+          <!-- Everything below the ribbon, with a hairline gap above it so the
+               drawing reads as its own surface rather than as more bar. -->
+          <div class="stage__canvas">
+            <div class="preview" id="previewWrap">
+              <canvas id="previewCanvas"></canvas>
 
               <!-- What the live tool is saying: the selection count, a dragged
                    vertex's coordinates, a running measurement. A readout, not a
-                   tool bar, so it never competes for the tool line. -->
-              <div class="cbar cbar--status hidden" id="toolStatus">
-                <span class="edit__readout" id="selectStatus">Nothing selected</span>
-                <span class="edit__readout" id="editReadout"></span>
-                <span class="edit__readout" id="measureReadout"></span>
-                <button class="btn btn--ghost btn--sm hidden" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
+                   tool bar, so it never competes for the tool line — and the
+                   only thing still floating over the drawing. -->
+              <div class="cstack">
+                <div class="cbar cbar--status hidden" id="toolStatus">
+                  <span class="edit__readout" id="selectStatus">Nothing selected</span>
+                  <span class="edit__readout" id="editReadout"></span>
+                  <span class="edit__readout" id="measureReadout"></span>
+                  <button class="btn btn--ghost btn--sm hidden" id="measureClear" title="Clear the measurement (Esc)">Clear</button>
+                </div>
+              </div>
+
+              <div class="preview__overlay">
+                <span class="preview__readout" id="readout">—</span>
+                <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
+                <!-- Says why the basemap is not drawing, when it is not. Blank
+                     imagery with no explanation reads as a broken tool; the two
+                     reasons (no network, no placeable CRS) are different problems
+                     with different answers. -->
+                <span class="badge badge--muted hidden" id="basemapBadge"></span>
               </div>
             </div>
 
-            <div class="preview__overlay">
-              <span class="preview__readout" id="readout">—</span>
-              <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
-              <!-- Says why the basemap is not drawing, when it is not. Blank
-                   imagery with no explanation reads as a broken tool; the two
-                   reasons (no network, no placeable CRS) are different problems
-                   with different answers. -->
-              <span class="badge badge--muted hidden" id="basemapBadge"></span>
+            <!-- The whole stage is the drop target. With nothing loaded it says so
+                 in the middle of the canvas and costs no height; with a file
+                 loaded it disappears entirely and the drawing has all of it. -->
+            <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop files or folders here to convert">
+              <div class="dropzone__title">Drop files or folders here</div>
+              <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
+              <div class="dropzone__formats" id="dropFormats"></div>
             </div>
-          </div>
-
-          <!-- The whole stage is the drop target. With nothing loaded it says so
-               in the middle of the canvas and costs no height; with a file
-               loaded it disappears entirely and the drawing has all of it. -->
-          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop files or folders here to convert">
-            <div class="dropzone__title">Drop files or folders here</div>
-            <div class="dropzone__sub">GIS, CAD, survey, LiDAR, raster and mining data — converted on this machine</div>
-            <div class="dropzone__formats" id="dropFormats"></div>
-          </div>
 
           <!-- Source and output side by side, so nobody has to export a file to
                find out the conversion damaged it (spec §30.1). It covers the
@@ -160,6 +170,7 @@
             </div>
             <div class="compare__panes" id="compareCanvas"></div>
             <p class="compare__note hidden" id="compareNote"></p>
+          </div>
           </div>
         </section>
 
@@ -178,53 +189,16 @@
             <div class="fcards" id="formatCards"></div>
           </div>
 
-          <!-- TWO LEVELS, so no tab is ever hidden.
-               Fourteen tabs in one strip wrapped to three rows in a wide pane
-               and would wrap to five here. Four groups of three to five each fit
-               one row apiece, and every section stays one click away. -->
-          <nav class="groups" id="inspectorTabs" aria-label="Inspector sections">
-            <div class="groups__top" role="tablist">
-              <button class="gtab gtab--on" data-group="data" role="tab" aria-selected="true">Data</button>
-              <button class="gtab" data-group="edit" role="tab" aria-selected="false">Edit</button>
-              <button class="gtab" data-group="out" role="tab" aria-selected="false">Export</button>
-              <button class="gtab" data-group="results" role="tab" aria-selected="false">Results</button>
-            </div>
-            <div class="groups__sub" data-groupfor="data" role="tablist">
-              <button class="tab tab--on" data-tab="overview" role="tab" aria-selected="true">Overview</button>
-              <button class="tab" data-tab="geometry" role="tab" aria-selected="false">Geometry</button>
-              <button class="tab" data-tab="crs" role="tab" aria-selected="false">CRS</button>
-              <button class="tab" data-tab="attributes" role="tab" aria-selected="false">Attributes</button>
-              <button class="tab" data-tab="metadata" role="tab" aria-selected="false">Source</button>
-            </div>
-            <div class="groups__sub hidden" data-groupfor="edit" role="tablist">
-              <button class="tab" data-tab="select" role="tab" aria-selected="false">Select &amp; move</button>
-              <button class="tab" data-tab="edit" role="tab" aria-selected="false">Vertices</button>
-              <button class="tab" data-tab="measure" role="tab" aria-selected="false">Measure</button>
-              <button class="tab" data-tab="geometry-ops" role="tab" aria-selected="false">Geometry tools</button>
-              <button class="tab" data-tab="backdrop" role="tab" aria-selected="false">Backdrop</button>
-              <button class="tab" data-tab="georef" role="tab" aria-selected="false">Georeference</button>
-            </div>
-            <div class="groups__sub hidden" data-groupfor="out" role="tablist">
-              <button class="tab" data-tab="fidelity" role="tab" aria-selected="false">What will be lost</button>
-              <button class="tab" data-tab="compare" role="tab" aria-selected="false">Compare</button>
-              <button class="tab" data-tab="warnings" role="tab" aria-selected="false">
-                Warnings <span class="badge badge--muted" id="warnCount">0</span>
-              </button>
-            </div>
-            <!-- What used to be the bottom dock. It is a group here rather than a
-                 permanent strip across the foot of the window, so the canvas
-                 gets that height back and nothing is lost. -->
-            <div class="groups__sub hidden" data-groupfor="results" role="tablist">
-              <button class="tab tab--on" data-bottom="qa">QA</button>
-              <button class="tab" data-bottom="log">Log</button>
-              <button class="tab" data-bottom="delivery">Delivery</button>
-              <button class="tab" data-bottom="manifest">Manifest</button>
-              <button class="tab" data-bottom="health">Health</button>
-              <button class="tab" data-bottom="history">History</button>
-              <button class="tab" data-bottom="workflows">Workflows</button>
-            </div>
-          </nav>
+          <!--
+               NO TABS HERE. They are in the ribbon, once.
 
+               This used to hold two rows: a group strip (Data / Edit / Export /
+               Results) above a section strip with a "More" drop-down, both
+               stacked under the ribbon's own two rows. Four rows of tabs above
+               the first line of content, and the group strip said the same kind
+               of thing the ribbon's tabs said, one panel away. The dock shows a
+               section's BODY now; which section is a ribbon question.
+          -->
           <div class="dock__body" id="inspectorBody" role="tabpanel"></div>
           <div class="dock__body hidden" id="bottomBody" role="tabpanel"></div>
 

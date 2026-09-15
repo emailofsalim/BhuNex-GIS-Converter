@@ -30,7 +30,7 @@ import {
   toggleBatchPause,
 } from './conversion';
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
-import { installCollapse, isCollapsed, makeCollapsible, setCollapsed } from './collapse';
+import { installCollapse, makeCollapsible } from './collapse';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
 import { backdropTab } from './panels/backdrop-tab';
@@ -46,7 +46,7 @@ import { historyPanel } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
-import { type CanvasToolId, engineOf, renderToolbar, setCanvasTool, toolForKey } from './panels/toolbar';
+import { type CanvasToolId, engineOf, PANEL_TABS, renderToolbar, RIBBON_TABS, ribbonIsFolded, setCanvasTool, toggleRibbonFold, toolForKey } from './panels/toolbar';
 import { GeorefCanvas } from '../ui/georef-canvas';
 import { centreOf, georefPanel, pickToLocal, replaceFromOriginal } from './panels/georef';
 import { rebuildPreviewFrom } from './panels/edits';
@@ -114,7 +114,6 @@ function render(): void {
 
   const dropzone = $('dropzone');
   dropzone.classList.toggle('dropzone--compact', state.items.length > 0);
-  $('inspectorTabs').classList.toggle('hidden', !selected);
 
   // ONE CANVAS, ALWAYS PRESENT.
   //
@@ -321,7 +320,6 @@ function renderInspector(): void {
   const body = $('inspectorBody');
   const item = store.selected();
   body.replaceChildren();
-  $('warnCount').textContent = String(item?.warnings.length ?? 0);
 
   if (!item) {
     body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Select a queued file to inspect it.' }));
@@ -412,92 +410,84 @@ function renderInspector(): void {
  * like it half worked.
  */
 /**
- * Shows one section, and folds the picker back up behind it.
+ * Points the ribbon at whatever owns a section — unless a tool family does.
  *
- * The section strip is a drop-down rather than a permanent row: six names wrap
- * to two or three lines in a narrow dock, and a row of buttons nobody has
- * clicked was costing the canvas that height on every render. Closing it here —
- * rather than only on the chevron — means picking a section puts the space back
- * immediately, which is the behaviour a menu has and a tab strip does not.
+ * Both kinds of ribbon tab can open the same dock group: "Modify" opens the
+ * Vertices panel, and so does the Edit tab's Vertices section. Moving the
+ * ribbon unconditionally is what made clicking Modify land on Edit instead —
+ * the tool family set the tab, opened its panel, and the panel moved the tab
+ * again. A family that already owns the group keeps it.
+ */
+function alignRibbonTo(group: string): void {
+  const family = RIBBON_TABS.find((tab) => tab.id === ui.ribbonTab);
+  if (family && family.panels[0]?.group === group) return;
+  const panel = PANEL_TABS.find((tab) => tab.group === group);
+  if (panel) ui.ribbonTab = panel.id;
+}
+
+/**
+ * Shows the right body for a group, and lights the ribbon to match.
+ *
+ * Results is the old bottom dock and renders into `bottomBody`; every other
+ * group renders into `inspectorBody`. One place decides, so the two bodies can
+ * never both be visible or both be hidden.
+ */
+function showGroupBody(group: string): void {
+  store.set({ inspectorGroup: group });
+  const results = group === 'results';
+  $('inspectorBody').classList.toggle('hidden', results);
+  $('bottomBody').classList.toggle('hidden', !results);
+  alignRibbonTo(group);
+}
+
+/**
+ * Shows one section of the right-hand panel.
+ *
+ * Nothing to mark up any more: the ribbon rebuilds its section row on every
+ * render and reads which one is lit straight off `inspectorTab`. This used to
+ * walk four `[data-tab]` strips setting classes and then fold them all back
+ * up, which is three jobs for one piece of state and the reason the strip and
+ * the store could disagree about which section was open.
  */
 function showInspectorTab(name: string): void {
   store.set({ inspectorTab: name });
-  for (const tab of Array.from(document.querySelectorAll('[data-tab]'))) {
-    const on = (tab as HTMLElement).dataset.tab === name;
-    tab.classList.toggle('tab--on', on);
-    tab.setAttribute('aria-selected', String(on));
-  }
-  closeSectionStrips();
+  // A section named from the command palette or from a panel's own button has
+  // to bring its GROUP forward too, or the dock shows one thing while the
+  // ribbon lights another.
+  const owner = PANEL_TABS.find((tab) => tab.sections.some((section) => section.tab === name));
+  if (owner) showGroupBody(owner.group);
   render();
-}
-
-/** Folds every section strip back to just the section that is open. */
-function closeSectionStrips(): void {
-  for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
-    strip.classList.add('groups__sub--closed');
-    const drop = strip.querySelector('.groups__drop');
-    if (drop) {
-      drop.textContent = 'More ▾';
-      drop.setAttribute('aria-expanded', 'false');
-    }
-  }
-}
-
-/** Drops one section strip open, folding any other that was left open. */
-function openSectionStrip(strip: Element): void {
-  closeSectionStrips();
-  strip.classList.remove('groups__sub--closed');
-  const drop = strip.querySelector('.groups__drop');
-  if (drop) {
-    drop.textContent = 'Less ▴';
-    drop.setAttribute('aria-expanded', 'true');
-  }
 }
 
 /**
  * Opens a dock group, and optionally a named section inside it.
  *
- * Extracted from the group tabs' click handler because a tool can need to open
- * its own panel: picking Georef with the dock on "Data" would otherwise arm a
- * tool whose only controls are two clicks away behind a group the user has no
- * reason to suspect. `tab` is how the caller says which section, rather than
- * taking the group's first.
+ * A tool can need to open its own panel: picking Georef with the dock on
+ * "Data" would otherwise arm a tool whose only controls are behind a group the
+ * user has no reason to suspect. `tab` is how the caller says which section,
+ * rather than taking the group's first.
  */
 function showInspectorGroup(group: string, tab?: string): void {
-  store.set({ inspectorGroup: group });
-  for (const other of Array.from(document.querySelectorAll('[data-group]'))) {
-    const on = (other as HTMLElement).dataset.group === group;
-    other.classList.toggle('gtab--on', on);
-    other.setAttribute('aria-selected', String(on));
-  }
-  let first: HTMLElement | null = null;
-  for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
-    const on = (strip as HTMLElement).dataset.groupfor === group;
-    strip.classList.toggle('hidden', !on);
-    if (on) first = strip.querySelector('[data-tab]');
-  }
-  // Results is the old bottom dock, so it shows the other body.
-  const results = group === 'results';
-  $('inspectorBody').classList.toggle('hidden', results);
-  $('bottomBody').classList.toggle('hidden', !results);
-  if (results) {
-    // The early return skips `showInspectorTab`, so the fold has to happen
-    // here too — otherwise switching into Results left whichever strip the user
-    // had dropped open still open behind it.
-    closeSectionStrips();
-    renderBottom();
+  const panel = PANEL_TABS.find((each) => each.group === group);
+  if (panel?.body === 'bottom') {
+    showBottomTab(tab ?? store.get().bottomTab ?? panel.sections[0].tab);
     return;
   }
-  const target = tab ?? first?.dataset.tab;
-  if (target) showInspectorTab(target);
+  showInspectorTab(tab ?? panel?.sections[0].tab ?? 'overview');
 }
 
+/**
+ * Shows one section of the Results group.
+ *
+ * Results is the only group whose sections render into `bottomBody` rather
+ * than `inspectorBody`, which is why it has a setter of its own. A full
+ * `render()` rather than `renderBottom()` alone: the ribbon has to relight,
+ * and it is a sibling of this panel, not a child of it.
+ */
 function showBottomTab(name: string): void {
   store.set({ bottomTab: name });
-  for (const tab of Array.from(document.querySelectorAll('[data-bottom]'))) {
-    tab.classList.toggle('tab--on', (tab as HTMLElement).dataset.bottom === name);
-  }
-  renderBottom();
+  showGroupBody('results');
+  render();
 }
 
 function renderBottom(): void {
@@ -713,83 +703,14 @@ function wire(): void {
     renderFormats();
   });
 
-  for (const tab of Array.from(document.querySelectorAll('[data-tab]'))) {
-    tab.addEventListener('click', () => {
-      // Clicking the section that is ALREADY open, while the strip is folded,
-      // drops the list instead of re-selecting what is already selected. The
-      // visible name is the thing a user aims at to see the others, so it has
-      // to behave like the head of a drop-down and not like a dead button.
-      const strip = tab.closest('[data-groupfor]');
-      if (tab.classList.contains('tab--on') && strip?.classList.contains('groups__sub--closed')) {
-        openSectionStrip(strip);
-        return;
-      }
-      // Delegated rather than repeated: this used to carry its own copy of the
-      // select-and-mark loop, which is how it came to be the one path that did
-      // not fold the strip back up.
-      showInspectorTab((tab as HTMLElement).dataset.tab!);
-    });
-  }
-
-  // The chevron that drops the section list open. Built here rather than in the
-  // HTML so the four strips cannot drift apart, and so a new section group gets
-  // one for free.
-  for (const strip of Array.from(document.querySelectorAll('[data-groupfor]'))) {
-    const drop = element('button', {
-      class: 'groups__drop',
-      type: 'button',
-      text: 'More ▾',
-      title: 'Show the other sections in this group',
-    });
-    drop.setAttribute('aria-expanded', 'false');
-    drop.addEventListener('click', () => {
-      if (strip.classList.contains('groups__sub--closed')) openSectionStrip(strip);
-      else closeSectionStrips();
-    });
-    strip.append(drop);
-    strip.classList.add('groups__sub--closed');
-  }
-  // The group row above the section strip. Only one sub-strip is in the DOM's
-  // flow at a time, which is what keeps fourteen sections inside a 340px dock
-  // without a five-row wrap or a scrollbar nobody can hit.
-  for (const gtab of Array.from(document.querySelectorAll('[data-group]'))) {
-    gtab.addEventListener('click', () => showInspectorGroup((gtab as HTMLElement).dataset.group!));
-  }
-
-  // ONE fold for the whole group row.
+  // NO TAB WIRING HERE ANY MORE.
   //
-  // The section strip below already folds to just the section you are in, with
-  // a "More" chevron — and the row above it, Data / Edit / Export / Results,
-  // did not, so two tab rows sat permanently above the panel content. This
-  // gives that row the same treatment one level up, and deliberately ONE
-  // control rather than a chevron per tab: four collapse buttons to hide four
-  // buttons is not a saving.
-  //
-  // Folded, the row keeps the tab you are on — "Data ▸" — because a strip that
-  // folds to nothing is a strip you cannot get back, and you would also lose
-  // track of which group the panel below belongs to.
-  const groupRow = document.querySelector('.groups__top');
-  if (groupRow) {
-    const KEY = 'inspector groups';
-    const fold = element('button', {
-      class: 'groups__drop groups__fold',
-      type: 'button',
-      title: 'Show or hide the other groups',
-    });
-    const paintFold = (): void => {
-      const closed = isCollapsed(KEY);
-      groupRow.classList.toggle('groups__top--closed', closed);
-      fold.textContent = closed ? '▸' : '▾';
-      fold.setAttribute('aria-expanded', String(!closed));
-      fold.title = closed ? 'Show the other groups' : 'Hide the other groups';
-    };
-    fold.addEventListener('click', () => {
-      setCollapsed(KEY, !isCollapsed(KEY));
-      paintFold();
-    });
-    groupRow.append(fold);
-    paintFold();
-  }
+  // This block used to attach handlers to four strips of `[data-tab]`, four
+  // `[data-group]` buttons, a "More" chevron per strip and one fold for the
+  // group row — every one of them a second way to reach a section the ribbon
+  // already reaches. The ribbon is rebuilt on every render from `PANEL_TABS`,
+  // so which section is lit follows `store.inspectorTab` for free and there is
+  // nothing here to keep in step with it.
 
   // The toolbar builds Undo and Redo, so it needs to be able to call them.
   // Passing the functions through `ui` rather than importing `main.ts` from the
@@ -826,22 +747,33 @@ function wire(): void {
     const dock = $('rightDock');
     dock.classList.toggle('dock--closed');
   });
-  for (const tab of Array.from(document.querySelectorAll('[data-bottom]'))) {
-    tab.addEventListener('click', () => {
-      // Results is the one group whose sections are addressed by `data-bottom`
-      // rather than `data-tab`, so it needs the same open-then-fold behaviour
-      // spelled out here — it does not pass through `showInspectorTab`.
-      const strip = tab.closest('[data-groupfor]');
-      if (tab.classList.contains('tab--on') && strip?.classList.contains('groups__sub--closed')) {
-        openSectionStrip(strip);
-        return;
-      }
-      store.set({ bottomTab: (tab as HTMLElement).dataset.bottom! });
-      for (const other of Array.from(document.querySelectorAll('[data-bottom]'))) other.classList.toggle('tab--on', other === tab);
-      closeSectionStrips();
-      renderBottom();
-    });
-  }
+  // CTRL+F1 FOLDS THE RIBBON, as it does in every Office application.
+  //
+  // The chevron at the end of the caption and a double-click on any tab do the
+  // same thing; this is the one a hand that already knows Excel will reach for
+  // without looking.
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'F1' && event.ctrlKey) {
+      event.preventDefault();
+      toggleRibbonFold();
+    }
+  });
+
+  // A PEEKED RIBBON FOLDS AGAIN AT THE NEXT CLICK ON THE DRAWING.
+  //
+  // Without this the peek is a one-way unfold wearing a fold's clothes: the
+  // controls drop down for the click that needed them and then stay down for
+  // ever, so the fold appears not to work. Guarded on the peek so the ordinary
+  // case costs one boolean read per pointer-down and no render at all.
+  $('previewCanvas').addEventListener(
+    'pointerdown',
+    () => {
+      if (ui.ribbonPeek !== true || !ribbonIsFolded()) return;
+      ui.ribbonPeek = false;
+      render();
+    },
+    { capture: true }
+  );
 
   // The basemap is the only feature here that needs a network, so this is the
   // only thing a connection change affects. Losing it turns the tiles off and

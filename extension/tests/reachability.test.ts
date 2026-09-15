@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { GEOMETRY_LABEL, type GeometryOperation } from '@core/geometry-ops';
 import { TILE_PRESETS, TILE_PROVIDERS } from '@ui/basemap';
+import { PANEL_TABS } from '../src/workspace/panels/toolbar';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 
@@ -68,17 +69,41 @@ function workspaceSources(): { name: string; text: string }[] {
 }
 
 describe('every tab reaches a panel', () => {
-  const tabs = [...HTML.matchAll(/data-tab="([^"]+)"/g)].map((match) => match[1]);
+  // The tabs used to be `<button data-tab="…">` in the markup, so this read
+  // them out of the HTML. They are built from `PANEL_TABS` now — one list, one
+  // ribbon — which is a better thing to check against: the markup could only
+  // ever go stale against the switch, whereas this is the list the buttons are
+  // actually made from.
+  const tabs = PANEL_TABS.flatMap((tab) => tab.sections.map((section) => section.tab));
+  const inspectorTabs = PANEL_TABS.filter((tab) => tab.body === 'inspector').flatMap((tab) =>
+    tab.sections.map((section) => section.tab)
+  );
 
-  it('finds the tabs in the markup', () => {
+  it('finds the tabs in the ribbon', () => {
     expect(tabs.length).toBeGreaterThanOrEqual(12);
   });
 
   it('gives every tab a case in the inspector switch', () => {
     // A tab with no case renders the previous panel's content under a new
     // highlight, which reads as the tool losing the click.
-    const missing = tabs.filter((tab) => !MAIN.includes(`case '${tab}':`));
+    const missing = inspectorTabs.filter((tab) => !MAIN.includes(`case '${tab}':`));
     expect(missing, `tabs with no panel: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  it('gives every Results section a branch in renderBottom', () => {
+    // Results renders into the other body, through its own dispatcher — so a
+    // section missing there fails exactly the same way and would not have been
+    // caught by the inspector check above.
+    //
+    // `qa` is the deliberate fall-through: `renderBottom` ends with the
+    // fidelity report, so it has no test of its own. Named here rather than
+    // filtered out silently, because a SECOND section arriving at the default
+    // by accident is precisely the bug this file is for.
+    const bottom = PANEL_TABS.filter((tab) => tab.body === 'bottom').flatMap((tab) =>
+      tab.sections.map((section) => section.tab)
+    );
+    const missing = bottom.filter((tab) => tab !== 'qa' && !MAIN.includes(`bottomTab === '${tab}'`));
+    expect(missing, `Results sections with no panel: ${missing.join(', ')}`).toEqual([]);
   });
 
   it('lists every tab in the command palette', () => {
@@ -89,6 +114,7 @@ describe('every tab reaches a panel', () => {
     expect(missing, `tabs missing from the palette: ${missing.join(', ')}`).toEqual([]);
   });
 });
+
 
 describe('every control is bound to an element that exists', () => {
   const ids = new Set([...HTML.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));

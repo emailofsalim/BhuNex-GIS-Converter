@@ -357,12 +357,30 @@ textarea {
 
 /* ------------------------------------------------------------- the stage */
 
+/* TWO ROWS: the ribbon, then everything else.
+   The ribbon used to float over the top-left of the drawing, which kept the
+   canvas full-height at the cost of a translucent bar lying across the part of
+   the sheet most people read first. It takes a row of its own now — and gives
+   the row back when folded, which is why taking one is affordable. */
 .stage {
   position: relative;
+  display: flex;
+  flex-direction: column;
   background: var(--surface-sunken);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Everything below the ribbon. `position: relative` is what lets the canvas,
+   the dropzone and the compare pane all sit absolutely inside it, and the top
+   margin is the hairline of daylight that stops the drawing reading as more
+   bar. */
+.stage__canvas {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 6px;
 }
 
 /* The canvas fills the stage absolutely, so nothing stacked can shrink it. */
@@ -370,6 +388,98 @@ textarea {
   position: absolute;
   inset: 0;
   background: var(--surface-sunken);
+}
+
+/* ---- THE RIBBON -------------------------------------------------------
+   One strip, two rows: a caption of tabs, and that tab's controls. Folded, the
+   second row goes and the caption stays — Excel's behaviour, and the reason a
+   docked bar can afford to be docked. */
+.ribbon {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* THE CAPTION.
+   Reads as a row of labels rather than a row of buttons: these switch what the
+   bar below contains, so they must not look like the controls themselves. */
+.ribbon__caption {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 3px 6px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ribbon__caption::-webkit-scrollbar {
+  display: none;
+}
+
+/* The hairline between the two families of tab: tool families to its left, the
+   right-hand panel's groups to its right. Without it nine tabs read as one
+   undifferentiated run and "Place" and "Data" look like the same kind of
+   thing, which they are not. */
+.ribbon__split {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 8px;
+  background: var(--border);
+}
+
+.ribbon__spacer {
+  flex: 1 1 auto;
+  min-width: 8px;
+}
+
+/* The fold, hard right where a window control belongs. */
+.ribbon__fold {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 2px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ribbon__fold:hover {
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* The current tab's controls. It wraps rather than clipping on a narrow
+   window: a tool that cannot be reached is worse than a bar two lines tall. */
+.ribbon__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  flex-wrap: wrap;
+}
+
+/* Folded: the caption is the whole bar, so its bottom rule would double with
+   the one under `.ribbon` itself. */
+.ribbon--closed .ribbon__caption {
+  border-bottom: none;
+}
+
+/* The warning count, riding the Warnings button rather than sitting in a
+   readout of its own. */
+.rtab__count {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 10px;
 }
 
 .preview canvas {
@@ -396,28 +506,6 @@ textarea {
   flex-wrap: wrap;
 }
 
-.cbar--tools {
-  top: 10px;
-  left: 10px;
-  /* The ribbon is two stacked rows — tabs, then that tab's controls — rather
-     than one wrapping line of twenty buttons. */
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
-}
-
-/* THE TAB STRIP.
-   Reads as a row of labels rather than a row of buttons: these switch what the
-   bar is showing, and making them look like the tools underneath would invite
-   clicking one expecting a tool. */
-.cbar__tabs {
-  display: flex;
-  gap: 2px;
-  padding: 3px 4px 0;
-  border-bottom: 1px solid var(--border);
-}
-
 .rtab {
   padding: 4px 10px;
   border: none;
@@ -439,17 +527,6 @@ textarea {
   color: var(--accent);
   border-bottom-color: var(--accent);
   font-weight: 600;
-}
-
-/* Only the current tab's controls, so the bar is one row whatever it holds.
-   It still wraps rather than clipping on a narrow window: a tool that cannot
-   be reached is worse than a bar two lines tall. */
-.cbar__row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  flex-wrap: wrap;
 }
 
 /* One positioned column holding the tool line and its readout. Stacking them
@@ -588,103 +665,10 @@ textarea {
   overflow: auto;
 }
 
-/* Two-level section picker. Fourteen tabs in one strip wrapped to three rows
-   in a wide pane and would wrap to five in a 340px dock; three groups of four
-   to six each fit one row apiece and nothing is ever out of reach. */
-.groups {
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.groups__top {
-  display: flex;
-  gap: 2px;
-  padding: 4px 6px 0;
-}
-
-/* DELIBERATELY QUIET.
-   This row is the workflow spine — Data, Edit, Export, Results is the order the
-   work happens in — so it stays on screen rather than moving into Settings. But
-   it is a signpost, not a headline: it was competing with the canvas and with
-   the panel content underneath it. Smaller, lighter, and marked by a rule under
-   the current group rather than by a filled tab body. */
-.gtab {
-  flex: 1 1 0;
-  padding: 5px 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 0;
-  border-bottom: 2px solid transparent;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-.gtab:hover {
-  color: var(--text);
-}
-
-.gtab--on {
-  color: var(--accent);
-  background: transparent;
-  border-bottom-color: var(--accent);
-  font-weight: 600;
-}
-
-.groups__sub {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 6px;
-  border-top: 1px solid var(--border);
-}
-
-/* CLOSED BY DEFAULT: only the section actually open is shown, with a chevron to
-   drop the rest down.
-   Six section names wrapped to two or three rows in a narrow dock, so a row of
-   buttons nobody had clicked was taking canvas height permanently. Collapsed,
-   it costs one line and still says which section you are in — which is the part
-   that has to stay visible. */
-.groups__sub--closed .tab:not(.tab--on) {
-  display: none;
-}
-
-/* The SAME fold one level up, on Data / Edit / Export / Results.
-   The section strip folded and the group row above it did not, so two rows of
-   tabs sat permanently above the panel. Folded, the row keeps the group you are
-   in — a strip folded to nothing is a strip you cannot get back, and it is also
-   the only thing saying what the panel below belongs to. */
-.groups__top--closed .gtab:not(.gtab--on) {
-  display: none;
-}
-
-/* The fold sits hard right, where the section strip's "More" already is, so the
-   two controls line up in a column rather than wandering with the tab widths. */
-.groups__fold {
-  margin-left: auto;
-}
-
-.groups__drop {
-  margin-left: auto;
-  padding: 2px 7px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: var(--radius);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.groups__drop:hover {
-  color: var(--text);
-  background: var(--bg);
-}
+/* NO TAB CSS HERE ANY MORE.
+   This held a two-level section picker — a group row, a section row, a fold
+   for each — that lived inside the dock while the ribbon carried tabs of its
+   own four rows above. All of it is in `.ribbon` now, once. */
 
 .dock__body {
   flex: 1 1 auto;
@@ -847,7 +831,7 @@ textarea {
 @media (pointer: coarse) {
   .btn,
   .tab,
-  .gtab,
+  .rtab,
   .select,
   .input {
     min-height: 44px;
@@ -856,7 +840,7 @@ textarea {
     padding: 10px 14px;
   }
   .tab,
-  .gtab {
+  .rtab {
     padding: 12px 14px;
   }
   .iconbtn {

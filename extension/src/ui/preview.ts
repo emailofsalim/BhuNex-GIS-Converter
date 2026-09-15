@@ -65,6 +65,17 @@ export interface PreviewData {
   trace?: PreviewLayer[];
   /** True when what is drawn is a subset of what will be exported. */
   truncated: boolean;
+  /**
+   * What frame the numbers on the axes are in.
+   *
+   * The grid used to print "grid 100 m" under every drawing, whatever the
+   * coordinate system — so a file in WGS 84 was labelled in metres while its
+   * grid lines were 0.001° apart, and a site grid in feet was labelled in
+   * metres too. A grid that states a unit it has not checked is worse than a
+   * grid with no caption: it is a measurement the reader has no reason to
+   * doubt. The caption now names the CRS and counts in ITS unit.
+   */
+  crs?: { label: string; unit: 'degree' | 'metre' | 'foot' | 'unknown' };
 }
 
 /**
@@ -443,9 +454,27 @@ export class PreviewCanvas {
       context.lineTo(width, screen.y);
     }
     context.stroke();
-    context.fillStyle = this.style('--text-faint');
+    const crs = this.data.crs;
+    const caption = crs
+      ? `${crs.label} · grid ${formatStep(step, crs.unit)}`
+      : `grid ${formatStep(step, 'unknown')}`;
     context.font = '10px ui-monospace, monospace';
-    context.fillText(`grid ${formatStep(step)}`, 8, height - 8);
+
+    // A plate behind the text, because the caption sits over whatever the
+    // drawing or the basemap put there. Faint text straight onto satellite
+    // imagery is unreadable exactly when the CRS matters most.
+    //
+    // BOTTOM RIGHT, not bottom left: the coordinate readout is pinned bottom
+    // left in the DOM above this canvas, and a caption drawn under it is a
+    // caption nobody can read.
+    const textWidth = context.measureText(caption).width;
+    const left = Math.max(4, width - textWidth - 14);
+    context.fillStyle = this.style('--surface');
+    context.globalAlpha = 0.82;
+    context.fillRect(left, height - 20, textWidth + 10, 16);
+    context.globalAlpha = 1;
+    context.fillStyle = this.style('--text-muted');
+    context.fillText(caption, left + 5, height - 8);
     context.restore();
   }
 
@@ -548,10 +577,23 @@ export class PreviewCanvas {
   }
 }
 
-function formatStep(step: number): string {
-  if (step >= 1000) return `${step / 1000} km`;
-  if (step >= 1) return `${step} m`;
-  return `${step}`;
+/**
+ * One grid interval, in the unit the coordinates are actually counted in.
+ *
+ * Degrees never become "km": a tenth of a degree is not a distance until you
+ * say where on the ellipsoid it is, and the grid is not the place to pretend
+ * otherwise. Metres and feet do scale up, because they are lengths.
+ */
+function formatStep(step: number, unit: 'degree' | 'metre' | 'foot' | 'unknown'): string {
+  if (unit === 'degree') return `${trim(step)}°`;
+  if (unit === 'foot') return step >= 5280 ? `${trim(step / 5280)} mi` : `${trim(step)} ft`;
+  if (unit === 'metre') return step >= 1000 ? `${trim(step / 1000)} km` : `${trim(step)} m`;
+  return `${trim(step)} units`;
+}
+
+/** Drops the floating-point tail a power-of-ten division leaves behind. */
+function trim(value: number): string {
+  return String(Number(value.toPrecision(6)));
 }
 
 function computeBounds(data: PreviewData): Bounds | null {

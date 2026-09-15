@@ -10,8 +10,8 @@ import {
   lineWidthOf,
   opacityOf,
 } from '../../core/layers';
-import { WGS84_CRS } from '../../crs/epsg';
-import { crsLabel, planTransform } from '../../crs/transform';
+import { crsFromEpsg, WGS84_CRS } from '../../crs/epsg';
+import { crsGridUnit, crsLabel, crsShortLabel, planTransform } from '../../crs/transform';
 import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-overlay';
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
@@ -66,6 +66,27 @@ export function renderPreview(item: QueueItem): void {
 
   const dataset = item.dataset;
   const data: PreviewData = { layers: [], truncated: false };
+
+  // WHAT FRAME THE AXES ARE IN, under the grid.
+  //
+  // The dataset's own CRS, not the export target: the numbers on this canvas
+  // are the ones that were read out of the file, and a caption naming the
+  // format it is going to be written to would be describing a drawing that
+  // does not exist yet.
+  //
+  // A DXF almost never declares one, which is the ordinary case rather than an
+  // edge: the surveyor knows the grid and assigns it in Settings. That
+  // assignment is shown, MARKED AS ASSUMED — a drawing labelled "UTM 44N" that
+  // never said so is a claim the file does not support, and telling the two
+  // apart is the difference between a caption and a guess.
+  const declared = (dataset?.crs ?? null) as CrsRef | null;
+  const assumedEpsg = store.get().settings.sourceCrsEpsg;
+  const assumed = !declared && assumedEpsg ? crsFromEpsg(assumedEpsg) : null;
+  const crs = declared ?? assumed;
+  data.crs = {
+    label: assumed ? `${crsShortLabel(assumed)} (assumed)` : crsShortLabel(declared),
+    unit: crsGridUnit(crs),
+  };
 
   if (dataset?.layers?.length) {
     const view = viewOf(item);

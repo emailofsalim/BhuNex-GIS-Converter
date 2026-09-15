@@ -30,6 +30,7 @@
  * prevent — so neither is written twice.
  */
 
+import { isCollapsed, setCollapsed } from '../collapse';
 import { element } from '../dom';
 import { host } from '../host';
 import { store } from '../../state/store';
@@ -124,7 +125,12 @@ export const GLOBAL_SHORTCUTS: CanvasActionDef[] = [
   { id: 'palette', label: 'Command palette', key: 'Ctrl+K', hint: 'Search every command by name.' },
   { id: 'rail', label: 'Left panel', key: 'Ctrl+1', hint: 'Show or hide files and layers.' },
   { id: 'dock', label: 'Right panel', key: 'Ctrl+2', hint: 'Show or hide the output panel.' },
-  { id: 'cancel', label: 'Cancel', key: 'Esc', hint: 'Cancel the drawing in progress, then clear the selection, then return to Pan.' },
+  { id: 'ribbon', label: 'Collapse the ribbon', key: 'Ctrl+F1', hint: 'Fold the ribbon down to its tabs, as in Excel. A double-click on a tab, or the chevron at the end of the row, does the same. While folded, clicking a tab shows its controls until the next click on the drawing.' },
+  // Escape is a LADDER, and the hint has to say so: one press per rung, and
+  // Pan is the last. It used to describe that ladder while the shell's handler
+  // jumped straight to Pan, so the documentation was right and the code was
+  // not.
+  { id: 'cancel', label: 'Cancel', key: 'Esc', hint: 'Steps back one level per press: abandon the drawing in progress, then the rubber band, then the vertex selection, then the feature open for editing, then the selection, and finally return to Pan.' },
   { id: 'finish', label: 'Finish drawing', key: 'Enter', hint: 'Close the polyline or polygon being drawn.' },
 ];
 
@@ -209,6 +215,106 @@ export const RIBBON_TABS: RibbonTab[] = [
     ],
   },
 ];
+
+/**
+ * One section of the right-hand panel, as a button on the ribbon.
+ *
+ * These used to be two rows of tabs INSIDE the dock — a group row (Data, Edit,
+ * Export, Results) above a section row — stacked under the ribbon's own two
+ * rows, so four rows of tabs sat between the top of the window and anything
+ * worth reading, and two of them said the same kind of thing in two different
+ * places. The dock has no tabs at all now: the ribbon is the only navigation
+ * surface, exactly as a spreadsheet's is.
+ */
+export interface RibbonSection {
+  label: string;
+  /** The section id, as `showInspectorTab` / `showBottomTab` take it. */
+  tab: string;
+}
+
+/**
+ * A ribbon tab that opens part of the right-hand panel rather than a tool
+ * family. Same strip, same behaviour, different cargo.
+ */
+export interface RibbonPanelTab {
+  id: string;
+  label: string;
+  hint: string;
+  /** The dock group, as `store.inspectorGroup` holds it. */
+  group: string;
+  /**
+   * Which body the sections render into. `bottom` is what used to be the
+   * bottom dock, addressed through `showBottomTab` rather than through
+   * `showInspectorTab` — the one group whose sections are not inspector tabs.
+   */
+  body: 'inspector' | 'bottom';
+  sections: RibbonSection[];
+}
+
+export const PANEL_TABS: RibbonPanelTab[] = [
+  {
+    id: 'data',
+    label: 'Data',
+    hint: 'What was read out of the file: geometry, coordinate system, attributes.',
+    group: 'data',
+    body: 'inspector',
+    sections: [
+      { label: 'Overview', tab: 'overview' },
+      { label: 'Geometry', tab: 'geometry' },
+      { label: 'CRS', tab: 'crs' },
+      { label: 'Attributes', tab: 'attributes' },
+      { label: 'Source', tab: 'metadata' },
+    ],
+  },
+  {
+    id: 'edit',
+    label: 'Edit',
+    hint: 'The settings behind the canvas tools.',
+    group: 'edit',
+    body: 'inspector',
+    sections: [
+      { label: 'Select & move', tab: 'select' },
+      { label: 'Vertices', tab: 'edit' },
+      { label: 'Measure', tab: 'measure' },
+      { label: 'Geometry tools', tab: 'geometry-ops' },
+      { label: 'Backdrop', tab: 'backdrop' },
+      { label: 'Georeference', tab: 'georef' },
+    ],
+  },
+  {
+    id: 'out',
+    label: 'Export',
+    hint: 'What the chosen format will keep, and what it cannot.',
+    group: 'out',
+    body: 'inspector',
+    sections: [
+      { label: 'What will be lost', tab: 'fidelity' },
+      { label: 'Compare', tab: 'compare' },
+      { label: 'Warnings', tab: 'warnings' },
+    ],
+  },
+  {
+    id: 'results',
+    label: 'Results',
+    hint: 'What came out: QA, the log, the delivery and its manifest.',
+    group: 'results',
+    body: 'bottom',
+    sections: [
+      { label: 'QA', tab: 'qa' },
+      { label: 'Log', tab: 'log' },
+      { label: 'Delivery', tab: 'delivery' },
+      { label: 'Manifest', tab: 'manifest' },
+      { label: 'Health', tab: 'health' },
+      { label: 'History', tab: 'history' },
+      { label: 'Workflows', tab: 'workflows' },
+    ],
+  },
+];
+
+/** The panel tab that owns a dock group, or null for a tool family. */
+export function panelTabFor(id: string): RibbonPanelTab | null {
+  return PANEL_TABS.find((tab) => tab.id === id) ?? null;
+}
 
 /** The ribbon tab a tool lives on, so a keyboard shortcut lights the right one. */
 export function ribbonTabFor(id: CanvasToolId): string {
@@ -316,55 +422,162 @@ export function renderToolbar(into: HTMLElement, enabled: boolean): void {
     }
   };
 
-  // --- the tab strip ----------------------------------------------------
+  // --- the caption: every tab, in two families -------------------------
+  //
   // Always present, even with nothing loaded, so the shape of the tool does
   // not change under the user between an empty workspace and a loaded one.
-  const tabs = element('div', { class: 'cbar__tabs', role: 'tablist' });
-  const current = RIBBON_TABS.find((tab) => tab.id === ui.ribbonTab) ?? RIBBON_TABS[0];
-  for (const tab of RIBBON_TABS) {
-    const on = tab.id === current.id;
+  //
+  // The left half is the tool families; the right half, past a hairline, is
+  // the right-hand panel's groups — the SAME four that used to be a second row
+  // of tabs inside the dock. They are here and nowhere else.
+  const tabs = element('div', { class: 'ribbon__caption', role: 'tablist' });
+  const panelTab = panelTabFor(ui.ribbonTab ?? '');
+  const current = panelTab ? null : (RIBBON_TABS.find((tab) => tab.id === ui.ribbonTab) ?? RIBBON_TABS[0]);
+  const activeId = panelTab?.id ?? current?.id;
+
+  const collapsed = isCollapsed(RIBBON_FOLD) && ui.ribbonPeek !== true;
+
+  const tabButton = (id: string, label: string, hint: string, onClick: () => void): HTMLButtonElement => {
+    const on = id === activeId;
     const node = element('button', {
       class: `rtab${on ? ' rtab--on' : ''}`,
-      title: tab.hint,
+      title: hint,
       type: 'button',
     }) as HTMLButtonElement;
-    node.textContent = tab.label;
+    node.textContent = label;
     node.setAttribute('role', 'tab');
     node.setAttribute('aria-selected', String(on));
     node.addEventListener('click', () => {
-      ui.ribbonTab = tab.id;
-      // A tab is the family AND its panel: bringing the group forward opens the
-      // settings that belong to it, which is the whole reason these were merged
-      // rather than left a window apart.
-      const panel = tab.panels[0];
-      if (panel && item) ui.openPanel?.(panel.group, panel.tab);
-      host.render();
+      // WHILE FOLDED, A TAB PEEKS. Excel's rule: the controls drop down for as
+      // long as you are using them and fold away again at the next click on
+      // the canvas. Switching tab must not silently unfold the ribbon for
+      // good, or the fold would undo itself the first time anyone used it.
+      if (isCollapsed(RIBBON_FOLD)) ui.ribbonPeek = true;
+      onClick();
     });
-    tabs.append(node);
+    // Double-click on a tab folds and unfolds, as it does in Excel.
+    node.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      toggleRibbonFold();
+    });
+    return node;
+  };
+
+  for (const tab of RIBBON_TABS) {
+    tabs.append(
+      tabButton(tab.id, tab.label, tab.hint, () => {
+        ui.ribbonTab = tab.id;
+        // A tab is the family AND its panel: bringing the group forward opens
+        // the settings that belong to it, which is the whole reason these were
+        // merged rather than left a window apart.
+        const panel = tab.panels[0];
+        if (panel && item) ui.openPanel?.(panel.group, panel.tab);
+        host.render();
+      })
+    );
   }
+
+  tabs.append(element('span', { class: 'ribbon__split' }));
+
+  for (const tab of PANEL_TABS) {
+    tabs.append(
+      tabButton(tab.id, tab.label, tab.hint, () => {
+        ui.ribbonTab = tab.id;
+        ui.openPanel?.(tab.group);
+        host.render();
+      })
+    );
+  }
+
+  tabs.append(element('span', { class: 'ribbon__spacer' }));
+
+  const fold = element('button', {
+    class: 'ribbon__fold',
+    type: 'button',
+    title: collapsed ? 'Show the ribbon (Ctrl+F1)' : 'Collapse the ribbon — double-click a tab does the same (Ctrl+F1)',
+  }) as HTMLButtonElement;
+  fold.textContent = collapsed ? '▾' : '▴';
+  fold.setAttribute('aria-expanded', String(!collapsed));
+  fold.setAttribute('aria-label', collapsed ? 'Show the ribbon' : 'Collapse the ribbon');
+  fold.addEventListener('click', () => toggleRibbonFold());
+  tabs.append(fold);
+
   into.append(tabs);
+  into.classList.toggle('ribbon--closed', collapsed);
+  if (collapsed) return;
 
   // --- the current tab's controls ---------------------------------------
-  const row = element('div', { class: 'cbar__row' });
-  for (const id of current.tools) {
+  const row = element('div', { class: 'ribbon__row' });
+
+  if (panelTab) {
+    // A panel tab's controls are its sections. One row, one click each — the
+    // "More ▾" drop-down that used to hide most of them existed only because
+    // they were competing for width inside a narrow dock.
+    const openSection = (section: RibbonSection) =>
+      panelTab.body === 'bottom' ? host.showBottomTab(section.tab) : host.showInspectorTab(section.tab);
+    const activeSection = panelTab.body === 'bottom' ? state.bottomTab : state.inspectorTab;
+    for (const section of panelTab.sections) {
+      const node = button(
+        section.label,
+        `Show ${section.label.toLowerCase()}`,
+        section.tab === activeSection,
+        () => openSection(section),
+        !item
+      );
+      // The warning count rides its own button rather than a separate readout,
+      // so a file with warnings says so from the ribbon.
+      if (section.tab === 'warnings') {
+        const count = item?.warnings.length ?? 0;
+        if (count > 0) {
+          const badge = element('span', { class: 'badge badge--warn rtab__count' });
+          badge.textContent = String(count);
+          node.append(badge);
+        }
+      }
+      row.append(node);
+    }
+    into.append(row);
+    return;
+  }
+
+  const family = current ?? RIBBON_TABS[0];
+  for (const id of family.tools) {
     const tool = CANVAS_TOOLS.find((each) => each.id === id);
     if (!tool) continue;
     row.append(button(tool.label, `${tool.hint} (${tool.key})`, active === tool.id, () => setCanvasTool(tool.id)));
   }
-  if (current.tools.length && current.actions.length) row.append(separator());
-  for (const id of current.actions) {
+  if (family.tools.length && family.actions.length) row.append(separator());
+  for (const id of family.actions) {
     const node = actionButton(id);
     if (node) row.append(node);
   }
-  // The panels this family owns, reachable from the bar rather than from two
-  // levels of tab in the right-hand dock.
-  if (current.panels.length) {
-    row.append(separator());
-    for (const panel of current.panels) {
-      row.append(
-        button(panel.label, `Open the ${panel.label.replace(/…$/, '')} panel`, false, () => ui.openPanel?.(panel.group, panel.tab), !item)
-      );
-    }
-  }
+  // NO PANEL SHORTCUTS HERE ANY MORE. Each tool family used to end its row
+  // with "Vertices…", "Measure…", "Backdrop…" and the rest — the same sections
+  // the Edit tab in this very caption now lists, so the same panel had two
+  // buttons in one bar. Selecting the family still opens its panel; that is
+  // what `panels[0]` is for, and it costs no button.
   into.append(row);
+}
+
+/** The collapse key, shared with every other fold the workspace remembers. */
+const RIBBON_FOLD = 'ribbon';
+
+/**
+ * Folds the ribbon down to its caption, or brings it back.
+ *
+ * Deliberately NOT a private boolean: the panes, the layer list and the
+ * settings groups all persist through `collapse.ts`, so the ribbon cannot
+ * develop its own idea of what "folded" means or forget it on reload.
+ */
+export function toggleRibbonFold(): void {
+  const closed = isCollapsed(RIBBON_FOLD);
+  setCollapsed(RIBBON_FOLD, !closed);
+  // Unfolding for good ends any peek; folding cannot leave one behind either.
+  ui.ribbonPeek = false;
+  host.render();
+}
+
+/** True while the ribbon is folded to its caption. Used by the peek dismissal. */
+export function ribbonIsFolded(): boolean {
+  return isCollapsed(RIBBON_FOLD);
 }
