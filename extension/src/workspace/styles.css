@@ -654,6 +654,21 @@ textarea {
   display: none;
 }
 
+/* The SAME fold one level up, on Data / Edit / Export / Results.
+   The section strip folded and the group row above it did not, so two rows of
+   tabs sat permanently above the panel. Folded, the row keeps the group you are
+   in — a strip folded to nothing is a strip you cannot get back, and it is also
+   the only thing saying what the panel below belongs to. */
+.groups__top--closed .gtab:not(.gtab--on) {
+  display: none;
+}
+
+/* The fold sits hard right, where the section strip's "More" already is, so the
+   two controls line up in a column rather than wandering with the tab widths. */
+.groups__fold {
+  margin-left: auto;
+}
+
 .groups__drop {
   margin-left: auto;
   padding: 2px 7px;
