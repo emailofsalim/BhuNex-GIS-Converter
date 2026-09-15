@@ -134,6 +134,25 @@ export class PreviewCanvas {
   private bounds: Bounds | null = null;
   private view: View = { scale: 1, offsetX: 0, offsetY: 0 };
   private showGrid = true;
+  /**
+   * What the canvas is currently showing, so a re-render of the SAME subject
+   * can keep the view while a new one is fitted. Undefined means nothing.
+   */
+  private identity: string | undefined = undefined;
+  private hasFitted = false;
+  /**
+   * Whether the fit that produced the current view was measured against a REAL
+   * canvas size.
+   *
+   * The canvas is inside `#previewWrap`, which is `hidden` until a file is
+   * selected — so the first `setData` usually fits against a zero-sized element
+   * and falls back to a notional 800x400. That produced a view at roughly the
+   * wrong scale and, once `setData` stopped re-fitting on every render to
+   * preserve the user's zoom, nothing ever corrected it: the drawing stayed
+   * mis-scaled and every hit test missed, because unproject was answering in a
+   * coordinate frame the data does not live in.
+   */
+  private fittedWithLayout = false;
   private dragging = false;
   private lastPointer = { x: 0, y: 0 };
   private onReadout?: (text: string) => void;
@@ -236,13 +255,49 @@ export class PreviewCanvas {
     this.canvas.width = Math.round(rect.width * ratio);
     this.canvas.height = Math.round(rect.height * ratio);
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    // THE FIRST REAL SIZE EARNS A REAL FIT.
+    //
+    // Only when the view still comes from a provisional fit — never once the
+    // canvas has been fitted against a genuine size, because from then on the
+    // view is the user's and resizing the window must not throw their zoom
+    // away. This is the one thing that used to be repaired by `setData`
+    // re-fitting on every render.
+    if (!this.fittedWithLayout && this.bounds && rect.width > 0 && rect.height > 0) {
+      this.fit();
+      return;
+    }
     this.render();
   }
 
-  setData(data: PreviewData): void {
+  /**
+   * Replaces what is drawn, and fits ONLY when the subject changed.
+   *
+   * This used to call `fit()` every time, and `renderPreview` runs on every
+   * render of the workspace — so every edit, every layer toggle, every panel
+   * switch threw away the pan and zoom and jumped back to the whole drawing.
+   * Zooming into a corner to nudge a boundary against the basemap and having
+   * the view snap out on the first drag is not a preference, it is the tool
+   * refusing to be worked in.
+   *
+   * `identity` is what the canvas is showing — the queue item's id. A new
+   * subject is fitted because the previous view describes somewhere else
+   * entirely; the SAME subject re-rendered keeps the view, even though an edit
+   * may have moved its bounds slightly. Fit is still one keystroke (F) away
+   * when it is actually wanted.
+   */
+  setData(data: PreviewData, identity?: string): void {
     this.data = data;
     this.bounds = computeBounds(data);
-    this.fit();
+
+    const changed = identity !== this.identity;
+    this.identity = identity;
+    if (changed || !this.hasFitted) {
+      this.hasFitted = true;
+      this.fit();
+      return;
+    }
+    this.render();
   }
 
   toggleGrid(): void {
@@ -254,6 +309,9 @@ export class PreviewCanvas {
     const rect = this.canvas.getBoundingClientRect();
     const width = rect.width || 800;
     const height = rect.height || 400;
+    // A fit against a hidden canvas is provisional: it used the fallback size,
+    // so `resize` must redo it once the element actually has one.
+    this.fittedWithLayout = rect.width > 0 && rect.height > 0;
     if (!this.bounds || !Number.isFinite(this.bounds.minX)) {
       this.view = { scale: 1, offsetX: width / 2, offsetY: height / 2 };
       this.render();

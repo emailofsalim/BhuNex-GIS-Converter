@@ -47,6 +47,8 @@ export function clearPreview(): void {
 
   canvas.onOverlay = undefined;
   setUnderlay(canvas, null);
+  // No identity: the next file to arrive is a different subject and will be
+  // fitted, rather than inheriting the view of the one just cleared.
   canvas.setData({ layers: [], truncated: false });
 
   // The bitmap is wiped DIRECTLY, not by asking the canvas to re-render.
@@ -148,7 +150,9 @@ export function renderPreview(item: QueueItem): void {
   attachBasemap(ui.previewCanvas, dataset);
 
   $('previewOnlyBadge').classList.toggle('hidden', !data.truncated);
-  ui.previewCanvas.setData(data);
+  // The item's id is the subject: re-rendering the same file after an edit
+  // keeps the pan and zoom, and selecting a different file fits to it.
+  ui.previewCanvas.setData(data, item.id);
 }
 
 /**

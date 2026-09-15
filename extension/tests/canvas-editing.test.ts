@@ -141,10 +141,28 @@ describe('the rubber band: left keeps the CAD direction rule, right is always a 
   });
 
   it('leaves the selection alone on a right-click that never dragged', () => {
-    // A press and release in one spot asked for nothing. Falling through to
-    // "click on empty space clears the selection" would let a mis-aimed
-    // right-click throw away a dozen shift-clicks.
-    expect(TOOL_CANVAS).toMatch(/if \(gesture\.button === 2\) return;[\s\S]{0,200}A click on empty space clears the selection/);
+    // A press and release in one spot never asked for the selection to change.
+    // Falling through to "click on empty space clears the selection" would let
+    // a mis-aimed right-click throw away a dozen shift-clicks.
+    //
+    // That press now also raises the canvas menu — which is precisely the case
+    // a bare right-click DOES mean something — so the branch returns before the
+    // clearing code rather than merely returning. What matters is that it
+    // returns at all, and that it does so ahead of the clear.
+    const band = TOOL_CANVAS.slice(TOOL_CANVAS.indexOf('case \'band\': {', TOOL_CANVAS.indexOf('handlePointerUp')));
+    const rightClick = band.indexOf('gesture.button === 2');
+    const clears = band.indexOf('A click on empty space clears the selection');
+    expect(rightClick, 'the bare right-click branch is gone').toBeGreaterThan(-1);
+    expect(clears).toBeGreaterThan(rightClick);
+    expect(band.slice(rightClick, clears)).toContain('return;');
+  });
+
+  it('raises the canvas menu from that same press, not from a contextmenu event', () => {
+    // `contextmenu` fires on PRESS, so listening for it would pop a menu over
+    // the start of every right-drag band. Only the pointer-up path knows the
+    // press did not become a drag.
+    expect(TOOL_CANVAS).toContain('this.host.onContextMenu?.(event.clientX, event.clientY');
+    expect(TOOL_CANVAS).toMatch(/onContextMenu\?: \(screenX: number, screenY: number, world: Position\) => void/);
   });
 
   it('says which band it is, for both buttons', () => {

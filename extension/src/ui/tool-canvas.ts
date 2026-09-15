@@ -143,6 +143,16 @@ export interface MoveOffset {
 }
 
 export interface ToolHost {
+  /**
+   * A right-click that turned out not to be a drag.
+   *
+   * The right button draws the always-a-window band, so a press only means
+   * "open the menu" once the pointer has come up without passing the drag
+   * threshold. That is known here and nowhere else, which is why the menu is
+   * raised through a hook rather than from a `contextmenu` listener — that
+   * event fires on press, and would pop a menu over every band.
+   */
+  onContextMenu?: (screenX: number, screenY: number, world: Position) => void;
   /** The layers as the canvas currently draws them, including lock and visibility. */
   layers: () => SelectableLayer[];
   /** The current selection, owned by the host so a panel can change it too. */
@@ -502,7 +512,11 @@ export class ToolCanvas {
           // would make a mis-aimed right-click throw away a selection that
           // took a dozen shift-clicks to build, which is the one outcome a
           // user cannot undo by repeating the gesture.
-          if (gesture.button === 2) return;
+          if (gesture.button === 2) {
+            stop(event);
+            this.host.onContextMenu?.(event.clientX, event.clientY, [at.x, at.y]);
+            return;
+          }
           // A click on empty space clears the selection. Not stopped, so a
           // click that was really the end of a pan still behaves as a pan.
           if (!isEmpty(this.host.selection())) {
