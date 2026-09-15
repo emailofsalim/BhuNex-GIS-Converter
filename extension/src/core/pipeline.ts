@@ -844,6 +844,28 @@ async function writeTarget(dataset: CirDataset, targetId: string, requestedBaseN
  * contradict anything, and treating "no evidence" as "evidence against" would
  * make an empty layer look like a CRS error.
  */
+/**
+ * The layer burn-in will act on: the one named, or the one holding the polygons.
+ *
+ * Shared by the notice and by the run itself, so the layer the user is TOLD
+ * about is by construction the layer that was used.
+ */
+function burnInTarget(dataset: CirDataset, options: { targetLayer?: string }): string {
+  if (options.targetLayer) return options.targetLayer;
+  let best = '';
+  let most = 0;
+  for (const layer of dataset.layers) {
+    const count = layer.features.filter(
+      (feature) => feature.geometry?.type === 'Polygon' || feature.geometry?.type === 'MultiPolygon'
+    ).length;
+    if (count > most) {
+      most = count;
+      best = layer.name;
+    }
+  }
+  return best;
+}
+
 function withinGeographicRange(bounds: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
   const values = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY];
   if (!values.every(Number.isFinite)) return true;
@@ -1127,8 +1149,68 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     }
   }
 
-  if (settings.burnIn?.targetLayer) {
-    const options = { ...DEFAULT_BURN_IN_OPTIONS, ...settings.burnIn };
+  if (settings.burnIn) {
+    // WHICH LAYER HOLDS THE BOUNDARIES, when the user did not say.
+    //
+    // This condition was `settings.burnIn?.targetLayer`, and that name defaults
+    // to the empty string — so burn-in requested WITHOUT a layer did nothing at
+    // all, silently. Both cadastral presets are in exactly that state, because
+    // a preset cannot know a layer name that differs per drawing: "Cadastral →
+    // labelled KMZ" promises "parcels open in Google Earth with their plot
+    // numbers showing", switched burn-in on, and then skipped it. The export
+    // came back unlabelled with nothing on screen to explain why.
+    //
+    // A cadastral sheet keeps its boundaries on one layer, so the layer holding
+    // the polygons IS the answer, and making the user retype it is the tool
+    // refusing to read what it has already parsed. Where several layers hold
+    // polygons the largest is taken and NAMED, so a wrong guess is visible
+    // rather than silent.
+    const polygonLayers = working.layers
+      .map((layer) => ({
+        name: layer.name,
+        count: layer.features.filter(
+          (feature) => feature.geometry?.type === 'Polygon' || feature.geometry?.type === 'MultiPolygon'
+        ).length,
+      }))
+      .filter((entry) => entry.count > 0)
+      .sort((a, b) => b.count - a.count);
+
+    const targetLayer = settings.burnIn.targetLayer || polygonLayers[0]?.name || '';
+
+    if (targetLayer === '') {
+      // Asked for and impossible. Saying so is the whole point: a user who
+      // asked for labelled parcels must not receive unlabelled ones in silence.
+      warnings.push(
+        warn('BURN_IN_NO_TARGET', 'Burn-in was requested, but no layer in this file holds polygons.', {
+          severity: 'warning',
+          reason:
+            'Text is attached to the polygon it sits inside, and this drawing has none to attach it to — cadastral line work is often still open.',
+          action: 'Turn on "Build polygons from closed CAD line work" so the boundaries close first, then convert again.',
+        })
+      );
+    } else if (!settings.burnIn.targetLayer) {
+      warnings.push(
+        warn('BURN_IN_TARGET_INFERRED', `Text was attached to polygons in "${targetLayer}", chosen automatically.`, {
+          severity: 'info',
+          count: polygonLayers[0].count,
+          reason:
+            polygonLayers.length > 1
+              ? `${polygonLayers.length} layers hold polygons; "${targetLayer}" holds the most (${polygonLayers[0].count}).`
+              : 'It is the only layer in the drawing that holds polygons.',
+          action:
+            polygonLayers.length > 1
+              ? `Set the burn-in layer explicitly if the parcels are on ${polygonLayers
+                  .slice(1)
+                  .map((entry) => `"${entry.name}"`)
+                  .join(' or ')} instead.`
+              : 'Set the burn-in layer explicitly to override this.',
+        })
+      );
+    }
+  }
+
+  if (settings.burnIn && burnInTarget(working, settings.burnIn) !== '') {
+    const options = { ...DEFAULT_BURN_IN_OPTIONS, ...settings.burnIn, targetLayer: burnInTarget(working, settings.burnIn) };
     const result = burnIn(working, options);
     working = result.dataset;
     warnings.push(

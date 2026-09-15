@@ -263,8 +263,14 @@ export function buildSettings(): Partial<ConversionSettings> {
             minLength: settings.contourMinLength,
           }
         : undefined,
+    // Gated on the CHECKBOX alone. It also required a target layer, and that
+    // defaults to empty — so burn-in switched on without a layer named did
+    // nothing, silently, which is the state both cadastral presets leave the
+    // settings in. The pipeline now picks the layer holding the polygons and
+    // says which it chose, so an empty name is a question it can answer rather
+    // than a reason to skip the work that was asked for.
     burnIn:
-      settings.burnInEnabled && settings.burnInTargetLayer
+      settings.burnInEnabled
         ? {
             targetLayer: settings.burnInTargetLayer,
             fieldName: settings.burnInField,
