@@ -11,7 +11,7 @@ and pushes to `claude/gis-cad-chrome-converter-hk8uwg`.
 
 | Fact | Value |
 |---|---|
-| Repository | `emailofsalim/Universal-Converter` |
+| Repository | `emailofsalim/BhuNex-GIS-Converter` |
 | Working branch | `claude/gis-cad-chrome-converter-hk8uwg` |
 | Product | **BhuNex GIS Converter** — Chrome MV3 extension for GIS / geomatics / survey / CAD / LiDAR / mining |
 | Scope | **Chrome MV3 extension only.** A web app is deferred and the reasoning is recorded in `docs/SCOPE.md` — do not start one without reading it. |

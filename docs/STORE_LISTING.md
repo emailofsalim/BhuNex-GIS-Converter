@@ -138,23 +138,23 @@ no content scripts, contacts no server and contains no analytics or telemetry.
 Disconnect from the internet entirely and it works exactly the same. The build
 pipeline fails if any remote resource reaches the package.
 
-Full source: https://github.com/emailofsalim/Universal-Converter
+Full source: https://github.com/emailofsalim/BhuNex-GIS-Converter
 ```
 
 ### Privacy policy URL
 ```
-https://emailofsalim.github.io/Universal-Converter/PRIVACY.html
+https://emailofsalim.github.io/BhuNex-GIS-Converter/PRIVACY.html
 ```
 Publish it by enabling **GitHub Pages** on the repository (Settings → Pages →
 Deploy from a branch → `main` → `/docs`). Until Pages is enabled, this also
 works and both stores accept it:
 ```
-https://github.com/emailofsalim/Universal-Converter/blob/main/docs/PRIVACY.md
+https://github.com/emailofsalim/BhuNex-GIS-Converter/blob/main/docs/PRIVACY.md
 ```
 
 ### Support / homepage URL
 ```
-https://github.com/emailofsalim/Universal-Converter
+https://github.com/emailofsalim/BhuNex-GIS-Converter
 ```
 
 ---

@@ -5,7 +5,7 @@
 # accepted but reads as an afterthought next to a real page.
 #
 # Enable at Settings -> Pages -> Deploy from a branch -> main -> /docs.
-# docs/PRIVACY.md is then served at /Universal-Converter/PRIVACY.html.
+# docs/PRIVACY.md is then served at /BhuNex-GIS-Converter/PRIVACY.html.
 title: BhuNex GIS Converter
 description: Offline GIS, CAD, survey, LiDAR and mining data conversion.
 theme: jekyll-theme-minimal

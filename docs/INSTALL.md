@@ -80,7 +80,7 @@ carries its own `manifest.json`, so the folder you extract is a loadable
 extension exactly as it comes.
 
 1. On the repository page, green **Code** button → **Download ZIP**.
-   (Or `git clone https://github.com/emailofsalim/Universal-Converter.git`.)
+   (Or `git clone https://github.com/emailofsalim/BhuNex-GIS-Converter.git`.)
 2. **Extract it to a plain local folder — not OneDrive.** Right-click →
    *Extract All* on Windows, and set the destination to something like
    `C:\Extensions\`. On a work laptop, Desktop, Documents and Downloads are
@@ -101,7 +101,7 @@ The one you extracted. It carries a `manifest.json` at its top level, which is
 what "Load unpacked" is looking for:
 
 ```
-Universal-Converter/
+BhuNex-GIS-Converter/
 ├── manifest.json        ← this is what makes the folder loadable
 ├── dist/                ← the built extension itself (also loadable on its own)
 │   ├── manifest.json
@@ -125,7 +125,7 @@ not: it is the source the build compiles.
 The same build, packaged so that `manifest.json` is at the top of the archive
 rather than one level down.
 
-1. <https://github.com/emailofsalim/Universal-Converter/releases>
+1. <https://github.com/emailofsalim/BhuNex-GIS-Converter/releases>
 2. Download `bhunex-gis-converter-<version>.zip`.
 3. Extract it outside OneDrive, then Load unpacked → the extracted folder
    itself. `INSTALL-FIRST.txt` inside repeats these steps.
@@ -140,8 +140,8 @@ repository.
 Only needed if you want to modify the code. Requires **Node 20 or newer**.
 
 ```bash
-git clone https://github.com/emailofsalim/Universal-Converter.git
-cd Universal-Converter
+git clone https://github.com/emailofsalim/BhuNex-GIS-Converter.git
+cd BhuNex-GIS-Converter
 npm ci
 npm run build          # a DEVELOPER build, with source maps, over dist/
 ```

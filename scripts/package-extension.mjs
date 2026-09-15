@@ -104,7 +104,7 @@ Optional: DWG support needs a small local helper. Every other format works
 without it, and the permission is only requested if you convert a DWG.
 
 Source and full documentation:
-https://github.com/emailofsalim/Universal-Converter
+https://github.com/emailofsalim/BhuNex-GIS-Converter
 `;
 
 const files = walk(distDir).sort();
