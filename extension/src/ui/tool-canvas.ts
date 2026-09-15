@@ -30,6 +30,10 @@
  *   dragged RIGHT TO LEFT takes anything it touches. Every CAD package a
  *   surveyor uses does this, and inventing a different rule here would make the
  *   tool feel wrong in a way that is hard to articulate and easy to resent.
+ *   The RIGHT button says the same thing outright: dragged either way it takes
+ *   only what is wholly inside, and it starts from anywhere — including on top
+ *   of a feature, which is exactly where a window drag is needed on a dense
+ *   sheet. A right-click that does not drag changes nothing at all.
  * · Holding Shift DURING a drag constrains it to the nearer axis — ortho. That
  *   does not collide with Shift-click-to-toggle, because toggling is decided at
  *   pointer-down and ortho only applies once the pointer has moved.
@@ -109,7 +113,7 @@ export const TOOL_LABEL: Record<CanvasTool, string> = {
 
 export const TOOL_HINT: Record<CanvasTool, string> = {
   select:
-    'Click a feature to select it, Shift-click to add or remove. Drag from empty space for a rubber band — left to right takes only what is wholly inside, right to left takes anything it touches. Drag from a selected feature to move the whole selection.',
+    'Click a feature to select it, Shift-click to add or remove. Left-drag from empty space for a rubber band — left to right takes only what is wholly inside, right to left takes anything it touches. Right-drag from anywhere, even over geometry, always takes only what is wholly inside. Drag from a selected feature to move the whole selection.',
   lasso: 'Draw a freehand outline around the features to select. Shift adds to the selection instead of replacing it.',
   move: 'Drag anywhere to move the current selection. Hold Shift to constrain to one axis.',
   'draw-point': DRAW_HINT.point,
@@ -165,7 +169,7 @@ export interface ToolHost {
 }
 
 type Gesture =
-  | { kind: 'band'; from: Position; to: Position }
+  | { kind: 'band'; from: Position; to: Position; button: number }
   | { kind: 'lasso'; points: Position[] }
   | { kind: 'move'; from: Position; to: Position; moved: boolean };
 
@@ -201,6 +205,10 @@ export class ToolCanvas {
     element.addEventListener('pointerup', this.handlePointerUp, { capture: true });
     element.addEventListener('pointercancel', this.handlePointerCancel, { capture: true });
     element.addEventListener('dblclick', this.handleDoubleClick, { capture: true });
+    // The right button draws a window band, so the browser's own menu must not
+    // appear on top of it. Suppressed only while a tool is live: with no tool
+    // enabled the canvas is an ordinary page element again.
+    element.addEventListener('contextmenu', this.handleContextMenu, { capture: true });
 
     this.onKeyDown = (event) => this.handleKey(event);
     window.addEventListener('keydown', this.onKeyDown);
@@ -270,6 +278,22 @@ export class ToolCanvas {
     return (this.drawing?.positions.length ?? 0) > 0;
   }
 
+  /**
+   * Whether Escape has something to give up here, before it reaches the shell.
+   *
+   * This class already implements the CAD ladder — abandon the drawing, then
+   * the gesture, then drop back to Select, then clear the selection — but the
+   * shell's global Escape jumped straight to Pan for anything that was not
+   * mid-drawing, so every rung below the first was unreachable. The shell asks
+   * this first and only returns to Pan when every engine says it is done.
+   */
+  consumesEscape(): boolean {
+    return (
+      this.enabled &&
+      (this.isDrawing() || this.gesture !== null || this.tool !== 'select' || !isEmpty(this.host.selection()))
+    );
+  }
+
   /** Abandons a drawing in progress without placing anything. */
   cancelDrawing(): void {
     if (!this.drawing) return;
@@ -290,6 +314,7 @@ export class ToolCanvas {
     element.removeEventListener('pointerup', this.handlePointerUp, { capture: true });
     element.removeEventListener('pointercancel', this.handlePointerCancel, { capture: true });
     element.removeEventListener('dblclick', this.handleDoubleClick, { capture: true });
+    element.removeEventListener('contextmenu', this.handleContextMenu, { capture: true });
     window.removeEventListener('keydown', this.onKeyDown);
     if (this.preview.onOverlay) this.preview.onOverlay = undefined;
   }
@@ -306,9 +331,29 @@ export class ToolCanvas {
   // ------------------------------------------------------------- interaction
 
   private handlePointerDown = (event: PointerEvent): void => {
-    if (!this.enabled || event.button !== 0) return;
+    if (!this.enabled) return;
     const world = this.preview.unproject(event.offsetX, event.offsetY);
     const at: Position = [world.x, world.y];
+
+    // RIGHT BUTTON IS ALWAYS A WINDOW BAND, from anywhere.
+    //
+    // The left button keeps the CAD rule it has always had — drag right to
+    // take only what is wholly inside, drag left to take anything touched —
+    // because that is what every package a surveyor uses does and the hand
+    // already knows it. The right button is the explicit form of the same
+    // question: whichever way it is dragged, it takes only what is WHOLLY
+    // INSIDE, so "select exactly these and nothing they lean on" needs no
+    // thought about which corner to start from.
+    //
+    // It starts from anywhere, including on top of a feature, because a
+    // window drag that refused to begin over geometry would be unusable on a
+    // dense sheet — which is the case it exists for.
+    if (event.button === 2) {
+      stop(event);
+      this.gesture = { kind: 'band', from: at, to: at, button: 2 };
+      return;
+    }
+    if (event.button !== 0) return;
 
     const drawKind = kindOfTool(this.tool);
     if (drawKind) {
@@ -364,7 +409,7 @@ export class ToolCanvas {
     // Empty space. The band is armed but the event is NOT stopped, so a plain
     // press that turns out to be a pan still pans — the band only takes over
     // once the pointer has actually moved past the threshold.
-    this.gesture = { kind: 'band', from: at, to: at };
+    this.gesture = { kind: 'band', from: at, to: at, button: 0 };
   };
 
   private handlePointerMove = (event: PointerEvent): void => {
@@ -432,6 +477,11 @@ export class ToolCanvas {
     }
   };
 
+  private handleContextMenu = (event: MouseEvent): void => {
+    if (!this.enabled) return;
+    event.preventDefault();
+  };
+
   private handlePointerUp = (event: PointerEvent): void => {
     if (!this.gesture) return;
     const gesture = this.gesture;
@@ -445,6 +495,14 @@ export class ToolCanvas {
       case 'band': {
         const at = this.preview.unproject(event.offsetX, event.offsetY);
         if (!this.passedThreshold(gesture.from, [at.x, at.y])) {
+          // A BARE RIGHT-CLICK CHANGES NOTHING.
+          //
+          // The right button exists here to draw a window; a press and release
+          // in the same spot never asked for anything. Letting it fall through
+          // would make a mis-aimed right-click throw away a selection that
+          // took a dozen shift-clicks to build, which is the one outcome a
+          // user cannot undo by repeating the gesture.
+          if (gesture.button === 2) return;
           // A click on empty space clears the selection. Not stopped, so a
           // click that was really the end of a pan still behaves as a pan.
           if (!isEmpty(this.host.selection())) {
@@ -455,7 +513,9 @@ export class ToolCanvas {
         }
         stop(event);
         const rectangle = boundsOf(gesture.from, gesture.to);
-        const mode = gesture.to[0] >= gesture.from[0] ? 'contain' : 'intersect';
+        // The right button asked for a window outright; the left one is read
+        // from the direction it was dragged.
+        const mode = gesture.button === 2 || gesture.to[0] >= gesture.from[0] ? 'contain' : 'intersect';
         const found = selectInRectangle(this.host.layers(), rectangle, mode);
         this.host.onSelectionChange(combine(this.host.selection(), found, event.shiftKey ? 'add' : 'replace'));
         this.report();
@@ -652,7 +712,8 @@ export class ToolCanvas {
     return { dx: gesture.to[0] - gesture.from[0], dy: gesture.to[1] - gesture.from[1] };
   }
 
-  private describeBand(gesture: { from: Position; to: Position }): string {
+  private describeBand(gesture: { from: Position; to: Position; button: number }): string {
+    if (gesture.button === 2) return 'Right-drag: taking only features wholly inside the band.';
     return gesture.to[0] >= gesture.from[0]
       ? 'Taking only features wholly inside the band.'
       : 'Taking every feature the band touches.';
@@ -785,9 +846,11 @@ export class ToolCanvas {
   private drawBand(
     context: CanvasRenderingContext2D,
     project: (x: number, y: number) => { x: number; y: number },
-    gesture: { from: Position; to: Position }
+    gesture: { from: Position; to: Position; button: number }
   ): void {
-    const contain = gesture.to[0] >= gesture.from[0];
+    // Same rule the release uses, so the band a surveyor is looking at cannot
+    // promise one mode and commit the other.
+    const contain = gesture.button === 2 || gesture.to[0] >= gesture.from[0];
     const a = project(gesture.from[0], gesture.from[1]);
     const b = project(gesture.to[0], gesture.to[1]);
     context.save();

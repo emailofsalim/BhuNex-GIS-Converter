@@ -43,6 +43,42 @@ export function crsLabel(crs: CrsRef | null): string {
   return crs.epsg ? `EPSG:${crs.epsg} — ${crs.name}` : crs.name;
 }
 
+/**
+ * The CRS in as few characters as it can be said in, for the grid caption.
+ *
+ * `crsLabel` gives "EPSG:32644 — WGS 84 / UTM zone 44N", which is the right
+ * answer in a panel and far too long to sit under a drawing. A surveyor
+ * looking at a grid needs one thing from it: which frame the numbers on the
+ * axes are in. UTM says its zone, a geographic CRS says its datum, and a local
+ * grid says it is local — so a drawing whose coordinates are metres on a site
+ * grid can never be mistaken for one in degrees.
+ */
+export function crsShortLabel(crs: CrsRef | null): string {
+  if (!crs) return 'No CRS';
+  if (crs.utm) return `UTM ${crs.utm.zone}${crs.utm.south ? 'S' : 'N'}`;
+  if (crs.kind === 'local') return 'Local grid';
+  // "WGS 84 / UTM zone 44N" without a parsed `utm` block, and every other
+  // projected name: take the part after the last slash, which is the projection
+  // rather than the datum it is built on.
+  const tail = crs.name.split('/').pop()?.trim();
+  const name = tail && tail.length > 0 ? tail : crs.name;
+  return name.length > 22 ? `${name.slice(0, 21)}…` : name;
+}
+
+/** The unit the axes are counted in, for the grid's step. */
+export function crsGridUnit(crs: CrsRef | null): 'degree' | 'metre' | 'foot' | 'unknown' {
+  if (!crs) return 'unknown';
+  if (crs.kind === 'geographic') return 'degree';
+  const unit = crs.unit?.toLowerCase() ?? '';
+  if (unit.includes('degree')) return 'degree';
+  if (unit.includes('feet') || unit.includes('foot') || unit === 'ft') return 'foot';
+  if (unit.includes('met')) return 'metre';
+  // A projected CRS with no stated unit is metres by overwhelming convention,
+  // but saying so would be a guess printed as a fact — and the whole point of
+  // this caption is that the reader can trust what the grid claims.
+  return crs.kind === 'projected' ? 'metre' : 'unknown';
+}
+
 export function sameCrs(a: CrsRef | null, b: CrsRef | null): boolean {
   if (!a || !b) return false;
   if (a.epsg && b.epsg) return a.epsg === b.epsg;

@@ -75,10 +75,42 @@ export interface EditHost {
   snap?: (ref: VertexRef, to: Position) => Position;
   /** Live position during a drag, for the readout. */
   onDragPosition?: (position: Position) => void;
+  /**
+   * Open whatever feature is under the pointer for vertex editing.
+   *
+   * THE GESTURE THAT WAS MISSING. Vertices are only pickable once a target is
+   * set, and the only thing that set one was a two-dropdown-and-a-button flow
+   * in the Edit tab: choose a layer, choose a feature, press Open. So picking
+   * the Vertex tool and clicking the drawing — the way every CAD package
+   * works — did nothing at all, and the vertices stayed invisible because
+   * there was nothing to draw.
+   *
+   * Returning true means a feature was opened and the click is spent.
+   */
+  onPickFeature?: (world: { x: number; y: number }) => boolean;
+  /**
+   * The rings of whatever feature a click at this position would open.
+   *
+   * Used for pre-highlight only — nothing is opened, nothing is changed. It is
+   * what makes an armed Vertex tool look alive before the first click: the
+   * outline under the cursor lights up and its vertices appear as hollow
+   * ghosts, so "click here and you will get these grips" is answered without
+   * committing to it. Returning null means nothing editable is under the
+   * pointer.
+   */
+  ringsUnder?: (world: { x: number; y: number }) => Position[][] | null;
+  /**
+   * Close the open feature and go back to picking one.
+   *
+   * Escape has to clear `ui.editTarget` as well as the canvas's own copy, or
+   * the next render would read the panel's target and re-open the feature the
+   * user just dismissed.
+   */
+  onCloseTarget?: () => void;
 }
 
 /** Pick radius in screen pixels — constant to the finger at any zoom. */
-const PICK_RADIUS_PX = 10;
+export const PICK_RADIUS_PX = 10;
 
 const HANDLE_COLOR = '#58a6ff';
 const HANDLE_SELECTED = '#f5b041';
@@ -94,12 +126,23 @@ const SEGMENT_HINT = '#3fb950';
  * thinking about it.
  */
 const TRACE_COLOR = 'rgba(140, 148, 158, 0.85)';
+/** Pre-highlight: the same blue as a handle, dimmed, so it reads as "not yet". */
+const CANDIDATE_COLOR = 'rgba(88, 166, 255, 0.7)';
 
 export class EditCanvas {
   private target: EditTarget | null = null;
   private selection: VertexRef[] = [];
   private hover: PickResult | null = null;
   private segmentHint: SegmentPick | null = null;
+
+  /**
+   * The feature the pointer is over while nothing is open yet.
+   *
+   * Pre-highlight, not state: it is recomputed on every move and never read by
+   * anything that edits. Holding the rings rather than a reference keeps the
+   * drawing code identical to the armed case.
+   */
+  private candidate: Position[][] | null = null;
 
   /** Set while a drag is in progress; null otherwise. */
   private drag: {
@@ -148,6 +191,7 @@ export class EditCanvas {
       this.selection = [];
       this.hover = null;
       this.segmentHint = null;
+      this.candidate = null;
       this.drag = null;
       this.host.onSelectionChange([]);
     }
@@ -159,11 +203,24 @@ export class EditCanvas {
     return this.enabled;
   }
 
+  /**
+   * Whether Escape has something to give up here, before it reaches the shell.
+   *
+   * The workspace's global shortcut turns Escape into "back to Pan", and it
+   * used to do that for every press that was not mid-drawing — so Escape
+   * closed the whole Vertex tool rather than stepping back one level, and the
+   * ladder this class implements was unreachable. The shell asks first now.
+   */
+  consumesEscape(): boolean {
+    return this.enabled && (this.selection.length > 0 || this.target !== null);
+  }
+
   /** Opens a feature for editing, or closes the editor with null. */
   setTarget(target: EditTarget | null): void {
     this.target = target;
     this.selection = [];
     this.hover = null;
+    this.candidate = null;
     this.drag = null;
     this.host.onSelectionChange([]);
     this.preview.render();
@@ -240,9 +297,22 @@ export class EditCanvas {
   // ------------------------------------------------------------- interaction
 
   private handlePointerDown = (event: PointerEvent): void => {
-    if (!this.enabled || !this.target || event.button !== 0) return;
+    if (!this.enabled || event.button !== 0) return;
 
     const world = this.preview.unproject(event.offsetX, event.offsetY);
+
+    // NO TARGET YET: the click chooses what to edit, rather than being thrown
+    // away. This condition used to include `!this.target`, so the editor
+    // ignored every pointer event until a feature had been opened from a panel
+    // — which is why the tool looked dead on the canvas.
+    if (!this.target) {
+      if (this.host.onPickFeature?.(world)) {
+        stop(event);
+        this.preview.render();
+      }
+      return;
+    }
+
     const picked = this.pickVertex(world);
 
     // Alt-click on a segment inserts. Checked before the vertex pick would
@@ -257,6 +327,16 @@ export class EditCanvas {
     }
 
     if (!picked) {
+      // Missed every vertex, but maybe hit another feature — so the click
+      // moves the editor there, the way clicking a second object in CAD shows
+      // its grips instead of making you close the first one.
+      if (this.host.onPickFeature?.(world)) {
+        stop(event);
+        this.selection = [];
+        this.host.onSelectionChange([]);
+        this.preview.render();
+        return;
+      }
       // A click on empty space clears the selection rather than starting a
       // drag — and does NOT stop the event, so the canvas still pans.
       if (this.selection.length > 0) {
@@ -291,8 +371,23 @@ export class EditCanvas {
   };
 
   private handlePointerMove = (event: PointerEvent): void => {
-    if (!this.enabled || !this.target) return;
+    if (!this.enabled) return;
     const world = this.preview.unproject(event.offsetX, event.offsetY);
+
+    // NOTHING OPEN YET: light up what a click would open.
+    //
+    // Without this the armed tool gives no feedback at all until after the
+    // click, so a miss and a tool that does not work look identical — which is
+    // exactly how this tool was reported as broken.
+    if (!this.target) {
+      const rings = this.host.ringsUnder?.(world) ?? null;
+      const changed = ringsChanged(this.candidate, rings);
+      this.candidate = rings;
+      this.preview.element.style.cursor = rings ? 'pointer' : 'crosshair';
+      if (changed) this.preview.render();
+      return;
+    }
+    this.candidate = null;
 
     if (this.drag) {
       stop(event);
@@ -341,25 +436,43 @@ export class EditCanvas {
   };
 
   private handleKey(event: KeyboardEvent): void {
-    if (!this.enabled || this.selection.length === 0) return;
+    if (!this.enabled) return;
     // Never steal a key from a text field the user is typing in.
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
 
-    if (event.key === 'Delete' || event.key === 'Backspace') {
+    if ((event.key === 'Delete' || event.key === 'Backspace') && this.selection.length > 0) {
       event.preventDefault();
       this.host.onDeleteVertices(this.selection);
-    } else if (event.key === 'Escape') {
+      return;
+    }
+    if (event.key !== 'Escape') return;
+
+    // ESCAPE STEPS BACK ONE LEVEL, the way it does in CAD: first it drops the
+    // vertex selection, and only once nothing is selected does it close the
+    // feature and hand the tool back to picking. One key that always means
+    // "undo the last narrowing" beats two keys the user has to choose between.
+    if (this.selection.length > 0) {
       this.selection = [];
       this.host.onSelectionChange([]);
       this.preview.render();
+      return;
+    }
+    if (this.target) {
+      event.preventDefault();
+      this.setTarget(null);
+      this.host.onCloseTarget?.();
     }
   }
 
   // ------------------------------------------------------------- drawing
 
   private draw(context: CanvasRenderingContext2D, project: (x: number, y: number) => { x: number; y: number }): void {
-    if (!this.enabled || !this.target) return;
+    if (!this.enabled) return;
+    if (!this.target) {
+      this.drawCandidate(context, project);
+      return;
+    }
     context.save();
 
     // WHERE IT WAS, then where it is going.
@@ -410,6 +523,47 @@ export class EditCanvas {
       context.moveTo(screen.x, screen.y - 8);
       context.lineTo(screen.x, screen.y + 8);
       context.stroke();
+    }
+
+    context.restore();
+  }
+
+  /**
+   * The feature under the pointer, before it is opened.
+   *
+   * Drawn as the outline plus HOLLOW grips: the same marks the armed editor
+   * uses, unfilled, so the promise "these are the vertices you are about to
+   * get" is made in the vocabulary the next click delivers.
+   */
+  private drawCandidate(
+    context: CanvasRenderingContext2D,
+    project: (x: number, y: number) => { x: number; y: number }
+  ): void {
+    if (!this.candidate) return;
+    context.save();
+    context.strokeStyle = CANDIDATE_COLOR;
+    context.lineWidth = 2;
+
+    for (const ring of this.candidate) {
+      if (ring.length === 0) continue;
+      context.beginPath();
+      for (const [index, position] of ring.entries()) {
+        const screen = project(position[0], position[1]);
+        if (index === 0) context.moveTo(screen.x, screen.y);
+        else context.lineTo(screen.x, screen.y);
+      }
+      if (ring.length > 1) context.stroke();
+
+      const closed = isClosed(ring);
+      const limit = closed ? ring.length - 1 : ring.length;
+      context.lineWidth = 1.5;
+      for (let index = 0; index < limit; index++) {
+        const screen = project(ring[index][0], ring[index][1]);
+        context.beginPath();
+        context.arc(screen.x, screen.y, 3.5, 0, Math.PI * 2);
+        context.stroke();
+      }
+      context.lineWidth = 2;
     }
 
     context.restore();
@@ -529,6 +683,25 @@ function toggle(selection: VertexRef[], ref: VertexRef): VertexRef[] {
   return selection.some((candidate) => sameRef(candidate, ref))
     ? selection.filter((candidate) => !sameRef(candidate, ref))
     : [...selection, ref];
+}
+
+/**
+ * Whether the pre-highlight needs repainting.
+ *
+ * Compared by first vertex and length rather than deeply: the rings come
+ * straight out of the preview dataset, so two different features agreeing on
+ * both would have to be coincident, and a full deep compare would run on every
+ * pointer move over a drawing with thousands of vertices.
+ */
+function ringsChanged(before: Position[][] | null, after: Position[][] | null): boolean {
+  if (!before || !after) return before !== after;
+  if (before.length !== after.length) return true;
+  return before.some((ring, index) => {
+    const other = after[index];
+    if (ring.length !== other.length) return true;
+    if (ring.length === 0) return false;
+    return ring[0][0] !== other[0][0] || ring[0][1] !== other[0][1];
+  });
 }
 
 function isClosed(ring: Position[]): boolean {

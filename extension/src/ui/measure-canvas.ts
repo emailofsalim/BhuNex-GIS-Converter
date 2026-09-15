@@ -90,6 +90,17 @@ export class MeasureCanvas {
     return this.mode;
   }
 
+  /**
+   * Whether Escape has something to give up here, before it reaches the shell.
+   *
+   * A measurement in progress is worth more than the tool that made it: losing
+   * both to one keypress leaves the user to work out which of the two they had
+   * lost. The shell asks this before it returns the canvas to Pan.
+   */
+  consumesEscape(): boolean {
+    return this.mode !== 'off' && this.points.length > 0;
+  }
+
   clear(): void {
     this.points = [];
     this.closed = false;

@@ -355,6 +355,31 @@ export function buildCommands(): Command[] {
     });
   }
 
+  // THE RESULTS SECTIONS, which render into the other body.
+  //
+  // They were reachable only by clicking, because the loop above goes through
+  // `showInspectorTab` and these are `showBottomTab` names. Health and History
+  // had hand-written commands of their own; QA, the log, the delivery tree and
+  // the manifest had none at all — so the four things a surveyor checks AFTER
+  // a conversion were the four the keyboard could not reach.
+  for (const [tab, label, keywords] of [
+    ['qa', 'QA and fidelity report', ['qa', 'fidelity', 'verdict', 'report', 'check']],
+    ['log', 'Log', ['log', 'messages', 'errors', 'warnings', 'console']],
+    ['delivery', 'Delivery tree', ['delivery', 'tree', 'folders', 'output', 'structure']],
+    ['manifest', 'Manifest', ['manifest', 'csv', 'batch', 'index']],
+    ['workflows', 'Workflows', ['workflows', 'saved', 'replay', 'macro', 'automate']],
+  ] as [string, string, string[]][]) {
+    commands.push({
+      id: `bottom-${tab}`,
+      title: `Show ${label}`,
+      group: 'View',
+      keywords: ['tab', 'panel', 'results', ...keywords],
+      enabled: Boolean(item),
+      disabledReason: 'Select a queued file first.',
+      run: () => host.showBottomTab(tab),
+    });
+  }
+
   commands.push({
     id: 'settings',
     title: 'Open settings',

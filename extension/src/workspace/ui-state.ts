@@ -80,6 +80,16 @@ export interface UiState {
    */
   ribbonTab?: string;
   /**
+   * A folded ribbon, dropped open for one use.
+   *
+   * Excel's rule, and the one that makes a folded ribbon usable rather than a
+   * ribbon you have to unfold: while it is folded, clicking a tab shows that
+   * tab's controls until the next click on the canvas, then folds again. It is
+   * a transient, so it is NOT persisted — a reload starts folded, the way the
+   * user left it.
+   */
+  ribbonPeek?: boolean;
+  /**
    * The placement in progress, and the untouched source it is placed FROM.
    *
    * `georefOriginal` is the surveyor's original local-grid dataset and is never
