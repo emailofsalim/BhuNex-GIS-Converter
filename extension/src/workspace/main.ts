@@ -30,7 +30,7 @@ import {
   toggleBatchPause,
 } from './conversion';
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
-import { installCollapse, makeCollapsible } from './collapse';
+import { installCollapse, isCollapsed, makeCollapsible, setCollapsed } from './collapse';
 import { host, installHost } from './host';
 import { attributesTab } from './panels/attributes';
 import { backdropTab } from './panels/backdrop-tab';
@@ -754,6 +754,41 @@ function wire(): void {
   // without a five-row wrap or a scrollbar nobody can hit.
   for (const gtab of Array.from(document.querySelectorAll('[data-group]'))) {
     gtab.addEventListener('click', () => showInspectorGroup((gtab as HTMLElement).dataset.group!));
+  }
+
+  // ONE fold for the whole group row.
+  //
+  // The section strip below already folds to just the section you are in, with
+  // a "More" chevron — and the row above it, Data / Edit / Export / Results,
+  // did not, so two tab rows sat permanently above the panel content. This
+  // gives that row the same treatment one level up, and deliberately ONE
+  // control rather than a chevron per tab: four collapse buttons to hide four
+  // buttons is not a saving.
+  //
+  // Folded, the row keeps the tab you are on — "Data ▸" — because a strip that
+  // folds to nothing is a strip you cannot get back, and you would also lose
+  // track of which group the panel below belongs to.
+  const groupRow = document.querySelector('.groups__top');
+  if (groupRow) {
+    const KEY = 'inspector groups';
+    const fold = element('button', {
+      class: 'groups__drop groups__fold',
+      type: 'button',
+      title: 'Show or hide the other groups',
+    });
+    const paintFold = (): void => {
+      const closed = isCollapsed(KEY);
+      groupRow.classList.toggle('groups__top--closed', closed);
+      fold.textContent = closed ? '▸' : '▾';
+      fold.setAttribute('aria-expanded', String(!closed));
+      fold.title = closed ? 'Show the other groups' : 'Hide the other groups';
+    };
+    fold.addEventListener('click', () => {
+      setCollapsed(KEY, !isCollapsed(KEY));
+      paintFold();
+    });
+    groupRow.append(fold);
+    paintFold();
   }
 
   // The toolbar builds Undo and Redo, so it needs to be able to call them.
