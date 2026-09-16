@@ -43,8 +43,19 @@
           <select class="select" id="targetSelect" aria-label="Output format"></select>
         </div>
 
+        <!--
+          IMPORT, CONVERT, DOWNLOAD — the whole job, in the order it happens.
+
+          The panel could only take files by DROPPING them or by clicking the
+          drop zone, which is a target that does not look like a button and
+          says "Drop files here" rather than offering to open a picker. A
+          surveyor with the file in a folder rather than in another window had
+          no visible way in, and the one control that did work was the least
+          discoverable thing on the panel.
+        -->
         <div class="section">
           <div class="row wrap">
+            <button class="btn" id="importBtn" title="Choose files to convert">Import files</button>
             <button class="btn btn--primary" id="convertBtn" disabled>Convert all</button>
             <button class="btn" id="downloadBtn" disabled>Download</button>
           </div>

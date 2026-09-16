@@ -24,7 +24,7 @@ import {
 } from '../../core/cir';
 import { ConversionError } from '../../core/errors';
 import { closeRing } from '../../core/geometry';
-import { formatFixed, type PrecisionPolicy } from '../../core/precision';
+import { decimalsFor, formatFixed, type PrecisionPolicy } from '../../core/precision';
 import { crsFromEpsg } from '../../crs/epsg';
 import { linearUnitFromWktName, type LinearUnitId } from '../../core/units';
 import { deriveFields, xmlEscape } from '../shared';
@@ -310,7 +310,10 @@ export interface WriteLandXmlOptions {
  */
 export function writeLandXml(dataset: CirDataset, options: WriteLandXmlOptions): { text: string; warnings: Warning[] } {
   const warnings: Warning[] = [];
-  const decimals = options.precision.mode === 'full' ? 6 : options.precision.linearDecimals;
+  // LandXML holds whatever the dataset is in, so the decimals depend on the
+  // CRS. Reaching for `linearDecimals` unconditionally is what wrote a WGS 84
+  // parcel as `23.429 80.139` — three decimals of a degree is 111 metres.
+  const decimals = decimalsFor(options.precision, dataset.crs, 6);
   const point = (position: Position): string => {
     const north = formatFixed(position[1], decimals);
     const east = formatFixed(position[0], decimals);

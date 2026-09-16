@@ -219,7 +219,17 @@ textarea {
 
 .app {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  /* THE WORK AREA IS THE ROW THAT GROWS, and it is the third child.
+     This read `auto 1fr auto`, which handed the `1fr` to the second child —
+     the 3px progress hairline — and left `.work` sized to its own content.
+     While the content was tall the mistake was invisible, because an `auto`
+     row sized to content is about the height of the screen anyway. It showed
+     up the moment the content was SHORT: below the 900px breakpoint the rail
+     and the dock become `position: absolute` and leave the flow, so with an
+     empty queue `.work` held only a 64px ribbon — and the workspace collapsed
+     to a 70px strip at the bottom of the window under 683px of stretched
+     hairline. That is what a reload with nothing loaded looked like. */
+  grid-template-rows: auto auto 1fr;
   /* dvh follows the browser UI as it hides and shows; vh does not, and on a
      phone that difference is a bottom dock permanently under the URL bar.
      The vh line is the fallback for anything without dvh. */
@@ -388,6 +398,56 @@ textarea {
   position: absolute;
   inset: 0;
   background: var(--surface-sunken);
+}
+
+/* ---- THE CANVAS CONTEXT MENU ------------------------------------------
+   `fixed`, so it is positioned against the viewport rather than inheriting the
+   canvas's transform, and cannot be clipped by the stage's `overflow: hidden`.
+   Its z-index clears the ribbon, which is the only other positioned thing the
+   pointer can be over when it opens. */
+.cmenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  max-width: 300px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 34px rgb(0 0 0 / 30%);
+}
+
+.cmenu__item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmenu__item:hover:not(:disabled) {
+  background: var(--bg);
+}
+
+/* A disabled row still says what WOULD be here, which is why it is shown at
+   all: "Nothing under the pointer" is information, an absent row is not. */
+.cmenu__item:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.cmenu__sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
 }
 
 /* ---- THE RIBBON -------------------------------------------------------

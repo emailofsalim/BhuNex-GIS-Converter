@@ -222,6 +222,8 @@ function wire(): void {
     targetFormatId = (event.target as HTMLSelectElement).value || null;
     render();
   });
+  // The same picker the drop zone opens, behind a control that looks like one.
+  byId('importBtn').addEventListener('click', () => picker.click());
   byId('convertBtn').addEventListener('click', () => void convertAll());
   byId('downloadBtn').addEventListener('click', downloadAll);
   byId('openWorkspace').addEventListener('click', () => {
@@ -240,6 +242,21 @@ function wire(): void {
     void chrome.tabs.create({
       url: chrome.runtime.getURL(chrome.runtime.getManifest().options_page ?? 'src/workspace/index.html'),
     });
+
+    // AND CLOSE THIS PANEL BEHIND IT.
+    //
+    // The two are alternatives, not companions: the workspace is the full tool
+    // and the panel is the beside-the-page version of the same queue. Leaving
+    // the panel open squeezes the workspace into what is left of the window —
+    // which is also what pushed it under the 900px breakpoint, where the layout
+    // used to collapse. `window.close()` is the documented way for a side panel
+    // to dismiss itself; it is wrapped because a panel opened as an ordinary
+    // tab (which is how it is tested) is not allowed to.
+    try {
+      window.close();
+    } catch {
+      /* Not a side panel — nothing to close. */
+    }
   });
 }
 

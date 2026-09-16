@@ -134,6 +134,42 @@ export class PreviewCanvas {
   private bounds: Bounds | null = null;
   private view: View = { scale: 1, offsetX: 0, offsetY: 0 };
   private showGrid = true;
+  /**
+   * What the canvas is currently showing, so a re-render of the SAME subject
+   * can keep the view while a new one is fitted. Undefined means nothing.
+   */
+  private identity: string | undefined = undefined;
+  private hasFitted = false;
+  /**
+   * Whether the fit that produced the current view was measured against a REAL
+   * canvas size.
+   *
+   * The canvas is inside `#previewWrap`, which is `hidden` until a file is
+   * selected — so the first `setData` usually fits against a zero-sized element
+   * and falls back to a notional 800x400. That produced a view at roughly the
+   * wrong scale and, once `setData` stopped re-fitting on every render to
+   * preserve the user's zoom, nothing ever corrected it: the drawing stayed
+   * mis-scaled and every hit test missed, because unproject was answering in a
+   * coordinate frame the data does not live in.
+   */
+  private fittedWithLayout = false;
+  /**
+   * How much narrower a degree of longitude is than a degree of latitude here.
+   *
+   * A canvas that plots lon/lat straight onto x/y draws the world stretched
+   * sideways by 1/cos(latitude) — 8% at 23°N, and a factor of TWO at 60°. That
+   * is why the Compare panes looked like they held different geometry when the
+   * conversion had changed nothing: the source pane was a projected grid in
+   * metres and the output pane was the same shapes in degrees, so every
+   * elongated feature came out a visibly different shape beside itself.
+   *
+   * Measured on a real DXF → KML: identical vertex counts on every ring, under
+   * 1% deviation on compact features, and 7–13% on the long thin ones — the
+   * signature of an aspect error rather than a geometry one.
+   *
+   * 1 for anything projected, where x and y are already the same unit.
+   */
+  private xScale = 1;
   private dragging = false;
   private lastPointer = { x: 0, y: 0 };
   private onReadout?: (text: string) => void;
@@ -171,7 +207,7 @@ export class PreviewCanvas {
     const width = rect.width || 800;
     const height = rect.height || 400;
     this.view.scale = view.scale;
-    this.view.offsetX = width / 2 - view.centreX * view.scale;
+    this.view.offsetX = width / 2 - view.centreX * view.scale * this.xScale;
     this.view.offsetY = height / 2 + view.centreY * view.scale;
     this.echoing = true;
     this.render();
@@ -213,7 +249,7 @@ export class PreviewCanvas {
         const before = this.toWorld(event.offsetX, event.offsetY);
         this.view.scale *= factor;
         const after = this.toWorld(event.offsetX, event.offsetY);
-        this.view.offsetX += (after.x - before.x) * this.view.scale;
+        this.view.offsetX += (after.x - before.x) * this.view.scale * this.xScale;
         this.view.offsetY -= (after.y - before.y) * this.view.scale;
         this.render();
         this.announceView();
@@ -236,13 +272,50 @@ export class PreviewCanvas {
     this.canvas.width = Math.round(rect.width * ratio);
     this.canvas.height = Math.round(rect.height * ratio);
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    // THE FIRST REAL SIZE EARNS A REAL FIT.
+    //
+    // Only when the view still comes from a provisional fit — never once the
+    // canvas has been fitted against a genuine size, because from then on the
+    // view is the user's and resizing the window must not throw their zoom
+    // away. This is the one thing that used to be repaired by `setData`
+    // re-fitting on every render.
+    if (!this.fittedWithLayout && this.bounds && rect.width > 0 && rect.height > 0) {
+      this.fit();
+      return;
+    }
     this.render();
   }
 
-  setData(data: PreviewData): void {
+  /**
+   * Replaces what is drawn, and fits ONLY when the subject changed.
+   *
+   * This used to call `fit()` every time, and `renderPreview` runs on every
+   * render of the workspace — so every edit, every layer toggle, every panel
+   * switch threw away the pan and zoom and jumped back to the whole drawing.
+   * Zooming into a corner to nudge a boundary against the basemap and having
+   * the view snap out on the first drag is not a preference, it is the tool
+   * refusing to be worked in.
+   *
+   * `identity` is what the canvas is showing — the queue item's id. A new
+   * subject is fitted because the previous view describes somewhere else
+   * entirely; the SAME subject re-rendered keeps the view, even though an edit
+   * may have moved its bounds slightly. Fit is still one keystroke (F) away
+   * when it is actually wanted.
+   */
+  setData(data: PreviewData, identity?: string): void {
     this.data = data;
     this.bounds = computeBounds(data);
-    this.fit();
+    this.xScale = this.computeXScale();
+
+    const changed = identity !== this.identity;
+    this.identity = identity;
+    if (changed || !this.hasFitted) {
+      this.hasFitted = true;
+      this.fit();
+      return;
+    }
+    this.render();
   }
 
   toggleGrid(): void {
@@ -254,19 +327,25 @@ export class PreviewCanvas {
     const rect = this.canvas.getBoundingClientRect();
     const width = rect.width || 800;
     const height = rect.height || 400;
+    // A fit against a hidden canvas is provisional: it used the fallback size,
+    // so `resize` must redo it once the element actually has one.
+    this.fittedWithLayout = rect.width > 0 && rect.height > 0;
     if (!this.bounds || !Number.isFinite(this.bounds.minX)) {
       this.view = { scale: 1, offsetX: width / 2, offsetY: height / 2 };
       this.render();
       this.announceView();
       return;
     }
-    const spanX = Math.max(this.bounds.maxX - this.bounds.minX, 1e-9);
+    // The x span is measured in SCREEN terms, so the squeeze is part of what
+    // has to fit — otherwise a geographic dataset is fitted to a width it will
+    // not occupy and sits off-centre.
+    const spanX = Math.max((this.bounds.maxX - this.bounds.minX) * this.xScale, 1e-9);
     const spanY = Math.max(this.bounds.maxY - this.bounds.minY, 1e-9);
     const padding = 28;
     this.view.scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
     const centreX = (this.bounds.minX + this.bounds.maxX) / 2;
     const centreY = (this.bounds.minY + this.bounds.maxY) / 2;
-    this.view.offsetX = width / 2 - centreX * this.view.scale;
+    this.view.offsetX = width / 2 - centreX * this.view.scale * this.xScale;
     // Screen y grows downward while northing grows upward, hence the sign.
     this.view.offsetY = height / 2 + centreY * this.view.scale;
     this.render();
@@ -325,11 +404,33 @@ export class PreviewCanvas {
   }
 
   private toScreen(x: number, y: number): { x: number; y: number } {
-    return { x: x * this.view.scale + this.view.offsetX, y: this.view.offsetY - y * this.view.scale };
+    return {
+      x: x * this.view.scale * this.xScale + this.view.offsetX,
+      y: this.view.offsetY - y * this.view.scale,
+    };
   }
 
   private toWorld(screenX: number, screenY: number): { x: number; y: number } {
-    return { x: (screenX - this.view.offsetX) / this.view.scale, y: (this.view.offsetY - screenY) / this.view.scale };
+    return {
+      x: (screenX - this.view.offsetX) / (this.view.scale * this.xScale),
+      y: (this.view.offsetY - screenY) / this.view.scale,
+    };
+  }
+
+  /**
+   * The longitude squeeze for the data currently loaded.
+   *
+   * Taken at the middle of the extent rather than per-vertex: this is a view
+   * correction, not a projection, and a factor that varied down the canvas
+   * would bend straight lines. Over the span of one survey the difference is
+   * far below a pixel; over a continent the right answer is to reproject, which
+   * is what the conversion does.
+   */
+  private computeXScale(): number {
+    if (this.data.crs?.unit !== 'degree' || !this.bounds || !Number.isFinite(this.bounds.minY)) return 1;
+    const midLat = (this.bounds.minY + this.bounds.maxY) / 2;
+    if (!Number.isFinite(midLat) || Math.abs(midLat) > 89.5) return 1;
+    return Math.max(Math.cos((midLat * Math.PI) / 180), 0.05);
   }
 
   private style(name: string): string {
