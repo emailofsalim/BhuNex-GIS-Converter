@@ -83,7 +83,9 @@ export function layerOfCommand(command: EditCommand): string | null {
   if (command.kind === 'vertices') return null;
   // A placement moves the whole drawing, so it belongs to no single layer.
   if (command.kind === 'georeference') return null;
-  return command.layer;
+  // A repair with no layer named runs across all of them, which is the same
+  // "belongs to no single layer" case rather than a missing value.
+  return command.layer ?? null;
 }
 
 /** Re-runs one command against the loaded preview, so the UI shows its effect. */

@@ -18,7 +18,7 @@
  * alternative is a browser test that costs a minute and catches the same thing.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { GEOMETRY_LABEL, type GeometryOperation } from '@core/geometry-ops';
@@ -34,38 +34,28 @@ function read(...parts: string[]): string {
 const HTML = read('extension', 'src', 'workspace', 'index.html');
 const MAIN = read('extension', 'src', 'workspace', 'main.ts');
 
-/** Every workspace source file, as text, for the cross-file checks. */
+/**
+ * Every workspace source, read from the directory rather than from a list.
+ *
+ * This WAS a hand-maintained array of 24 filenames, and it went stale the first
+ * time a panel was added: `panels/repair.ts` produced a `repair` command, the
+ * array did not mention it, and "every edit command can be produced" reported
+ * the command as produced by nothing. A test whose coverage is a typed-out list
+ * fails in the direction that looks like a real defect, which is the expensive
+ * direction — someone goes looking for the missing producer that is already
+ * there.
+ */
 function workspaceSources(): { name: string; text: string }[] {
-  const files = [
-    'main.ts',
-    'conversion.ts',
-    'dom.ts',
-    'host.ts',
-    'ui-state.ts',
-    ...[
-      'attributes',
-      'backdrop-tab',
-      'canvas',
-      'commands',
-      'compare',
-      'georef',
-      'dataset',
-      'edit-tab',
-      'edits',
-      'formats',
-      'geometry-ops',
-      'health',
-      'history',
-      'inspector',
-      'layers',
-      'measure',
-      'queue',
-      'select-tab',
-      'settings',
-      'workflows',
-    ].map((name) => `panels/${name}.ts`),
+  const base = join(ROOT, 'extension', 'src', 'workspace');
+  const names = [
+    ...readdirSync(base, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+      .map((entry) => entry.name),
+    ...readdirSync(join(base, 'panels'), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+      .map((entry) => `panels/${entry.name}`),
   ];
-  return files.map((name) => ({ name, text: read('extension', 'src', 'workspace', name) }));
+  return names.map((name) => ({ name, text: read('extension', 'src', 'workspace', name) }));
 }
 
 describe('every tab reaches a panel', () => {
@@ -776,5 +766,76 @@ describe('every sidecar keeps the base name of the file it describes', () => {
     // covered on the day it is added rather than the day someone notices.
     const PIPELINE = read('extension', 'src', 'core', 'pipeline.ts');
     expect(PIPELINE).toMatch(/dataKind === 'sidecar'/);
+  });
+});
+
+describe('the repair engine is reachable, and every operation it has is offered', () => {
+  /**
+   * THE DEFECT THIS EXISTS TO PREVENT, which had already happened.
+   *
+   * `qa/repair.ts` carried the entire §24.1 contract — plan without touching,
+   * apply with an undo diff, protected layers refused and counted — from Phase
+   * 10 onward, and NOTHING in the workspace called any of it. The only repair
+   * a user could reach was four checkboxes in Settings, which are conversion
+   * settings running inside `qa/topology.ts`: no preview, no scope, no undo.
+   *
+   * §24.1 opens by saying that is the wrong shape for editing, which is why
+   * `qa/repair.ts` was written at all. So the engine implementing the right
+   * shape was complete and unreachable while the shape it replaced was the only
+   * one shipped — the fifth instance of this codebase's house defect.
+   */
+  it('has a panel that calls plan and queues a command', () => {
+    const PANEL = read('extension', 'src', 'workspace', 'panels', 'repair.ts');
+    expect(PANEL).toContain('planRepair(');
+    expect(PANEL).toContain("kind: 'repair'");
+    expect(PANEL).toContain('queueEdit(');
+  });
+
+  it('is dispatched from the inspector switch and imported by it', () => {
+    // A tab with no `case` renders an empty dock and looks like a dead button.
+    const MAIN = read('extension', 'src', 'workspace', 'main.ts');
+    expect(MAIN).toContain("import { repairTab } from './panels/repair'");
+    expect(MAIN).toMatch(/case 'repair':\s*\n\s*body\.append\(\.\.\.repairTab\(item\)\);/);
+  });
+
+  it('is listed as a section of a panel tab, so there is a button to press', async () => {
+    const { PANEL_TABS: tabs } = await import('../src/workspace/panels/toolbar');
+    const sections = tabs.flatMap((tab) => tab.sections.map((section) => section.tab));
+    expect(sections).toContain('repair');
+  });
+
+  it('replays through the edit pipeline rather than only touching the preview', async () => {
+    // The preview holds a truncated copy. A repair applied only there produces
+    // a file that matches the screen and not the request.
+    const EDITS = read('extension', 'src', 'core', 'edits.ts');
+    expect(EDITS).toContain("case 'repair'");
+    expect(EDITS).toContain('applyRepair(');
+  });
+
+  it('offers every operation the engine implements, with none invented', async () => {
+    // The two lists drifting apart is how an operation ships unreachable, or a
+    // menu entry selects an id the engine will not answer to.
+    const { REPAIR_LABEL: labels } = await import('../src/qa/repair');
+    const PANEL = read('extension', 'src', 'workspace', 'panels', 'repair.ts');
+    const groups = PANEL.slice(PANEL.indexOf('const GROUPS'), PANEL.indexOf('const HINT'));
+    for (const operation of Object.keys(labels)) {
+      expect(groups, `"${operation}" is implemented but not offered anywhere in the panel`).toContain(`'${operation}'`);
+    }
+    // And every id the panel names is one the engine knows.
+    for (const quoted of groups.match(/'[a-z-]+'/g) ?? []) {
+      const id = quoted.slice(1, -1);
+      if (id.length < 5) continue;
+      expect(Object.keys(labels), `the panel offers "${id}", which the engine does not implement`).toContain(id);
+    }
+  });
+
+  it('gives every operation a hint, so no menu entry is unexplained', async () => {
+    const { REPAIR_LABEL: labels } = await import('../src/qa/repair');
+    const PANEL = read('extension', 'src', 'workspace', 'panels', 'repair.ts');
+    const hints = PANEL.slice(PANEL.indexOf('const HINT'), PANEL.indexOf('const NEEDS_TOLERANCE'));
+    for (const operation of Object.keys(labels)) {
+      const key = /^[a-z]+$/.test(operation) ? operation : `'${operation}'`;
+      expect(hints, `"${operation}" has no hint`).toContain(key);
+    }
   });
 });

@@ -38,6 +38,7 @@ import { clearPreview, ensureBackdrop, renderCompare, renderPreview, updateLinkB
 import { buildCommands } from './panels/commands';
 import { compareTab, fidelityTab, warningsTab } from './panels/compare';
 import { geometryOpsTab } from './panels/geometry-ops';
+import { repairTab } from './panels/repair';
 import { editTab, renderEdit } from './panels/edit-tab';
 import { renderFormats } from './panels/formats';
 import { renderMeasure, setMeasureMode, stopMeasuring, updateMeasureBar, wireMeasureBar } from './panels/measure';
@@ -370,6 +371,9 @@ function renderInspector(): void {
       break;
     case 'geometry-ops':
       body.append(...geometryOpsTab(item));
+      break;
+    case 'repair':
+      body.append(...repairTab(item));
       break;
     case 'backdrop':
       // The canvas already exists (hoisted above the switch), so the backdrop
