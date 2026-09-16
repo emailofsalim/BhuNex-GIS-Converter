@@ -233,9 +233,22 @@ gaps, NOT because they are the next thing to do:
   - SQLite for GeoPackage is roughly 1.2 MB
 
 Bundling both roughly triples the package, and R15 forbids fetching them at
-runtime, so there is no version of this that keeps the download small. That is a
-decision for the owner rather than an obvious next step — the honest refusals
-stay until it is made.
+runtime, so there is no version of this that keeps the download small.
+
+**DECIDED 2026-09-16: NEITHER IS BUNDLED. The honest refusals stay.**
+
+The owner was asked directly, with the sizes above, and chose to keep the
+package small. The reasoning is the install: this is an extension someone
+downloads and loads by hand, and a 0.46 MB archive that works in four clicks
+is worth more to the people who actually use it than two formats they mostly
+do not. A refusal that says what happened and why is not a hole in the
+product — R5 exists precisely so a compressed payload is REPORTED rather than
+mis-parsed into plausible rubbish.
+
+So items 1 and 2 below are not "next", and a future session should not treat
+them as the obvious thing to pick up. Reopen them only if the owner says so.
+What that leaves as genuinely open is the CROSS-FEATURE repair operations in
+§24.2, which are pure TypeScript and carry no size cost at all.
 
 1. **Phase 5 — LAZ.** Bundle a genuine laszip decoder (WASM), then flip LAZ off
    `adapter` in the registry. Until then the honest refusal stays: rule R5 says
