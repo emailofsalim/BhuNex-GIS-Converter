@@ -277,6 +277,7 @@ export const PANEL_TABS: RibbonPanelTab[] = [
       { label: 'Vertices', tab: 'edit' },
       { label: 'Measure', tab: 'measure' },
       { label: 'Geometry tools', tab: 'geometry-ops' },
+      { label: 'Repair', tab: 'repair' },
       { label: 'Backdrop', tab: 'backdrop' },
       { label: 'Georeference', tab: 'georef' },
     ],

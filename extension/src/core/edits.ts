@@ -68,6 +68,7 @@ import {
   type SplitBy,
 } from './layers';
 import { applyEdit, type EditPlan } from './vertex-edit';
+import { applyRepair, REPAIR_LABEL, type RepairOperationId, type RepairOptions } from '../qa/repair';
 import { applyGeoreference } from './georeference-apply';
 import { crsLabel } from '../crs/transform';
 import type { Affine } from './georeference';
@@ -103,6 +104,15 @@ export type EditCommand =
   // the replay reads it from the dataset, so a command saved in a project file
   // is re-gated against whatever CRS the file actually has when it reopens.
   | { kind: 'geometry'; layer: string; operation: GeometryOperation; options: StoredGeometryOptions }
+  /**
+   * An interactive geometry repair (spec §24).
+   *
+   * Distinct from the `repair*` conversion SETTINGS, which run inside
+   * `qa/topology.ts` on every file the pipeline touches. This is the editing
+   * shape §24.1 asks for: one operation, one scope, previewed before it is
+   * committed and undoable afterwards. `layer` absent means every layer.
+   */
+  | { kind: 'repair'; layer?: string; operation: RepairOperationId; options: StoredRepairOptions }
   // Drawing (docs/EDITING_WORKSTATION.md phase F). The ONE command that stores
   // a result rather than an intent, and the asymmetry is deliberate: every
   // other command describes something to re-derive against the full file,
@@ -155,6 +165,16 @@ function deriveDrawnFields(features: CirFeature[]): FieldDef[] {
  * to stop. The replay supplies both from the dataset in front of it.
  */
 export type StoredGeometryOptions = Omit<Partial<GeometryOptions>, 'protectedLayers' | 'crs'>;
+
+/**
+ * Repair settings as stored on a command.
+ *
+ * `protectedLayers` is omitted for the same reason it is on the geometry
+ * options: it is a property of the PROJECT, not of one replayed edit. Storing
+ * it would let a workflow recorded when nothing was protected run later against
+ * a cadastral layer that is.
+ */
+export type StoredRepairOptions = Omit<Partial<RepairOptions>, 'protectedLayers'>;
 
 export interface ReplayOptions {
   /** Layers the user marked protected or locked. Every command refuses on them. */
@@ -376,6 +396,37 @@ function applyOne(dataset: CirDataset, command: EditCommand, protectedLayers: st
       return { dataset: applied.dataset, description: describeGeometryPlan(plan) };
     }
 
+    case 'repair': {
+      // Re-planned against the full dataset for the same reason the geometry
+      // case is: the preview ran over a truncated copy, and "142 rings closed"
+      // there does not mean 142 here.
+      const result = applyRepair(
+        dataset,
+        command.operation,
+        command.layer ? { layer: command.layer } : {},
+        { ...command.options, protectedLayers }
+      );
+      const changed = result.plan.changes.length;
+      if (changed === 0 && result.plan.refused.length > 0) {
+        // Every feature in scope was in a protected layer. That is a refusal,
+        // not a no-op, and saying so is the difference between "nothing needed
+        // fixing" and "I was not allowed to fix it".
+        return {
+          dataset,
+          description: '',
+          refusal: {
+            what: `${REPAIR_LABEL[command.operation]} changed nothing.`,
+            why: result.plan.refused.map((entry) => entry.reason).join(' '),
+            action: 'Remove the layer from the protected list if the edit is intended.',
+          },
+        };
+      }
+      return {
+        dataset: result.dataset,
+        description: `${REPAIR_LABEL[command.operation]} — ${changed.toLocaleString()} change${changed === 1 ? '' : 's'}`,
+      };
+    }
+
     default:
       return { dataset, description: '' };
   }
@@ -434,6 +485,8 @@ export function describeCommand(command: EditCommand): string {
       const distance = command.options.distance === undefined ? '' : ` by ${command.options.distance}`;
       return `${GEOMETRY_LABEL[command.operation]} "${command.layer}"${distance}${target}`;
     }
+    case 'repair':
+      return `${REPAIR_LABEL[command.operation]} — ${command.layer ? `"${command.layer}"` : 'every layer'}`;
     default:
       return 'Edit';
   }

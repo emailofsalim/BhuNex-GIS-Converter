@@ -335,6 +335,7 @@ export function buildCommands(): Command[] {
     ['layers', 'Layers'],
     ['attributes', 'Attributes'],
     ['geometry-ops', 'Geometry tools'],
+    ['repair', 'Repair'],
     ['preview', 'Preview'],
     ['metadata', 'Source metadata'],
     ['select', 'Select & move'],
