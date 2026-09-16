@@ -26,7 +26,10 @@
  */
 
 import { closeRing, isClockwise, removeDuplicateVertices } from '../core/geometry';
-import type { CirDataset, CirFeature, CirLayer, Position } from '../core/cir';
+import type { Bounds, CirDataset, CirFeature, CirLayer, Position } from '../core/cir';
+import { expandBounds, SpatialIndex } from '../core/spatial-index';
+import { unionAll } from '../core/polygon-boolean';
+import { toMultiPolygon } from '../core/geometry-ops';
 
 export type RepairOperationId =
   | 'close-rings'
@@ -40,7 +43,29 @@ export type RepairOperationId =
   | 'smooth'
   | 'regularise'
   | 'remove-holes'
-  | 'fill-holes';
+  | 'fill-holes'
+  // Cross-feature. These read one feature to decide what happens to another,
+  // so they run through `rewriteAcross` rather than the per-feature `rewrite`.
+  | 'snap-shared-edges'
+  | 'rebuild-topology'
+  | 'merge-adjacent-polygons';
+
+/**
+ * The operations that cannot be expressed as a per-feature rewrite.
+ *
+ * `rewrite(feature, …)` sees one feature and nothing else, which is correct for
+ * closing a ring or dropping a spike and useless for anything whose answer
+ * depends on a NEIGHBOUR. These three take the whole dataset, and the contract
+ * §24.1 defines — preview without touching, undo as a diff, protected layers
+ * refused — is preserved by `rewriteAcross` rather than reinvented: `planRepair`
+ * and `applyRepair` each call it exactly once, so the preview is still literally
+ * the apply run without keeping the result.
+ */
+export const CROSS_FEATURE_OPERATIONS: RepairOperationId[] = [
+  'snap-shared-edges',
+  'rebuild-topology',
+  'merge-adjacent-polygons',
+];
 
 export const REPAIR_LABEL: Record<RepairOperationId, string> = {
   'close-rings': 'Close open rings',
@@ -55,6 +80,9 @@ export const REPAIR_LABEL: Record<RepairOperationId, string> = {
   regularise: 'Regularise to right angles',
   'remove-holes': 'Remove small holes',
   'fill-holes': 'Fill all holes',
+  'snap-shared-edges': 'Snap shared edges between features',
+  'rebuild-topology': 'Rebuild topology (snap and node)',
+  'merge-adjacent-polygons': 'Merge adjacent polygons',
 };
 
 /**
@@ -111,6 +139,16 @@ export interface RepairOptions {
   regulariseAngleDegrees: number;
   /** Holes with an area at or below this are removed by `remove-holes`. */
   maxHoleArea: number;
+  /**
+   * Distance within which vertices of DIFFERENT features are one node.
+   *
+   * Separate from `tolerance`, which asks "are these the same point" inside one
+   * feature and is a fraction of a millimetre. The gap between two parcels
+   * digitised from different sheets is centimetres, and using the same number
+   * for both would mean either a snap that never fires or a duplicate-vertex
+   * test that eats real geometry.
+   */
+  sharedEdgeTolerance: number;
 }
 
 export const DEFAULT_REPAIR_SETTINGS: RepairOptions = {
@@ -123,6 +161,7 @@ export const DEFAULT_REPAIR_SETTINGS: RepairOptions = {
   smoothIterations: 1,
   regulariseAngleDegrees: 15,
   maxHoleArea: 1,
+  sharedEdgeTolerance: 0.05,
 };
 
 /** One concrete change the plan would make, in terms a person can check. */
@@ -165,6 +204,16 @@ export interface RepairResult {
 export interface UndoRecord {
   label: string;
   entries: { layer: string; featureIndex: number; geometry: CirFeature['geometry'] }[];
+  /**
+   * Features the operation REMOVED, each with the index it sat at.
+   *
+   * `merge-adjacent-polygons` is the only operation that deletes anything, and
+   * a geometry-only diff cannot reverse a deletion — there is no surviving
+   * feature to restore geometry onto. The whole feature is held instead, which
+   * is still a diff: three parcels merged costs two stored features, not the
+   * four hundred thousand in the layer.
+   */
+  removed?: { layer: string; featureIndex: number; feature: CirFeature }[];
 }
 
 function inScope(layer: CirLayer, feature: CirFeature, scope: RepairScope): boolean {
@@ -391,6 +440,19 @@ export function planRepair(
   options: Partial<RepairOptions> = {}
 ): RepairPlan {
   const settings = { ...DEFAULT_REPAIR_SETTINGS, ...options };
+
+  if (CROSS_FEATURE_OPERATIONS.includes(operation)) {
+    const cross = rewriteAcross(dataset, operation, scope, settings);
+    return {
+      operation,
+      scope,
+      options: settings,
+      changes: cross.changes,
+      refused: cross.refused,
+      maxDisplacement: cross.maxDisplacement,
+    };
+  }
+
   const changes: RepairChange[] = [];
   const refused: RepairPlan['refused'] = [];
   let maxDisplacement = 0;
@@ -429,6 +491,48 @@ export function applyRepair(
   options: Partial<RepairOptions> = {}
 ): RepairResult {
   const settings = { ...DEFAULT_REPAIR_SETTINGS, ...options };
+
+  if (CROSS_FEATURE_OPERATIONS.includes(operation)) {
+    // ONE call, from which the plan, the new dataset and the undo record are
+    // all derived — the same guarantee the per-feature path gets by having
+    // plan and apply both call `rewrite`.
+    const cross = rewriteAcross(dataset, operation, scope, settings);
+    const undo: UndoRecord = { label: REPAIR_LABEL[operation], entries: [], removed: [] };
+
+    const layers = dataset.layers.map((layer) => {
+      const edits = cross.geometries.get(layer.name);
+      const drop = cross.removals.get(layer.name);
+      if (!edits && !drop) return layer;
+
+      const features: CirFeature[] = [];
+      layer.features.forEach((feature, featureIndex) => {
+        if (drop?.has(featureIndex)) {
+          undo.removed!.push({ layer: layer.name, featureIndex, feature });
+          return;
+        }
+        if (edits?.has(featureIndex)) {
+          undo.entries.push({ layer: layer.name, featureIndex, geometry: feature.geometry });
+          features.push({ ...feature, geometry: edits.get(featureIndex)! });
+          return;
+        }
+        features.push(feature);
+      });
+
+      return { ...layer, features };
+    });
+
+    const plan: RepairPlan = {
+      operation,
+      scope,
+      options: settings,
+      changes: cross.changes,
+      refused: cross.refused,
+      maxDisplacement: cross.maxDisplacement,
+    };
+    if (undo.removed!.length === 0) delete undo.removed;
+    return { dataset: { ...dataset, layers }, plan, undo };
+  }
+
   const plan = planRepair(dataset, operation, scope, settings);
   const undo: UndoRecord = { label: REPAIR_LABEL[operation], entries: [] };
 
@@ -461,12 +565,35 @@ export function undoRepair(dataset: CirDataset, record: UndoRecord): CirDataset 
     byLayer.set(entry.layer, existing);
   }
 
+  // Removals are grouped per layer and replayed in ASCENDING index order, so
+  // each re-inserted feature lands at the index it originally held. Descending
+  // order would put every one of them in the wrong place as soon as a layer
+  // lost two features, because each insert shifts the ones after it.
+  const removedByLayer = new Map<string, { featureIndex: number; feature: CirFeature }[]>();
+  for (const entry of record.removed ?? []) {
+    const existing = removedByLayer.get(entry.layer) ?? [];
+    existing.push({ featureIndex: entry.featureIndex, feature: entry.feature });
+    removedByLayer.set(entry.layer, existing);
+  }
+
   const layers = dataset.layers.map((layer) => {
     const restore = byLayer.get(layer.name);
-    if (!restore) return layer;
-    const features = layer.features.map((feature, index) =>
-      restore.has(index) ? { ...feature, geometry: restore.get(index)! } : feature
-    );
+    const reinsert = removedByLayer.get(layer.name);
+    if (!restore && !reinsert) return layer;
+
+    let features = restore
+      ? layer.features.map((feature, index) =>
+          restore.has(index) ? { ...feature, geometry: restore.get(index)! } : feature
+        )
+      : [...layer.features];
+
+    if (reinsert) {
+      features = [...features];
+      for (const entry of [...reinsert].sort((left, right) => left.featureIndex - right.featureIndex)) {
+        features.splice(Math.min(entry.featureIndex, features.length), 0, entry.feature);
+      }
+    }
+
     return { ...layer, features };
   });
 
@@ -737,6 +864,447 @@ function rewrite(feature: CirFeature, operation: RepairOperationId, settings: Re
 
   if (changes.length === 0) return null;
   return { geometry, changes, maxDisplacement };
+}
+
+// ---------------------------------------------------------------- cross-feature
+
+/** One feature's address, resolved once so the passes below can share it. */
+interface Addressed {
+  layer: string;
+  featureIndex: number;
+  feature: CirFeature;
+}
+
+interface CrossRewrite {
+  /** layer name → feature index → replacement geometry. */
+  geometries: Map<string, Map<number, CirFeature['geometry']>>;
+  /** layer name → feature indices the operation deletes. */
+  removals: Map<string, Set<number>>;
+  changes: RepairChange[];
+  refused: RepairPlan['refused'];
+  maxDisplacement: number;
+}
+
+/** Every in-scope, unprotected feature, with the refusals the skip produced. */
+function addressable(
+  dataset: CirDataset,
+  scope: RepairScope,
+  settings: RepairOptions
+): { items: Addressed[]; refused: RepairPlan['refused'] } {
+  const items: Addressed[] = [];
+  const refused: RepairPlan['refused'] = [];
+
+  for (const layer of dataset.layers) {
+    if (scope.layer && layer.name !== scope.layer) continue;
+    if (settings.protectedLayers.includes(layer.name)) {
+      const count = layer.features.filter((feature) => inScope(layer, feature, scope)).length;
+      if (count > 0) {
+        refused.push({
+          layer: layer.name,
+          featureCount: count,
+          reason: 'Layer is marked legally operative, so its geometry is not changed by an automated repair.',
+        });
+      }
+      continue;
+    }
+    layer.features.forEach((feature, featureIndex) => {
+      if (!inScope(layer, feature, scope)) return;
+      items.push({ layer: layer.name, featureIndex, feature });
+    });
+  }
+
+  return { items, refused };
+}
+
+/** A degenerate box around a point, grown by `pad`, for a tolerance query. */
+function pointBounds(position: Position, pad: number): Bounds {
+  return { minX: position[0] - pad, maxX: position[0] + pad, minY: position[1] - pad, maxY: position[1] + pad };
+}
+
+function geometryBounds(geometry: CirFeature['geometry']): Bounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  eachPosition(geometry, (position) => {
+    if (position[0] < minX) minX = position[0];
+    if (position[0] > maxX) maxX = position[0];
+    if (position[1] < minY) minY = position[1];
+    if (position[1] > maxY) maxY = position[1];
+  });
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
+
+/** Visits every coordinate of a geometry, whatever its type. */
+function eachPosition(geometry: CirFeature['geometry'], visit: (position: Position) => void): void {
+  if (!geometry) return;
+  const walk = (value: unknown): void => {
+    if (!Array.isArray(value)) return;
+    if (typeof value[0] === 'number' && typeof value[1] === 'number') {
+      visit(value as Position);
+      return;
+    }
+    for (const child of value) walk(child);
+  };
+  walk((geometry as { coordinates?: unknown }).coordinates);
+}
+
+/**
+ * Where a point falls on a segment, and how far off it is.
+ *
+ * `t` is the fraction along a→b, clamped to the segment, so a point beyond
+ * either end reports the end rather than a projection off in space.
+ */
+function projectOnSegment(point: Position, a: Position, b: Position): { t: number; distance: number } {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return { t: 0, distance: distance(point, a) };
+  let t = ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / lengthSquared;
+  t = Math.max(0, Math.min(1, t));
+  const closest: Position = [a[0] + dx * t, a[1] + dy * t];
+  return { t, distance: distance(point, closest) };
+}
+
+/**
+ * Collapses vertices of DIFFERENT features that sit within the tolerance onto a
+ * single shared node.
+ *
+ * WHICH POSITION WINS. The cluster's mean, not its first member. "First" here
+ * would mean whichever feature happens to come first in the file, which is an
+ * arbitrary authority to hand one parcel over its neighbour — and it is not
+ * even stable, since re-ordering the layer would change the answer. The mean
+ * distributes the correction, and the plan reports the largest single move so
+ * the size of that correction is never hidden.
+ *
+ * Clustering is single-pass and greedy: a vertex joins the first cluster whose
+ * representative it is within tolerance of. Chains longer than the tolerance
+ * therefore do not collapse end to end, which is the behaviour you want — a
+ * run of vertices 4 cm apart under a 5 cm tolerance should not slide into one
+ * point.
+ */
+function buildNodeClusters(items: Addressed[], tolerance: number): Map<string, Position> {
+  const vertices: { position: Position; owner: number }[] = [];
+  items.forEach((item, owner) => {
+    eachPosition(item.feature.geometry, (position) => vertices.push({ position, owner }));
+  });
+
+  const index = new SpatialIndex(vertices.map((vertex) => ({ bounds: pointBounds(vertex.position, 0), value: vertex })));
+  const clusterOf = new Int32Array(vertices.length).fill(-1);
+  const clusters: { sumX: number; sumY: number; count: number; owners: Set<number> }[] = [];
+
+  for (let i = 0; i < vertices.length; i++) {
+    if (clusterOf[i] !== -1) continue;
+    const cluster = { sumX: 0, sumY: 0, count: 0, owners: new Set<number>() };
+    const id = clusters.length;
+    clusters.push(cluster);
+
+    for (const candidate of index.search(pointBounds(vertices[i].position, tolerance))) {
+      if (clusterOf[candidate] !== -1) continue;
+      if (distance(vertices[i].position, vertices[candidate].position) > tolerance) continue;
+      clusterOf[candidate] = id;
+      cluster.sumX += vertices[candidate].position[0];
+      cluster.sumY += vertices[candidate].position[1];
+      cluster.count++;
+      cluster.owners.add(vertices[candidate].owner);
+    }
+  }
+
+  // Only clusters spanning MORE THAN ONE feature are shared nodes. A cluster
+  // inside a single feature is a duplicate vertex, which is a different
+  // operation with a different tolerance and is not this one's business.
+  const moves = new Map<string, Position>();
+  for (let i = 0; i < vertices.length; i++) {
+    const cluster = clusters[clusterOf[i]];
+    if (!cluster || cluster.owners.size < 2) continue;
+    const target: Position = [cluster.sumX / cluster.count, cluster.sumY / cluster.count];
+    const from = vertices[i].position;
+    if (distance(from, target) === 0) continue;
+    moves.set(`${from[0]},${from[1]}`, target);
+  }
+  return moves;
+}
+
+/**
+ * The cross-feature operations, planned over the whole dataset at once.
+ *
+ * Called exactly once by `planRepair` and exactly once by `applyRepair`, which
+ * is what keeps the preview and the commit identical without a second code
+ * path — the same property the per-feature `rewrite` gives the other nine.
+ */
+function rewriteAcross(
+  dataset: CirDataset,
+  operation: RepairOperationId,
+  scope: RepairScope,
+  settings: RepairOptions
+): CrossRewrite {
+  const { items, refused } = addressable(dataset, scope, settings);
+  const geometries = new Map<string, Map<number, CirFeature['geometry']>>();
+  const removals = new Map<string, Set<number>>();
+  const changes: RepairChange[] = [];
+  let maxDisplacement = 0;
+
+  const record = (item: Addressed, geometry: CirFeature['geometry']): void => {
+    const existing = geometries.get(item.layer) ?? new Map<number, CirFeature['geometry']>();
+    existing.set(item.featureIndex, geometry);
+    geometries.set(item.layer, existing);
+  };
+
+  if (operation === 'merge-adjacent-polygons') {
+    return mergeAdjacent(items, refused, settings);
+  }
+
+  const tolerance = settings.sharedEdgeTolerance;
+  const moves = buildNodeClusters(items, tolerance);
+
+  // Pass one: every vertex that belongs to a shared node moves to it.
+  const snapped: (CirFeature['geometry'] | null)[] = items.map((item) => {
+    if (!item.feature.geometry || moves.size === 0) return null;
+    let moved = 0;
+    let largest = 0;
+    let where: Position | undefined;
+    const geometry = mapPaths(item.feature.geometry, (path) =>
+      path.map((position) => {
+        const target = moves.get(`${position[0]},${position[1]}`);
+        if (!target) return position;
+        const shift = distance(position, target);
+        if (shift === 0) return position;
+        moved++;
+        if (shift > largest) {
+          largest = shift;
+          where = position;
+        }
+        return position.length > 2 ? ([target[0], target[1], position[2]] as Position) : target;
+      })
+    );
+    if (moved === 0) return null;
+    changes.push({
+      layer: item.layer,
+      featureId: item.feature.id,
+      location: where,
+      description: `${moved} vert${moved === 1 ? 'ex' : 'ices'} snapped onto a node shared with a neighbouring feature; the largest move is ${largest.toFixed(4)} units.`,
+      maxDisplacement: largest,
+    });
+    if (largest > maxDisplacement) maxDisplacement = largest;
+    return geometry;
+  });
+
+  snapped.forEach((geometry, position) => {
+    if (geometry) record(items[position], geometry);
+  });
+
+  if (operation === 'snap-shared-edges') {
+    return { geometries, removals, changes, refused, maxDisplacement };
+  }
+
+  // Pass two, `rebuild-topology` only: T-JUNCTION NODES.
+  //
+  // A corner of parcel A touching the MIDDLE of parcel B's edge is the defect
+  // snapping cannot reach — the positions already agree, so there is nothing to
+  // move, but B has no vertex there. Every later overlay, dissolve or union
+  // then sees a boundary that diverges by the sagitta of that segment and
+  // leaves a sliver. Inserting the node into B is what makes the two agree.
+  const current = items.map(
+    (item, position) => snapped[position] ?? item.feature.geometry
+  );
+
+  const nodes: Position[] = [];
+  current.forEach((geometry) => eachPosition(geometry, (position) => nodes.push(position)));
+  const nodeIndex = new SpatialIndex(nodes.map((position) => ({ bounds: pointBounds(position, 0), value: position })));
+
+  current.forEach((geometry, position) => {
+    if (!geometry) return;
+    let inserted = 0;
+    let where: Position | undefined;
+
+    const noded = mapPaths(geometry, (path) => {
+      if (path.length < 2) return path;
+      const out: Position[] = [path[0]];
+      for (let segment = 1; segment < path.length; segment++) {
+        const from = path[segment - 1];
+        const to = path[segment];
+        const box: Bounds = {
+          minX: Math.min(from[0], to[0]) - tolerance,
+          maxX: Math.max(from[0], to[0]) + tolerance,
+          minY: Math.min(from[1], to[1]) - tolerance,
+          maxY: Math.max(from[1], to[1]) + tolerance,
+        };
+        const hits: { t: number; position: Position }[] = [];
+        for (const candidate of nodeIndex.search(box)) {
+          const node = nodes[candidate];
+          // Already an endpoint of this segment: nothing to insert.
+          if (distance(node, from) <= tolerance || distance(node, to) <= tolerance) continue;
+          const projected = projectOnSegment(node, from, to);
+          if (projected.distance > tolerance) continue;
+          if (projected.t <= 0 || projected.t >= 1) continue;
+          hits.push({ t: projected.t, position: node });
+        }
+        hits.sort((left, right) => left.t - right.t);
+        let previous = -1;
+        for (const hit of hits) {
+          if (hit.t === previous) continue;
+          previous = hit.t;
+          out.push(hit.position);
+          inserted++;
+          where ??= hit.position;
+        }
+        out.push(to);
+      }
+      return out;
+    });
+
+    if (inserted === 0) return;
+    changes.push({
+      layer: items[position].layer,
+      featureId: items[position].feature.id,
+      location: where,
+      description: `${inserted} node${inserted === 1 ? '' : 's'} inserted where a neighbouring feature's vertex sits on this boundary. No existing position moves.`,
+      maxDisplacement: 0,
+    });
+    record(items[position], noded);
+  });
+
+  return { geometries, removals, changes, refused, maxDisplacement };
+}
+
+/**
+ * Unions polygons that share a boundary, keeping one feature per group.
+ *
+ * ADJACENCY IS TESTED BY SHARED NODES, not by a boolean intersection: two
+ * parcels that touch along an edge have an intersection of zero area, so an
+ * area test reports them as unrelated. Two vertices within the tolerance is the
+ * cheap statement of "these share an edge", and it is the same tolerance the
+ * snapping operations use, so running snap first makes this find more.
+ *
+ * ATTRIBUTES. The lowest-indexed feature of each group survives and keeps its
+ * properties; the others are removed and theirs go with them. There is no
+ * defensible way to merge two owners into one field, so the plan SAYS what is
+ * being dropped rather than inventing a rule.
+ */
+function mergeAdjacent(
+  items: Addressed[],
+  refused: RepairPlan['refused'],
+  settings: RepairOptions
+): CrossRewrite {
+  const geometries = new Map<string, Map<number, CirFeature['geometry']>>();
+  const removals = new Map<string, Set<number>>();
+  const changes: RepairChange[] = [];
+
+  const polygons = items.filter(
+    (item) => item.feature.geometry?.type === 'Polygon' || item.feature.geometry?.type === 'MultiPolygon'
+  );
+  if (polygons.length < 2) return { geometries, removals, changes, refused, maxDisplacement: 0 };
+
+  const tolerance = settings.sharedEdgeTolerance;
+  // GROWN BY THE TOLERANCE, and that is not a detail.
+  //
+  // Two parcels digitised 3 cm apart have bounds that do not touch: one ends at
+  // x=412010, the next starts at 412010.03, and `boundsIntersect` says no. They
+  // would never become a candidate pair, so the operation would find nothing in
+  // precisely the case it exists for — while still passing a test whose parcels
+  // share exact coordinates. Found by driving the real panel, not by the suite.
+  const boxes = polygons.map((item) => {
+    const bounds = geometryBounds(item.feature.geometry);
+    return bounds ? expandBounds(bounds, tolerance) : null;
+  });
+  const index = new SpatialIndex(
+    polygons.map((_, position) => ({
+      bounds: boxes[position] ?? { minX: 0, maxX: 0, minY: 0, maxY: 0 },
+      value: position,
+    }))
+  );
+
+  // Union-find over "shares at least two nodes with".
+  const parent = polygons.map((_, position) => position);
+  const find = (value: number): number => {
+    let root = value;
+    while (parent[root] !== root) root = parent[root];
+    while (parent[value] !== root) {
+      const next = parent[value];
+      parent[value] = root;
+      value = next;
+    }
+    return root;
+  };
+  const join = (left: number, right: number): void => {
+    const a = find(left);
+    const b = find(right);
+    if (a !== b) parent[Math.max(a, b)] = Math.min(a, b);
+  };
+
+  const verticesOf = polygons.map((item) => {
+    const list: Position[] = [];
+    eachPosition(item.feature.geometry, (position) => list.push(position));
+    return list;
+  });
+
+  index.eachCandidatePair((left, right) => {
+    const a = index.item(left).value;
+    const b = index.item(right).value;
+    let shared = 0;
+    for (const position of verticesOf[a]) {
+      for (const other of verticesOf[b]) {
+        if (distance(position, other) <= tolerance) {
+          shared++;
+          break;
+        }
+      }
+      // Two shared nodes is an edge. More is still an edge, so stop counting.
+      if (shared >= 2) break;
+    }
+    if (shared >= 2) join(a, b);
+  });
+
+  const groups = new Map<number, number[]>();
+  polygons.forEach((_, position) => {
+    const root = find(position);
+    const existing = groups.get(root) ?? [];
+    existing.push(position);
+    groups.set(root, existing);
+  });
+
+  for (const [root, members] of groups) {
+    if (members.length < 2) continue;
+    const ordered = [...members].sort((left, right) => left - right);
+    const survivor = polygons[ordered[0]];
+    const united = unionAll(ordered.map((position) => toMultiPolygon(polygons[position].feature.geometry)));
+    if (united.polygons.length === 0) continue;
+
+    // Dimension 2, matching what `geometry-ops` records for the same union:
+    // the boolean works in plan and reports `droppedZ`, so calling the result
+    // 3D would be a claim about elevations the operation did not carry.
+    const geometry: CirFeature['geometry'] =
+      united.polygons.length === 1
+        ? { type: 'Polygon', coordinates: united.polygons[0], dimension: 2 }
+        : { type: 'MultiPolygon', coordinates: united.polygons, dimension: 2 };
+
+    const edits = geometries.get(survivor.layer) ?? new Map<number, CirFeature['geometry']>();
+    edits.set(survivor.featureIndex, geometry);
+    geometries.set(survivor.layer, edits);
+
+    for (const position of ordered.slice(1)) {
+      const member = polygons[position];
+      const drop = removals.get(member.layer) ?? new Set<number>();
+      drop.add(member.featureIndex);
+      removals.set(member.layer, drop);
+    }
+
+    changes.push({
+      layer: survivor.layer,
+      featureId: survivor.feature.id,
+      location: verticesOf[ordered[0]][0],
+      description:
+        `${ordered.length} adjacent polygons merged into one; ${ordered.length - 1} feature${ordered.length === 2 ? '' : 's'} removed and ` +
+        `their attributes dropped. The surviving feature keeps the properties of "${String(survivor.feature.id ?? survivor.featureIndex)}". ` +
+        'The outer boundary does not move.',
+      // A union moves no surviving vertex; it deletes the shared edge between
+      // them. Reporting a displacement here would overstate what happened.
+      maxDisplacement: 0,
+    });
+    void root;
+  }
+
+  return { geometries, removals, changes, refused, maxDisplacement: 0 };
 }
 
 export interface SafeFixResult {
