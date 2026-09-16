@@ -20,7 +20,7 @@ import {
   type Warning,
 } from '../../core/cir';
 import { ConversionError } from '../../core/errors';
-import { formatFixed, type PrecisionPolicy } from '../../core/precision';
+import { decimalsFor, formatFixed, type PrecisionPolicy } from '../../core/precision';
 import { decodeText } from '../shared';
 
 interface Accumulator {
@@ -534,7 +534,12 @@ export const DEFAULT_TEXT_CLOUD_OPTIONS: Omit<WriteTextCloudOptions, 'precision'
 export function writeXyzCloud(dataset: CirDataset, options: WriteTextCloudOptions): { text: string; warnings: Warning[] } {
   const cloud = requireCloud(dataset);
   const warnings: Warning[] = [];
-  const decimals = options.precision.mode === 'full' ? 15 : options.precision.linearDecimals;
+  // A text cloud is usually a projected grid, but nothing makes it one: the LAS
+  // reader takes its CRS from a PRJ sidecar or a WKT VLR, either of which can
+  // declare EPSG:4326 — which is why it only labels the units 'm' when the CRS
+  // is projected. Written with `linearDecimals`, a geographic cloud at the
+  // default 3 dp lands every point on a 111 m grid.
+  const decimals = decimalsFor(options.precision, dataset.crs);
   const wantsIntensity = options.includeIntensity && cloud.attributes.intensity;
   const wantsColor = options.includeColor && cloud.attributes.color;
   const wantsClass = options.includeClassification && cloud.attributes.classification;
@@ -582,7 +587,7 @@ export function writeXyzCloud(dataset: CirDataset, options: WriteTextCloudOption
 
 export function writePts(dataset: CirDataset, options: WriteTextCloudOptions): { text: string; warnings: Warning[] } {
   const cloud = requireCloud(dataset);
-  const decimals = options.precision.mode === 'full' ? 15 : options.precision.linearDecimals;
+  const decimals = decimalsFor(options.precision, dataset.crs);
   const wantsColor = options.includeColor && cloud.attributes.color;
   const lines: string[] = [String(cloud.loaded)];
   for (let index = 0; index < cloud.loaded; index++) {
@@ -614,7 +619,7 @@ export function writePly(dataset: CirDataset, options: WriteTextCloudOptions): {
       action: 'Triangulate the cloud in CloudCompare or MeshLab if a surface is needed.',
     }),
   ];
-  const decimals = options.precision.mode === 'full' ? 15 : options.precision.linearDecimals;
+  const decimals = decimalsFor(options.precision, dataset.crs);
   const wantsColor = options.includeColor && cloud.attributes.color;
   const wantsIntensity = options.includeIntensity && cloud.attributes.intensity;
 
