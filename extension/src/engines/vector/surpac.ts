@@ -24,7 +24,7 @@ import {
   type Warning,
 } from '../../core/cir';
 import { ConversionError } from '../../core/errors';
-import { formatFixed, type PrecisionPolicy } from '../../core/precision';
+import { decimalsFor, formatFixed, type PrecisionPolicy } from '../../core/precision';
 import { deriveFields } from '../shared';
 
 interface StringRecord {
@@ -197,7 +197,10 @@ export interface WriteSurpacOptions {
 
 export function writeSurpacStr(dataset: CirDataset, options: WriteSurpacOptions): { text: string; warnings: Warning[] } {
   const warnings: Warning[] = [];
-  const decimals = options.precision.mode === 'full' ? 6 : options.precision.linearDecimals;
+  // Surpac STR is a mine-grid format and is almost always projected, but the
+  // writer takes whatever dataset it is handed. Same rule as everywhere else,
+  // keeping the 6 dp that full precision has always used here.
+  const decimals = decimalsFor(options.precision, dataset.crs, 6);
   const lines: string[] = [];
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '-');
 
