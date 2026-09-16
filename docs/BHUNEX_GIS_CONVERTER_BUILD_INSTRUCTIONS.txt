@@ -1496,9 +1496,11 @@ Legal boundaries are never modified without explicit per-operation confirmation
 ================================================================================
 24. GEOMETRY REPAIR
 ================================================================================
-STATUS: BUILT for the preview/apply/undo contract and six operations
-(qa/repair.ts). The remaining operations in 24.2 are Phase 11, and they inherit
-the contract rather than reinventing it.
+STATUS: BUILT, and reachable. The preview/apply/undo contract plus fifteen
+operations (qa/repair.ts), surfaced by workspace/panels/repair.ts. The
+operations that could not be a per-feature rewrite inherited the contract
+through `rewriteAcross` rather than reinventing it. Three items of 24.2 remain
+open and are named as such below.
 
 24.1 THE CONTRACT
 qa/topology.ts repairs as part of a CONVERSION: switch an option on and the
@@ -1527,11 +1529,42 @@ legally operative: moving one is a change to a title, not a data fix (R18).
 Built: close rings, remove duplicate vertices, remove zero-length segments, fix
 ring direction, remove spikes, snap vertices within a feature.
 
-24.2 SPECIFIED (Phase 11)
-Snap shared edges across features; regularise; smooth; simplify; densify;
-repair self-intersection; remove slivers; merge adjacent polygons; split
-polygon; split line; extend, trim and join lines; make and explode multipart;
-fill and remove holes; rebuild topology.
+24.2 STATUS PER OPERATION
+
+BUILT in qa/repair.ts, reachable through the Repair panel:
+  simplify (Douglas-Peucker, iterative); densify; smooth (Chaikin); regularise;
+  fill holes; remove holes; snap shared edges across features; rebuild
+  topology; merge adjacent polygons.
+
+BUILT as 26.2 geometry operations rather than repairs, because they take an
+operand the repair scope cannot express — a blade line, a mask layer:
+  split polygon; split line; join lines (line-merge); make and explode
+  multipart.
+
+THE THREE CROSS-FEATURE ONES needed a contract extension, not a switch case.
+`rewrite(feature, …)` sees one feature and nothing else, so an operation whose
+answer depends on a NEIGHBOUR cannot be expressed through it. `rewriteAcross`
+takes the whole dataset and is called exactly once by planRepair and once by
+applyRepair, which keeps 24.1's guarantee — the preview is literally the apply,
+run without keeping the result — without a second code path. Two details worth
+recording:
+
+  · Shared nodes move to the MEAN of their cluster, not to whichever feature
+    came first in the file. File order is an arbitrary authority to hand one
+    parcel over its neighbour, and it is not stable under a re-sort.
+  · merge-adjacent-polygons is the only operation in the engine that DELETES a
+    feature, so UndoRecord grew a `removed` list. A geometry-only diff cannot
+    reverse a deletion: there is no surviving feature to restore geometry onto.
+
+STILL OPEN, with the reason each is not trivial:
+  · repair self-intersection — topology.ts DETECTS a self-intersecting ring and
+    nothing repairs one. The fix is genuinely ambiguous: a bowtie can be
+    resolved by dropping the smaller lobe or by splitting into two polygons,
+    and those are different answers to what the surveyor meant.
+  · remove slivers — needs a thinness measure (area over perimeter squared, or
+    a minimum inscribed width) before a threshold is worth exposing.
+  · extend and trim lines — both need a TARGET to extend to or trim against,
+    which is a second selection RepairScope has no way to express.
 
 Every operation: previewable before commit, tolerance-aware with the tolerance
 displayed in the data's own units (R21), undoable (R19).
