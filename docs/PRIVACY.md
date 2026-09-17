@@ -69,7 +69,8 @@ contact.
 **2. Watch the network yourself.**
 Open the converter workspace, press **F12** for developer tools, go to the
 **Network** tab, and convert a file. You will see no requests, because none are
-made.
+made. Switch the basemap on and you will see tile requests appear — only tile
+requests, and only while it is on.
 
 **3. Turn the network off.**
 Disconnect from the internet or Wi-Fi entirely and convert a file. Everything
@@ -85,15 +86,25 @@ including a map tile URL from a service that has not been reviewed.
 
 ---
 
-## The one thing that can make a network request: the map basemap
+## The only things that can make a network request: the map basemap and terrain
 
-There is exactly one optional feature that contacts a server, and it is **off
-until you turn it on**.
+Two optional view-time features contact a server, and **both are off until you
+turn them on**. Neither is reachable unless the basemap itself is enabled.
 
-If you enable **Settings → Map basemap**, the workspace draws map tiles
-underneath your data so you can see where it sits. To do that it asks a tile
-server (OpenStreetMap by default) for the map squares covering the area on
-screen.
+If you enable the basemap — from the **Basemap** button in the bottom-left
+corner of the canvas, or from **Settings → Map basemap** — the workspace draws
+map tiles underneath your data so you can see where it sits. To do that it asks
+a tile server (OpenStreetMap by default) for the map squares covering the area
+on screen.
+
+Two further switches live beside it, each its own separate request:
+
+- **Shaded relief** composites a hillshade over the basemap, from Esri's World
+  Hillshade service. Same kind of request as any other tile.
+- **Ground elevation under the cursor** reads a height from AWS's public
+  elevation-tiles bucket. This one is described separately below, because it is
+  the one place the extension reads the CONTENTS of a response rather than only
+  displaying it.
 
 | | |
 |---|---|
@@ -103,16 +114,50 @@ screen.
 | **Effect on conversion** | None. No conversion, QA check, measurement or exported file is affected by the basemap in any way, and turning it on cannot change a single byte of any output. |
 | **With no network** | Nothing is drawn, and everything else behaves exactly as it always does. |
 
-Tiles are drawn from an `<img>` element, which is why the extension still
-declares **no host permissions**: it cannot read a response, only display an
-image. You can revoke the whole capability at any time by switching the setting
-off, and it stays off across restarts.
+Every tile is loaded through an `<img>` element, which is why the extension
+still declares **no host permissions** for any of this. You can revoke the whole
+capability at any time by switching the setting off, and it stays off across
+restarts.
 
-Google, Bing and Esri imagery are **not** offered as built-in options, because
-their tile endpoints are not licensed for direct use outside their own APIs.
-Wiring one in would work and would put you in breach of terms you never agreed
-to. If you hold a key or a licence for one, there is a custom URL field where
-you can use it under the terms you actually hold.
+### The elevation readout, stated exactly
+
+This page used to say tiles are loaded as images and therefore that the
+extension "cannot read a response, only display an image". For the map tiles
+that is still true. **For the elevation readout it is not**, and saying so
+plainly matters more than keeping the simpler sentence.
+
+An elevation tile is a PNG in which each pixel's red, green and blue channels
+encode a height in metres. To turn that into a number the extension draws the
+image into an off-screen canvas and reads the pixel under your cursor back out.
+It is allowed to do that because the bucket sends
+`Access-Control-Allow-Origin: *` — the server's own permission, not a manifest
+one — so this still needs no host permission and no new capability.
+
+What that changes and what it does not:
+
+| | |
+|---|---|
+| **What is sent** | The same as any tile: a zoom level and a grid reference. Nothing from your file. |
+| **What is read back** | The three colour channels of one pixel of a public elevation image. Nothing else from the response, and nothing about you. |
+| **What it is used for** | One number in the corner of the canvas. It is never written into an output file, never stored, and never sent anywhere. |
+| **Accuracy** | SRTM-class: roughly 30 m on the ground, several metres vertically. It is **not** a levelled height and must not be recorded as one. |
+
+### Which imagery is and is not built in
+
+**Esri World Imagery and Esri World Hillshade are built-in options.** Esri
+publishes these ArcGIS Online services for public use and they need no key. An
+earlier version of this page listed Esri alongside Google and Bing as excluded,
+which was wrong about what the extension actually ships.
+
+**Google and Bing imagery are not built in.** Their tile endpoints are not
+licensed for direct use outside their own APIs. Wiring one in would work and
+would put you in breach of terms you never agreed to. If you hold a key or a
+licence for one, there is a custom URL field where you can use it under the
+terms you actually hold.
+
+Every source the tool can reach — what it is, what it is licensed under, and
+whether it needs an account — is listed under **Sources & APIs** in the
+bottom-right corner of the canvas.
 
 ---
 

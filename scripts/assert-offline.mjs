@@ -93,6 +93,21 @@ const ALLOWED_TEMPLATES = [
   'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
   'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
 
+  // --- relief layers, composited over a basemap ----------------------------
+  // The same exemption on the same terms: off by default, view-time only, and
+  // reachable only while the basemap itself is on. {z}/{y}/{x} again, as every
+  // ArcGIS MapServer tile endpoint is.
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade_Dark/MapServer/tile/{z}/{y}/{x}',
+
+  // --- the elevation source under the cursor readout -----------------------
+  // AWS's public elevation-tiles-prod bucket: open data, no key. Held to the
+  // same standard as the imagery — its own switch, off by default, gated behind
+  // the basemap being on, and touching no conversion, QA, measurement or export
+  // path. With it off nothing here is requested, and a tile that fails to
+  // arrive shows a dash rather than degrading anything.
+  'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+
   // --- presets, which are TEMPLATES and not endpoints ----------------------
   // Each still carries `{key}` in the shipped bundle, so none of them resolves
   // to a fetchable URL until a user pastes their own key in. They are inert

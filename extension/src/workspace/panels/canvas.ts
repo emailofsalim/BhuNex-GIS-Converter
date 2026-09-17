@@ -16,7 +16,17 @@ import { type GeometryOverlay, OVERLAY_ROLE_LABEL } from '../../qa/geometry-over
 import { type QueueItem, store } from '../../state/store';
 import { DualCanvas } from '../../ui/dual-canvas';
 import { Backdrop } from '../../ui/backdrop';
-import { Basemap, isOnline, TILE_PRESETS, TILE_PROVIDERS, type TileProvider } from '../../ui/basemap';
+import {
+  Basemap,
+  composeCredit,
+  isOnline,
+  RELIEF_PROVIDERS,
+  TILE_PRESETS,
+  TILE_PROVIDERS,
+  type TileProvider,
+} from '../../ui/basemap';
+import { TerrainSampler, terrainLabel } from '../../ui/terrain';
+import { renderMapControl, renderMapSources } from './map-control';
 import { LAYER_COLORS, PreviewCanvas, type PreviewData } from '../../ui/preview';
 import { $, element } from '../dom';
 import { viewOf } from './dataset';
@@ -41,12 +51,16 @@ import { ui } from '../ui-state';
 export function clearPreview(): void {
   ui.featureSelection = EMPTY_SELECTION;
   ui.basemap = undefined;
+  ui.basemapRelief = undefined;
   ui.editTrace = null;
   const canvas = ui.previewCanvas;
   if (!canvas) return;
 
   canvas.onOverlay = undefined;
-  setUnderlay(canvas, null);
+  setUnderlay(canvas, null, null);
+  // The elevation listener is bound to this canvas and to a transform for the
+  // file that is going away. Left installed it would keep sampling through it.
+  setTerrainReadout(null, canvas);
   // No identity: the next file to arrive is a different subject and will be
   // fitted, rather than inheriting the view of the one just cleared.
   canvas.setData({ layers: [], truncated: false });
@@ -173,11 +187,15 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   const settings = store.get().settings;
   if (!settings.basemapEnabled) {
     ui.basemap = undefined;
+    ui.basemapRelief = undefined;
     // NOT `onUnderlay = undefined`: the backdrop is a separate layer and the
     // basemap being off says nothing about it. Clearing the hook here is how
     // an imported sheet would silently vanish the moment the tiles were
     // switched off.
-    setUnderlay(canvas, null);
+    setUnderlay(canvas, null, null);
+    renderMapControl();
+    renderMapSources();
+    setTerrainReadout(null, null);
     return;
   }
 
@@ -210,18 +228,55 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
     fromLonLat = null;
   }
 
+  // THE CREDIT FOR EVERY LAYER THAT IS ON, composed here and given to the
+  // bottom one. Each layer drawing its own would stack two boxes in the same
+  // corner of the canvas, the upper one covering the lower — and the covered
+  // one is still an attribution the licence requires.
+  const relief = settings.basemapReliefEnabled
+    ? RELIEF_PROVIDERS.find((entry) => entry.id === settings.basemapReliefId) ?? RELIEF_PROVIDERS[0]
+    : null;
+  const credit = composeCredit(provider, relief);
+
   if (!ui.basemap) {
     ui.basemap = new Basemap({
       provider,
       toLonLat,
       fromLonLat,
       opacity: settings.basemapOpacity,
+      credit,
       // A tile arriving is the only thing that can change the picture without
       // the user doing anything, so it is the only thing that redraws.
       onTileLoaded: () => ui.previewCanvas?.render(),
     });
   } else {
-    ui.basemap.update({ provider, toLonLat, fromLonLat, opacity: settings.basemapOpacity });
+    ui.basemap.update({ provider, toLonLat, fromLonLat, opacity: settings.basemapOpacity, credit });
+  }
+
+  // The relief layer, allocated only while it is on so a session that never
+  // asks for terrain never holds a second tile cache.
+  if (!relief) {
+    ui.basemapRelief = undefined;
+  } else if (!ui.basemapRelief) {
+    ui.basemapRelief = new Basemap({
+      provider: relief,
+      toLonLat,
+      fromLonLat,
+      // Held back from full so the map underneath still reads through the
+      // shading. A hillshade at opacity 1 is an opaque grey map.
+      opacity: Math.min(0.85, settings.basemapOpacity),
+      // Empty, not the provider's: its credit is already in the composed line
+      // the base layer draws.
+      credit: '',
+      onTileLoaded: () => ui.previewCanvas?.render(),
+    });
+  } else {
+    ui.basemapRelief.update({
+      provider: relief,
+      toLonLat,
+      fromLonLat,
+      opacity: Math.min(0.85, settings.basemapOpacity),
+      credit: '',
+    });
   }
 
   const basemap = ui.basemap;
@@ -233,7 +288,11 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   // The backdrop goes on TOP of the tiles and under the data, which is the only
   // order that makes sense: the whole reason for importing a sheet is that the
   // imagery beneath it is out of date.
-  setUnderlay(canvas, basemap.usable ? basemap : null);
+  setUnderlay(canvas, basemap.usable ? basemap : null, ui.basemapRelief?.usable ? ui.basemapRelief : null);
+
+  renderMapControl();
+  renderMapSources();
+  setTerrainReadout(settings.terrainReadout && basemap.usable ? toLonLat : null, canvas);
 
   const badge = document.getElementById('basemapBadge');
   if (badge) {
@@ -285,19 +344,99 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
  * both. A backdrop under the tiles would be invisible, which is the opposite of
  * why someone imports one.
  */
-function setUnderlay(canvas: PreviewCanvas, basemap: Basemap | null): void {
+function setUnderlay(canvas: PreviewCanvas, basemap: Basemap | null, relief: Basemap | null): void {
   const backdrop = ui.backdrop;
   const drawsBackdrop = backdrop?.usable ?? false;
 
-  if (!basemap && !drawsBackdrop) {
+  if (!basemap && !relief && !drawsBackdrop) {
     canvas.onUnderlay = undefined;
     return;
   }
 
   canvas.onUnderlay = (context, project, unproject, size) => {
     basemap?.draw(context, size.width, size.height, project, unproject);
+    // Relief AFTER the base map and before the sheet: shading the ground is
+    // only meaningful over something that says where the ground is, and a
+    // hillshade over an imported drawing would grey out the drawing.
+    relief?.draw(context, size.width, size.height, project, unproject);
     if (drawsBackdrop) backdrop!.draw(context, project);
   };
+}
+
+// --------------------------------------------------------- terrain readout
+
+/** Held across renders so panning does not re-fetch tiles it already decoded. */
+let sampler: TerrainSampler | null = null;
+/** The listener currently installed, so it can be taken off again. */
+let terrainMove: ((event: PointerEvent) => void) | null = null;
+/**
+ * The last point the pointer was over, in degrees.
+ *
+ * Module-level rather than captured per call, because the tile that answers a
+ * query usually arrives AFTER the mouse has stopped moving — so the redraw the
+ * sampler triggers has no event of its own to work from, and without this the
+ * number would only ever appear on the next movement over an already-cached
+ * tile. Which is to say: on a fresh area, never.
+ */
+let terrainPoint: { lon: number; lat: number } | null = null;
+
+/** Writes the current elevation into the readout, from whatever is cached. */
+function paintTerrain(): void {
+  const node = document.getElementById('terrainReadout');
+  if (!node) return;
+  if (!terrainPoint) {
+    node.textContent = terrainLabel(null);
+    return;
+  }
+  node.textContent = terrainLabel(sampler?.sample(terrainPoint.lon, terrainPoint.lat) ?? null);
+}
+
+/**
+ * Shows the ground elevation under the pointer, or takes the readout away.
+ *
+ * `toLonLat` being null is the off switch and covers every reason at once: the
+ * setting is off, the basemap is off, or there is no CRS the point can be
+ * turned into a longitude and latitude in. A readout that stayed on screen
+ * showing the last height from a different file would be worse than none.
+ */
+function setTerrainReadout(
+  toLonLat: ((x: number, y: number) => { lon: number; lat: number }) | null,
+  canvas: PreviewCanvas | null
+): void {
+  // `clearPreview` reaches here, and it is tested in a plain Node runner with
+  // no DOM at all. Nothing below is meaningful without one.
+  if (typeof document === 'undefined') return;
+  const node = document.getElementById('terrainReadout');
+  const target = canvas?.element ?? null;
+
+  // Removed unconditionally first, so a re-render replaces the listener instead
+  // of adding a second one that samples through a stale transform.
+  if (terrainMove && target) target.removeEventListener('pointermove', terrainMove);
+  terrainMove = null;
+
+  if (!toLonLat || !target || !node) {
+    node?.classList.add('hidden');
+    terrainPoint = null;
+    sampler?.clear();
+    return;
+  }
+
+  node.classList.remove('hidden');
+
+  // Created on first use and then kept: its whole value is the cache, and
+  // rebuilding it per render would re-fetch a tile per mouse move. Its callback
+  // writes the label rather than calling `render()` — a full canvas repaint for
+  // a text change is work nobody asked for.
+  if (!sampler) sampler = new TerrainSampler(paintTerrain);
+
+  terrainMove = (event: PointerEvent) => {
+    const world = ui.previewCanvas?.unproject(event.offsetX, event.offsetY);
+    if (!world) return;
+    terrainPoint = toLonLat(world.x, world.y);
+    paintTerrain();
+  };
+  target.addEventListener('pointermove', terrainMove);
+  paintTerrain();
 }
 
 /**

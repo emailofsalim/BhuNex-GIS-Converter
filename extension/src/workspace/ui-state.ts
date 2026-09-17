@@ -136,6 +136,15 @@ export interface UiState {
    */
   basemap?: Basemap;
   /**
+   * The shaded-relief layer drawn over the basemap, when terrain is on.
+   *
+   * A second `Basemap` rather than a mode of the first, because it is a second
+   * tile pyramid with its own URL, zoom ceiling, cache and failure state. One
+   * instance juggling two providers would have to key its cache by provider,
+   * which is what having two instances already does.
+   */
+  basemapRelief?: Basemap;
+  /**
    * Whether the grid is drawn — a MIRROR of `PreviewCanvas.showGrid`, not the
    * owner of it. The canvas keeps that field private and offers `toggleGrid()`,
    * which is the right shape; this exists only so the toolbar button can light
@@ -181,6 +190,7 @@ export const ui: UiState = {
   featureSelection: { refs: [], wholeLayers: [] },
   palette: null,
   basemap: undefined,
+  basemapRelief: undefined,
   // The canvas constructs with the grid ON, so the mirror starts true or the
   // button would claim it is off while the grid is drawn.
   gridOn: true,
