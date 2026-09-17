@@ -174,7 +174,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     hint: 'Look at the drawing, and select what to work on.',
     tools: ['pan', 'select', 'lasso', 'move'],
     actions: ['fit', 'grid', 'undo', 'redo'],
-    panels: [{ label: 'Selection…', group: 'edit', tab: 'select' }],
+    panels: [{ label: 'Select & move', group: 'edit', tab: 'select' }],
   },
   {
     id: 'draw',
@@ -182,7 +182,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     hint: 'Add new geometry, with snapping and orthogonal constraint.',
     tools: ['draw-point', 'draw-line', 'draw-polygon', 'draw-text', 'draw-marker'],
     actions: ['snap', 'ortho', 'undo', 'redo'],
-    panels: [{ label: 'Drawing…', group: 'edit', tab: 'select' }],
+    panels: [{ label: 'Drawing settings', group: 'edit', tab: 'select' }],
   },
   {
     id: 'modify',
@@ -191,8 +191,9 @@ export const RIBBON_TABS: RibbonTab[] = [
     tools: ['vertex'],
     actions: ['snap', 'ortho', 'undo', 'redo'],
     panels: [
-      { label: 'Vertices…', group: 'edit', tab: 'edit' },
-      { label: 'Geometry tools…', group: 'edit', tab: 'geometry-ops' },
+      { label: 'Vertices', group: 'edit', tab: 'edit' },
+      { label: 'Geometry tools', group: 'edit', tab: 'geometry-ops' },
+      { label: 'Repair', group: 'edit', tab: 'repair' },
     ],
   },
   {
@@ -201,7 +202,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     hint: 'Distance, area, and what a feature actually is.',
     tools: ['measure-distance', 'measure-area', 'info'],
     actions: ['snap'],
-    panels: [{ label: 'Measure…', group: 'edit', tab: 'measure' }],
+    panels: [{ label: 'Measure', group: 'edit', tab: 'measure' }],
   },
   {
     id: 'place',
@@ -210,8 +211,8 @@ export const RIBBON_TABS: RibbonTab[] = [
     tools: ['georef'],
     actions: ['fit'],
     panels: [
-      { label: 'Georeference…', group: 'edit', tab: 'georef' },
-      { label: 'Backdrop…', group: 'edit', tab: 'backdrop' },
+      { label: 'Georeference', group: 'edit', tab: 'georef' },
+      { label: 'Backdrop', group: 'edit', tab: 'backdrop' },
     ],
   },
 ];
@@ -267,22 +268,6 @@ export const PANEL_TABS: RibbonPanelTab[] = [
     ],
   },
   {
-    id: 'edit',
-    label: 'Edit',
-    hint: 'The settings behind the canvas tools.',
-    group: 'edit',
-    body: 'inspector',
-    sections: [
-      { label: 'Select & move', tab: 'select' },
-      { label: 'Vertices', tab: 'edit' },
-      { label: 'Measure', tab: 'measure' },
-      { label: 'Geometry tools', tab: 'geometry-ops' },
-      { label: 'Repair', tab: 'repair' },
-      { label: 'Backdrop', tab: 'backdrop' },
-      { label: 'Georeference', tab: 'georef' },
-    ],
-  },
-  {
     id: 'out',
     label: 'Export',
     hint: 'What the chosen format will keep, and what it cannot.',
@@ -315,6 +300,48 @@ export const PANEL_TABS: RibbonPanelTab[] = [
 /** The panel tab that owns a dock group, or null for a tool family. */
 export function panelTabFor(id: string): RibbonPanelTab | null {
   return PANEL_TABS.find((tab) => tab.id === id) ?? null;
+}
+
+/**
+ * Every dock group the workspace can show.
+ *
+ * `edit` is in this list and is NOT a caption tab, and that combination is
+ * deliberate. `showGroupBody` needs a group to decide which body to reveal and
+ * to record in `inspectorGroup`; the caption needs a tab only for the
+ * file-oriented groups. Conflating the two is what produced the duplicate
+ * "Edit" tab — a caption entry invented because the group existed, competing
+ * with the tool families that actually own those panels.
+ *
+ * Exported so the invariant can be checked against the dock's real capability
+ * rather than against whatever happens to be in `PANEL_TABS`.
+ */
+export const DOCK_GROUPS = ['data', 'edit', 'out', 'results'] as const;
+
+/**
+ * Which caption tab owns a section, across BOTH halves of the ribbon.
+ *
+ * There is exactly one owner now. While the "Edit" panel tab existed, a
+ * section like Vertices had two — the Modify family and Edit — and every
+ * lookup had to pick one, which is how `alignRibbonTo` came to need a special
+ * case to stop Modify landing on Edit. With one owner the question has one
+ * answer and the special case is gone.
+ *
+ * Tool families are searched first because they are the specific home; the
+ * panel groups are the file-oriented ones and own nothing a family does.
+ */
+export function ownerOfSection(tab: string): { ribbonTabId: string; group: string } | null {
+  const family = RIBBON_TABS.find((entry) => entry.panels.some((panel) => panel.tab === tab));
+  if (family) return { ribbonTabId: family.id, group: family.panels[0].group };
+  const panel = PANEL_TABS.find((entry) => entry.sections.some((section) => section.tab === tab));
+  return panel ? { ribbonTabId: panel.id, group: panel.group } : null;
+}
+
+/** The caption tab that opens a dock group, for the group-level lookup. */
+export function ownerOfGroup(group: string): string | null {
+  const panel = PANEL_TABS.find((entry) => entry.group === group);
+  if (panel) return panel.id;
+  const family = RIBBON_TABS.find((entry) => entry.panels.some((p) => p.group === group));
+  return family ? family.id : null;
 }
 
 /** The ribbon tab a tool lives on, so a keyboard shortcut lights the right one. */
@@ -552,11 +579,32 @@ export function renderToolbar(into: HTMLElement, enabled: boolean): void {
     const node = actionButton(id);
     if (node) row.append(node);
   }
-  // NO PANEL SHORTCUTS HERE ANY MORE. Each tool family used to end its row
-  // with "Vertices…", "Measure…", "Backdrop…" and the rest — the same sections
-  // the Edit tab in this very caption now lists, so the same panel had two
-  // buttons in one bar. Selecting the family still opens its panel; that is
-  // what `panels[0]` is for, and it costs no button.
+  // THE FAMILY'S OWN SECTIONS, and they are not a duplicate any more.
+  //
+  // These buttons were removed once because the caption also carried an "Edit"
+  // tab listing the same sections, so one panel had two buttons in one bar.
+  // The right fix was the other one: "Edit" is gone. Data, Export and Results
+  // are about the FILE — what was read, what will be written, what came out —
+  // while "Edit" was about the CANVAS, which is what this entire left half
+  // already is. It was a second, competing home for panels the tool families
+  // own, and it is why clicking Modify used to land on Edit.
+  //
+  // So each section now has exactly one place it lives: on the family whose
+  // tools it configures.
+  if (family.panels.length) {
+    if (family.tools.length || family.actions.length) row.append(separator());
+    for (const panel of family.panels) {
+      row.append(
+        button(
+          panel.label,
+          `Show ${panel.label.toLowerCase()}`,
+          state.inspectorTab === panel.tab,
+          () => host.showInspectorTab(panel.tab),
+          !item
+        )
+      );
+    }
+  }
   into.append(row);
 }
 

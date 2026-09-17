@@ -798,10 +798,12 @@ describe('the repair engine is reachable, and every operation it has is offered'
     expect(MAIN).toMatch(/case 'repair':\s*\n\s*body\.append\(\.\.\.repairTab\(item\)\);/);
   });
 
-  it('is listed as a section of a panel tab, so there is a button to press', async () => {
-    const { PANEL_TABS: tabs } = await import('../src/workspace/panels/toolbar');
-    const sections = tabs.flatMap((tab) => tab.sections.map((section) => section.tab));
-    expect(sections).toContain('repair');
+  it('is listed as a section of a caption tab, so there is a button to press', async () => {
+    // Moved off the deleted "Edit" panel tab onto the Modify tool family,
+    // which is the family whose tools it configures. `ownerOfSection` is the
+    // lookup that spans both halves of the caption.
+    const { ownerOfSection } = await import('../src/workspace/panels/toolbar');
+    expect(ownerOfSection('repair')?.ribbonTabId).toBe('modify');
   });
 
   it('replays through the edit pipeline rather than only touching the preview', async () => {

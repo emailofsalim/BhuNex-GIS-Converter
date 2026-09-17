@@ -240,8 +240,37 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
     const reason = basemap.unavailableReason;
     badge.classList.toggle('hidden', reason === null);
     if (reason) {
-      badge.textContent = isOnline() ? 'Basemap: no placeable CRS' : 'Basemap off — no internet';
+      // Two different failures, and only one of them is the user's to act on.
+      // A missing CRS is fixed in the CRS tab; a browser wrongly reporting
+      // offline is fixed by disagreeing with it, so that badge is a button.
+      // `unavailableReason` reports the CRS first, so when the network is
+      // allowed and a reason survives, the reason IS the CRS one.
+      const networkAllowed = isOnline() || basemap.overridden;
+      const retryable = !networkAllowed;
+      badge.textContent = retryable
+        ? 'Basemap off — browser reports offline. Try anyway'
+        : 'Basemap: no placeable CRS';
       badge.title = reason;
+      badge.classList.toggle('badge--action', retryable);
+      badge.setAttribute('role', retryable ? 'button' : 'note');
+      if (retryable) badge.setAttribute('tabindex', '0');
+      else badge.removeAttribute('tabindex');
+
+      // Rebound every render, so the handler always closes over the CURRENT
+      // basemap rather than one replaced by a provider or CRS change.
+      // `tryAnyway` ends in `onTileLoaded`, which is the canvas repaint hook
+      // this basemap was constructed with — the same one a tile arriving uses.
+      // Calling a render here as well would be a second, competing path.
+      const retry = (): void => basemap.tryAnyway();
+      badge.onclick = retryable ? retry : null;
+      badge.onkeydown = retryable
+        ? (event: KeyboardEvent) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              retry();
+            }
+          }
+        : null;
     }
   }
 }

@@ -349,7 +349,40 @@ describe('the connectivity gate', () => {
       onTileLoaded: () => {},
     });
     expect(basemap.usable).toBe(false);
-    expect(basemap.unavailableReason).toContain('No internet connection');
+    // The wording names WHO is claiming it. `navigator.onLine === false` is not
+    // proof — it can stick false after a VPN change or a network driver fault
+    // on a machine that is otherwise online, which is what a user hit — so the
+    // badge reports the browser's claim and offers to override it.
+    expect(basemap.unavailableReason).toContain('BROWSER reports no connection');
+    expect(basemap.unavailableReason).toContain('request the tiles anyway');
+    basemap.dispose();
+  });
+
+  it('lets the user override a browser that is wrong about being offline', () => {
+    // THE DEFECT THIS EXISTS TO PREVENT. `navigator.onLine === false` gated the
+    // entire layer, and the code claimed it "means there is definitively no
+    // route". It does not: Chrome reports false while a VPN adapter settles,
+    // while a virtual adapter enumerates, and it can STAY false after a network
+    // driver faults on a machine whose browser is otherwise loading pages.
+    //
+    // A user hit exactly that — tiles that worked yesterday silently stopped,
+    // the badge asserted "no internet" as fact, and there was no way to
+    // disagree with it. Tile servers were reachable and CORS-clean the whole
+    // time; nothing about the network was actually wrong.
+    setNavigator({ onLine: false });
+    const basemap = new Basemap({
+      provider: TILE_PROVIDERS[0],
+      toLonLat: (x, y) => ({ lon: x, lat: y }),
+      fromLonLat: (lon, lat) => ({ x: lon, y: lat }),
+      onTileLoaded: () => {},
+    });
+    expect(basemap.usable).toBe(false);
+    expect(basemap.overridden).toBe(false);
+
+    basemap.tryAnyway();
+    expect(basemap.overridden).toBe(true);
+    expect(basemap.usable, 'the override did not re-enable the layer').toBe(true);
+    expect(basemap.unavailableReason).toBeNull();
     basemap.dispose();
   });
 

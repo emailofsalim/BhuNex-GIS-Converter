@@ -12,8 +12,10 @@
  * putting it on a tab fails here rather than shipping.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CANVAS_ACTIONS, CANVAS_TOOLS, RIBBON_TABS, ribbonTabFor } from '../src/workspace/panels/toolbar';
+import { DOCK_GROUPS, CANVAS_ACTIONS, CANVAS_TOOLS, RIBBON_TABS, ribbonTabFor } from '../src/workspace/panels/toolbar';
 
 describe('every tool is reachable from the ribbon', () => {
   const placed = RIBBON_TABS.flatMap((tab) => tab.tools);
@@ -68,8 +70,14 @@ describe('the panels a tab owns are real panels', () => {
     // These strings are handed to `ui.openPanel(group, tab)` and match the
     // `data-group` / `data-tab` attributes in index.html. A typo here produces
     // a button that does nothing at all, which is the quietest kind of broken.
-    const groups = new Set(['data', 'edit', 'out', 'results']);
-    const sections = new Set(['select', 'edit', 'measure', 'geometry-ops', 'backdrop', 'georef']);
+    // Both lists used to be typed out here, and both went stale the moment a
+    // section moved: adding Repair to Modify failed this with "unknown
+    // section", which looks like a broken button and was actually a stale
+    // test. They are derived from the code now — the groups the dock declares,
+    // and the sections the inspector switch actually has a case for.
+    const groups = new Set<string>(DOCK_GROUPS);
+    const main = readFileSync(join(import.meta.dirname, '..', 'src', 'workspace', 'main.ts'), 'utf8');
+    const sections = new Set([...main.matchAll(/case '([a-z-]+)':/g)].map((match) => match[1]));
     for (const tab of RIBBON_TABS) {
       for (const panel of tab.panels) {
         expect(groups.has(panel.group), `${tab.label} → unknown dock group "${panel.group}"`).toBe(true);
