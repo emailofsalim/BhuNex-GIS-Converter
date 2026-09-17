@@ -54,6 +54,24 @@ export interface FormatLimits {
   /** The specification fixes the CRS: GeoJSON RFC 7946, KML, GPX, OSM. */
   mandatesCrsEpsg?: number;
   /**
+   * The format holds a PLANE GRID and has no concept of degrees.
+   *
+   * The mirror of `mandatesCrsEpsg`, and it was missing. That flag makes the
+   * pipeline reproject a UTM survey into WGS 84 on its way to KML, because a
+   * projected easting read back as a longitude lands a continent away. The
+   * reverse is just as wrong and had nothing guarding it: KML into DXF wrote
+   * `80.1385831` as an X ordinate, so a parcel sixty metres across became a
+   * drawing 0.0006 units wide. AutoCAD opens that as a dot at the origin with
+   * degenerate extents — the "not giving valid output" a user reported.
+   *
+   * Distinct from `supportsCRS === false`. A shapefile cannot name its CRS
+   * inside the .shp either, but it takes a .prj sidecar and is perfectly happy
+   * holding degrees. These formats are different in kind: a DXF, a Surpac
+   * string file or an XYZ point list is a SITE GRID in linear units, where an
+   * ordinate under 180 is not a coordinate anyone can build from.
+   */
+  requiresProjectedGrid?: boolean;
+  /**
    * How the source's layer hierarchy survives a write:
    *   native    the format has layers or typed collections of its own
    *   folders   written as nested containers (KML)
@@ -516,7 +534,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: T,
     packaging: 'single',
-    limits: { layerModel: 'native', stylePreserved: true, labelPreserved: true },
+    limits: { layerModel: 'native', stylePreserved: true, labelPreserved: true, requiresProjectedGrid: T },
     readerEngine: 'cad/dxf-read',
     writerEngine: 'cad/dxf-write',
     warnings: [
@@ -543,6 +561,7 @@ export const FORMATS: FormatDef[] = [
     supportsCRS: F,
     supportsMultiGeometry: F,
     supportsCurves: T,
+    limits: { requiresProjectedGrid: T },
     readerEngine: 'adapters/native-messaging',
     writerEngine: 'adapters/native-messaging',
     warnings: ['DWG requires the local native helper driving your installed ODA File Converter. A renamed DXF is never presented as DWG.'],
@@ -846,7 +865,7 @@ export const FORMATS: FormatDef[] = [
     supportsMultiGeometry: F,
     supportsCurves: F,
     packaging: 'single',
-    limits: { geometryTypes: ['Point', 'LineString', 'MultiLineString', 'Polygon'], layerModel: 'native' },
+    limits: { geometryTypes: ['Point', 'LineString', 'MultiLineString', 'Polygon'], layerModel: 'native', requiresProjectedGrid: T },
     readerEngine: 'vector/surpac',
     writerEngine: 'vector/surpac',
     warnings: ['String number, Y (northing), X (easting), Z and description fields are handled. Surpac styling and extended D-fields beyond the description are not interpreted.'],
