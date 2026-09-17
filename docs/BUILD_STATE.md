@@ -50,7 +50,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 3 | Survey/engineering: LandXML, Surpac STR, MIF/MID, GML, OSM, ASCII Grid, world files, QGIS GCP, XLSX | ✅ done |
 | 4 | Raster: GeoTIFF codec ✅ (read + write), contours ✅, clip ✅, resampling + reprojection ✅ (`warp.ts`), vectorize ✅, rasterize ✅ | ✅ done |
 | 5 | Point cloud: LAS ✅, LAZ codec ⛔, PLY ✅, PTS ✅, XYZ ✅, decimation ✅ | 🟡 partial |
-| 6 | Native/advanced: DWG via native host ✅; DGN/E57/GPKG/FGB/Parquet adapters ⛔ | 🟡 partial |
+| 6 | Native/advanced: DWG via native host ✅, **FlatGeobuf full read+write ✅** (task #68, `vector/flatgeobuf.ts`); DGN/E57/GeoPackage adapter contracts ⛔, Parquet not in the registry at all | 🟡 partial |
 | 7 | UI: workspace, side panel, popup, preview, QA report, batch | ✅ done |
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
