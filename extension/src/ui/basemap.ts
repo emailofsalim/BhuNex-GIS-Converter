@@ -366,13 +366,24 @@ export interface BasemapOptions {
 /**
  * Whether the browser believes it has a network connection.
  *
- * `navigator.onLine` is honest in one direction and optimistic in the other:
- * false means there is definitively no route, and true only means an interface
- * is up — a captive portal or a dead uplink still reports true. That asymmetry
- * is exactly the right shape for this use, because it is used to SUPPRESS
- * requests rather than to promise they will succeed. When it says offline, no
- * request is made at all; when it says online, a tile may still fail, and the
- * failure path below is unchanged.
+ * `navigator.onLine` is optimistic in one direction and UNRELIABLE in the
+ * other. True only means an interface is up — a captive portal or a dead
+ * uplink still reports it. False is the one this used to get wrong: the note
+ * here claimed it "means there is definitively no route", and it does not.
+ * Chrome reports false while a VPN adapter is settling, while a virtual or
+ * bridged adapter is enumerating, and — the case that produced a bug report —
+ * it can STAY false after a network driver faults, on a machine whose browser
+ * is otherwise loading pages perfectly.
+ *
+ * That matters because this value gated the whole layer: false meant no
+ * request was made, nothing was drawn, and the badge announced "no internet"
+ * as a fact about the world rather than a claim by the browser. Tiles that
+ * worked yesterday silently stopped, and there was no way to disagree with it.
+ *
+ * So it is still used to SUPPRESS speculative requests — sixty-four failing
+ * tile fetches per pan on a metered link is real harm — but it is no longer
+ * the last word. `Basemap.tryAnyway()` overrides it, and the badge says who is
+ * making the claim.
  *
  * Wrapped rather than read inline so it can be tested and so a context without
  * `navigator` — the conversion worker, a test runner — does not throw. Absent
@@ -386,6 +397,8 @@ export function isOnline(): boolean {
 export class Basemap {
   private cache = new Map<string, TileState>();
   private options: BasemapOptions;
+  /** Set by `tryAnyway` when the user overrides a reported-offline browser. */
+  private forced = false;
   /** Bounded so a long panning session cannot grow the cache without limit. */
   private static readonly MAX_CACHED = 256;
   private readonly onConnectivity: () => void;
@@ -438,16 +451,48 @@ export class Basemap {
    * will remain off since it requires internet".
    */
   get usable(): boolean {
-    return this.options.toLonLat !== null && this.options.fromLonLat !== null && isOnline();
+    return this.options.toLonLat !== null && this.options.fromLonLat !== null && this.networkAllowed;
+  }
+
+  /** Requests are allowed when the browser says online, or the user overrode it. */
+  private get networkAllowed(): boolean {
+    return isOnline() || this.forced;
+  }
+
+  /**
+   * Try the tiles despite the browser reporting no connection.
+   *
+   * Exists because `navigator.onLine === false` is not proof of anything (see
+   * `isOnline`). Without this, a browser stuck on false disables the basemap
+   * permanently with no way to disagree — which is what happened. Cached
+   * offline states are dropped so every visible tile is genuinely re-requested
+   * rather than answered from the refusal that is already in the map.
+   */
+  tryAnyway(): void {
+    this.forced = true;
+    for (const [url, state] of this.cache) {
+      if (state.image === null) this.cache.delete(url);
+    }
+    this.options.onTileLoaded();
+  }
+
+  /** True once the user has overridden a reported-offline browser. */
+  get overridden(): boolean {
+    return this.forced;
   }
 
   /** Why the basemap is not drawing, for the panel to say out loud. */
   get unavailableReason(): string | null {
-    if (!isOnline()) {
-      return 'No internet connection, so the map tiles are off. They come from a tile service and cannot be drawn without one. Everything else in this tool works offline; the basemap will come back on its own when the connection does.';
-    }
+    // CRS FIRST. It is the unconditional one: without a placeable CRS the
+    // tiles cannot be drawn even on a perfect connection, so reporting the
+    // network instead would send someone to fix the wrong thing. The old order
+    // had this backwards and a file with no CRS on a flaky link was told it
+    // had no internet.
     if (this.options.toLonLat === null || this.options.fromLonLat === null) {
       return 'This data has no coordinate system the tiles can be placed in — an undeclared CRS, a local site grid, or a datum with no bundled shift. Tiles are not drawn rather than drawn in the wrong place.';
+    }
+    if (!this.networkAllowed) {
+      return 'The BROWSER reports no connection, so no tile has been requested. That report is not always right — it can stay false after a VPN change or a network driver fault on a machine that is otherwise online. Nothing else in this tool needs a network. Select this badge to request the tiles anyway.';
     }
     return null;
   }
@@ -461,7 +506,7 @@ export class Basemap {
     // them per pan, and on a metered or captive connection that is real
     // traffic for a layer the user has been told is off. Nothing is cached
     // either, so the state does not have to be swept when the link returns.
-    if (!isOnline()) return OFFLINE_TILE;
+    if (!this.networkAllowed) return OFFLINE_TILE;
 
     const image = new Image();
     // Tile servers send Access-Control-Allow-Origin, so this keeps the canvas

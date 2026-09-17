@@ -1063,6 +1063,25 @@ textarea {
   color: var(--warn);
   border-color: rgba(245, 176, 65, 0.3);
 }
+/**
+ * A badge that is also a button.
+ *
+ * The basemap badge used to be a passive note reading "no internet" — a claim
+ * the browser can get wrong, with nothing the reader could do about it. It
+ * offers a retry now, so it has to LOOK like something to press rather than
+ * like a label that happens to be clickable.
+ */
+.badge--action {
+  cursor: pointer;
+  border-style: solid;
+  text-decoration: underline dotted currentColor 1px;
+  text-underline-offset: 2px;
+}
+.badge--action:hover,
+.badge--action:focus-visible {
+  filter: brightness(1.15);
+  text-decoration-style: solid;
+}
 .badge--error {
   background: var(--error-wash);
   color: var(--error);

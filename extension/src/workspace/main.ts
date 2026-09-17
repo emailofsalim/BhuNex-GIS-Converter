@@ -47,7 +47,7 @@ import { historyPanel } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
-import { type CanvasToolId, engineOf, PANEL_TABS, renderToolbar, RIBBON_TABS, ribbonIsFolded, setCanvasTool, toggleRibbonFold, toolForKey } from './panels/toolbar';
+import { type CanvasToolId, engineOf, ownerOfGroup, ownerOfSection, PANEL_TABS, renderToolbar, RIBBON_TABS, ribbonIsFolded, setCanvasTool, toggleRibbonFold, toolForKey } from './panels/toolbar';
 import { GeorefCanvas } from '../ui/georef-canvas';
 import { centreOf, georefPanel, pickToLocal, replaceFromOriginal } from './panels/georef';
 import { rebuildPreviewFrom } from './panels/edits';
@@ -433,10 +433,14 @@ function renderInspector(): void {
  * again. A family that already owns the group keeps it.
  */
 function alignRibbonTo(group: string): void {
+  // A family already showing this group keeps it. That guard predates the
+  // removal of the "Edit" panel tab and is now belt-and-braces rather than
+  // load-bearing: with one owner per section there is no second tab to be
+  // dragged to. Kept because it is still correct and costs a comparison.
   const family = RIBBON_TABS.find((tab) => tab.id === ui.ribbonTab);
-  if (family && family.panels[0]?.group === group) return;
-  const panel = PANEL_TABS.find((tab) => tab.group === group);
-  if (panel) ui.ribbonTab = panel.id;
+  if (family && family.panels.some((panel) => panel.group === group)) return;
+  const owner = ownerOfGroup(group);
+  if (owner) ui.ribbonTab = owner;
 }
 
 /**
@@ -468,8 +472,15 @@ function showInspectorTab(name: string): void {
   // A section named from the command palette or from a panel's own button has
   // to bring its GROUP forward too, or the dock shows one thing while the
   // ribbon lights another.
-  const owner = PANEL_TABS.find((tab) => tab.sections.some((section) => section.tab === name));
-  if (owner) showGroupBody(owner.group);
+  // Searches both halves of the caption, so a section owned by a tool family
+  // brings that family forward rather than finding no owner at all — which is
+  // what a PANEL_TABS-only lookup would now do for Vertices, Repair and the
+  // rest that moved off the deleted Edit tab.
+  const owner = ownerOfSection(name);
+  if (owner) {
+    ui.ribbonTab = owner.ribbonTabId;
+    showGroupBody(owner.group);
+  }
   render();
 }
 

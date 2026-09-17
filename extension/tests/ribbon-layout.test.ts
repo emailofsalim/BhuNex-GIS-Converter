@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { PANEL_TABS, RIBBON_TABS } from '../src/workspace/panels/toolbar';
+import { DOCK_GROUPS, ownerOfSection, PANEL_TABS, RIBBON_TABS } from '../src/workspace/panels/toolbar';
 
 const ROOT = join(import.meta.dirname, '..', '..', 'extension', 'src', 'workspace');
 const HTML = readFileSync(join(ROOT, 'index.html'), 'utf8');
@@ -38,8 +38,22 @@ const MAIN = readFileSync(join(ROOT, 'main.ts'), 'utf8');
 const TOOLBAR = readFileSync(join(ROOT, 'panels', 'toolbar.ts'), 'utf8');
 
 describe('the four dock groups live in the ribbon, and only there', () => {
-  it('names all four as ribbon tabs', () => {
-    expect(PANEL_TABS.map((tab) => tab.label)).toEqual(['Data', 'Edit', 'Export', 'Results']);
+  it('names the FILE-oriented groups as panel tabs, and nothing else', () => {
+    // "Edit" is deliberately absent. Data, Export and Results are about the
+    // FILE — what was read, what will be written, what came out. Edit was
+    // about the CANVAS, which is what the whole left half of the caption
+    // already is, so it was a second home for panels the tool families own.
+    // That is the duplication the owner reported: "there is Modify as well as
+    // Edit I think both are for same purpose".
+    expect(PANEL_TABS.map((tab) => tab.label)).toEqual(['Data', 'Export', 'Results']);
+  });
+
+  it('still shows the edit group in the dock, it just has no caption tab', () => {
+    // The GROUP has to survive: `showGroupBody` needs one to pick a body and
+    // record in `inspectorGroup`. Conflating "a group exists" with "a caption
+    // tab must exist for it" is what invented the duplicate in the first place.
+    expect(DOCK_GROUPS).toContain('edit');
+    expect(PANEL_TABS.some((tab) => tab.group === 'edit')).toBe(false);
   });
 
   it('leaves no copy of them in the dock markup', () => {
@@ -67,10 +81,15 @@ describe('the four dock groups live in the ribbon, and only there', () => {
   it('keeps every section that the old two-level picker could reach', () => {
     // A section dropped in the move is a panel the user can no longer open at
     // all — the quietest way to lose a feature.
-    const reachable = new Set(PANEL_TABS.flatMap((tab) => tab.sections.map((section) => section.tab)));
+    // Reachability now spans BOTH halves of the caption: the file groups list
+    // their sections, and each tool family lists the ones it owns.
+    const reachable = new Set([
+      ...PANEL_TABS.flatMap((tab) => tab.sections.map((section) => section.tab)),
+      ...RIBBON_TABS.flatMap((tab) => tab.panels.map((panel) => panel.tab)),
+    ]);
     const before = [
       'overview', 'geometry', 'crs', 'attributes', 'metadata',
-      'select', 'edit', 'measure', 'geometry-ops', 'backdrop', 'georef',
+      'select', 'edit', 'measure', 'geometry-ops', 'repair', 'backdrop', 'georef',
       'fidelity', 'compare', 'warnings',
       'qa', 'log', 'delivery', 'manifest', 'health', 'history', 'workflows',
     ];
@@ -91,12 +110,41 @@ describe('the four dock groups live in the ribbon, and only there', () => {
     expect(PANEL_TABS.filter((tab) => tab.body === 'bottom').map((tab) => tab.id)).toEqual(['results']);
   });
 
-  it('stops repeating each tool family\'s panels as buttons in its own row', () => {
-    // "Vertices…", "Measure…", "Backdrop…" used to end the tool rows — the same
-    // sections the Edit tab in the same caption now lists, so one panel had two
-    // buttons in one bar.
-    expect(TOOLBAR).not.toMatch(/row\.append\(\s*\n?\s*button\(panel\.label/);
-    expect(TOOLBAR).toContain('NO PANEL SHORTCUTS HERE ANY MORE');
+  it('gives each section exactly one owner across the whole caption', () => {
+    // THE INVARIANT THAT REPLACED "no panel buttons in tool rows".
+    //
+    // Those buttons were removed once because the Edit tab listed the same
+    // sections, so one panel had two buttons in one bar. Deleting Edit was the
+    // better half of that fix: the buttons are back on the families that own
+    // them, and what must hold now is that nothing is listed TWICE.
+    // CROSS-HALF duplication is the bug. A section offered by a file group AND
+    // by a tool family is the same panel reached from two unrelated places,
+    // which is what "Edit" was doing to every family.
+    const byFamily = new Set(RIBBON_TABS.flatMap((tab) => tab.panels.map((panel) => panel.tab)));
+    const byGroup = PANEL_TABS.flatMap((tab) => tab.sections.map((section) => section.tab));
+    const bothHalves = byGroup.filter((tab) => byFamily.has(tab));
+    expect(
+      bothHalves,
+      'these sections are offered from both halves of the caption — the duplication that was just removed'
+    ).toEqual([]);
+
+    // Two tool families SHARING one panel is allowed and is not that bug. Home
+    // and Draw both open `select`, because it holds the selection settings and
+    // the snap/ortho drawing settings in one panel and each family labels it
+    // for what it uses. Only one family's row is visible at a time, so the user
+    // never sees two buttons for it — unlike Edit, which sat in the same
+    // caption row as the families it duplicated.
+    for (const tab of [...RIBBON_TABS, ...PANEL_TABS]) {
+      const own = 'panels' in tab ? tab.panels.map((p) => p.tab) : tab.sections.map((s) => s.tab);
+      const twice = own.filter((entry, index) => own.indexOf(entry) !== index);
+      expect([...new Set(twice)], `"${tab.label}" lists a section twice in its own row`).toEqual([]);
+    }
+  });
+
+  it('resolves every section to a single owning tab', () => {
+    for (const tab of new Set(RIBBON_TABS.flatMap((entry) => entry.panels.map((panel) => panel.tab)))) {
+      expect(ownerOfSection(tab), `"${tab}" resolves to no caption tab`).not.toBeNull();
+    }
   });
 });
 
@@ -108,7 +156,10 @@ describe('a tool family keeps the ribbon when it opens its own panel', () => {
     // land on Edit — the family set the tab, opened its panel, and the panel
     // set the tab again, so the Vertex button was not on screen at all.
     expect(MAIN).toContain('function alignRibbonTo(group: string): void {');
-    expect(MAIN).toMatch(/if \(family && family\.panels\[0\]\?\.group === group\) return;/);
+    // Now `some`, not `panels[0]`: a family owns several sections (Modify has
+    // Vertices, Geometry tools and Repair), so checking only the first would
+    // move the ribbon off Modify whenever Repair was the one opened.
+    expect(MAIN).toMatch(/if \(family && family\.panels\.some\(\(panel\) => panel\.group === group\)\) return;/);
   });
 
   it('gives every tool family a panel to own', () => {
@@ -119,10 +170,15 @@ describe('a tool family keeps the ribbon when it opens its own panel', () => {
     expect(orphans, 'these tool families open no panel, so they cannot hold the ribbon').toEqual([]);
   });
 
-  it('points each family at a group that exists', () => {
-    const groups = new Set(PANEL_TABS.map((tab) => tab.group));
+  it('points each family at a group the DOCK can show', () => {
+    // Checked against the dock's real capability rather than against
+    // PANEL_TABS membership. A group with no caption tab is still a group the
+    // dock shows — that is exactly what `edit` is now.
+    const groups = new Set<string>(DOCK_GROUPS);
     for (const tab of RIBBON_TABS) {
-      expect(groups.has(tab.panels[0].group), `${tab.label} opens unknown group "${tab.panels[0].group}"`).toBe(true);
+      for (const panel of tab.panels) {
+        expect(groups.has(panel.group), `${tab.label} opens unknown group "${panel.group}"`).toBe(true);
+      }
     }
   });
 
