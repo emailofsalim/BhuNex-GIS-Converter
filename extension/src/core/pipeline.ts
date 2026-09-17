@@ -42,7 +42,8 @@ import { SURVEY_DEFAULT_PRECISION, type PrecisionPolicy } from './precision';
 import { getFormat, type FormatDef } from './registry';
 import { readDwg } from '../adapters/native-messaging/client';
 import type { DatumShift } from '../crs/datum';
-import { crsFromEpsg } from '../crs/epsg';
+import { crsFromEpsg, utmCrs } from '../crs/epsg';
+import { utmZoneForLongitude } from '../crs/projection';
 import { crsLabel, planTransform, resolveSourceCrs, sameCrs, suggestCrs, transformDataset } from '../crs/transform';
 import { readZip, writeZip, type ZipInput } from '../engines/archives/zip';
 import { readDxf, type ReadDxfOptions } from '../engines/cad/dxf-read';
@@ -879,6 +880,47 @@ function formatImposedCrs(format: FormatDef): CrsRef | null {
 }
 
 /**
+ * The projected grid a CAD or mining target needs, when the data is in degrees.
+ *
+ * THE DEFECT THIS EXISTS TO PREVENT, which is the exact mirror of the one
+ * `formatImposedCrs` prevents.
+ *
+ * That function reprojects a UTM survey into WGS 84 on its way to KML, because
+ * KML has nowhere to say the coordinates are anything else and a projected
+ * easting read back as a longitude lands a continent away. Nothing did the
+ * reverse. Converting a KML — or any WGS 84 GeoJSON — to DXF wrote
+ * `80.1385831` straight into the X ordinate, so a parcel sixty metres across
+ * became a drawing six ten-thousandths of a unit wide. AutoCAD opens that as a
+ * dot at the origin with degenerate extents, which is what "it is not giving
+ * valid output" looks like from the outside. No warning was raised, because
+ * nothing in the pipeline considered it a problem.
+ *
+ * WHY REPROJECT RATHER THAN REFUSE. Refusing would be defensible — R18 says
+ * not to move survey data the user did not ask to move — but the alternative
+ * here is not "leave it alone", it is "write a file no CAD package can open".
+ * A conversion that silently produces garbage is worse than one that states
+ * what it did. So this picks the UTM zone the data actually falls in, and the
+ * caller records it the same way the KML direction is recorded.
+ *
+ * The zone comes from the CENTRE of the data rather than a corner, so a parcel
+ * straddling a zone boundary lands in the zone holding most of it instead of
+ * whichever edge happened to be read first.
+ */
+function projectedGridFor(
+  format: FormatDef,
+  crs: CrsRef | null,
+  bounds: { minX: number; minY: number; maxX: number; maxY: number }
+): CrsRef | null {
+  if (!format.limits?.requiresProjectedGrid) return null;
+  if (crs?.kind !== 'geographic') return null;
+  if (![bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].every(Number.isFinite)) return null;
+
+  const lon = (bounds.minX + bounds.maxX) / 2;
+  const lat = (bounds.minY + bounds.maxY) / 2;
+  return utmCrs(utmZoneForLongitude(lon), lat < 0);
+}
+
+/**
  * Prepares a source dataset for a target: resolves the CRS, applies decimation
  * and repair, and turns a coordinate table into geometry when the target needs
  * it. Extracted so QA's re-import path can reuse it exactly.
@@ -1264,8 +1306,14 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
   // format had already determined — an error message asking the user to supply
   // an answer the tool was holding.
   const requestedCrs = settings.targetCrs ?? null;
-  const targetCrs = requestedCrs ?? imposed;
-  const automatic = !requestedCrs && targetCrs !== null;
+  let targetCrs = requestedCrs ?? imposed;
+  // WHICH RULE CHOSE THE TARGET, not merely whether the tool chose it. The two
+  // automatic rules move data for opposite reasons and the warning has to say
+  // which one applied: 'spec' is a format that mandates a CRS and cannot record
+  // any other, 'grid' is a format that holds a plane grid and has no concept of
+  // degrees. Telling a DXF user their file "has no field in which to record a
+  // different CRS" would be false — DXF is simply not a geographic container.
+  let chosenBy: 'spec' | 'grid' | null = !requestedCrs && targetCrs !== null ? 'spec' : null;
 
   // The source CRS is resolved unconditionally, before anything asks whether a
   // transform is needed. It used to be resolved only inside the branch below,
@@ -1331,11 +1379,27 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     }
   }
 
+  // THE GRID A CAD TARGET NEEDS, decided here rather than beside `imposed`
+  // because it depends on the RESOLVED source CRS and on the data's extent,
+  // neither of which is known until the block above has run.
+  //
+  // Only when the user asked for nothing: an explicit target CRS is a decision
+  // and is never second-guessed. `working.crs` is read rather than
+  // `resolved.crs` so a file that already declared a projected CRS is left
+  // alone, and only genuinely geographic data is moved.
+  if (!requestedCrs && !targetCrs) {
+    const grid = projectedGridFor(target, working.crs, bounds);
+    if (grid) {
+      targetCrs = grid;
+      chosenBy = 'grid';
+    }
+  }
+
   if (targetCrs) {
     if (resolved.blocked) {
       throw new ConversionError({
         code: 'CRS_REQUIRED',
-        what: automatic
+        what: chosenBy
           ? `${target.name} stores coordinates in ${crsLabel(targetCrs)}, but the source CRS is unknown, so they cannot be converted into it.`
           : `A transform to ${crsLabel(targetCrs)} was requested, but the source CRS is unknown.`,
         why: resolved.message ?? 'The file declares no CRS and the coordinates are ambiguous.',
@@ -1373,12 +1437,18 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
       warnings.push(
         warn('CRS_TRANSFORMED', `Coordinates were transformed from ${crsLabel(plan.from)} to ${crsLabel(plan.to)}.`, {
           severity: 'info',
-          reason: automatic
-            ? `${target.name} stores its coordinates in ${crsLabel(targetCrs)} and has no field in which to record a different one, so the transform is part of writing the format at all.`
-            : 'A target CRS was set in the conversion settings.',
-          action: automatic
-            ? 'Set a target CRS explicitly in the CRS panel if you need a different one — though this format will not be able to record it.'
-            : undefined,
+          reason:
+            chosenBy === 'spec'
+              ? `${target.name} stores its coordinates in ${crsLabel(targetCrs)} and has no field in which to record a different one, so the transform is part of writing the format at all.`
+              : chosenBy === 'grid'
+                ? `${target.name} holds a plane grid in linear units and has no concept of degrees. Written as they arrived, the coordinates would have made a drawing less than a metre across, which opens as a dot at the origin. ${crsLabel(targetCrs)} is the UTM zone the data falls in.`
+                : 'A target CRS was set in the conversion settings.',
+          action:
+            chosenBy === 'spec'
+              ? 'Set a target CRS explicitly in the CRS panel if you need a different one — though this format will not be able to record it.'
+              : chosenBy === 'grid'
+                ? 'Set a target CRS explicitly in the CRS panel to write the drawing on your own site grid instead.'
+                : undefined,
         })
       );
     }
