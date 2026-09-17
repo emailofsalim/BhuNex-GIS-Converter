@@ -44,11 +44,14 @@ export type RepairOperationId =
   | 'regularise'
   | 'remove-holes'
   | 'fill-holes'
+  | 'repair-self-intersection'
   // Cross-feature. These read one feature to decide what happens to another,
   // so they run through `rewriteAcross` rather than the per-feature `rewrite`.
   | 'snap-shared-edges'
   | 'rebuild-topology'
-  | 'merge-adjacent-polygons';
+  | 'merge-adjacent-polygons'
+  | 'remove-slivers'
+  | 'extend-trim-lines';
 
 /**
  * The operations that cannot be expressed as a per-feature rewrite.
@@ -65,6 +68,13 @@ export const CROSS_FEATURE_OPERATIONS: RepairOperationId[] = [
   'snap-shared-edges',
   'rebuild-topology',
   'merge-adjacent-polygons',
+  // `remove-slivers` looks per-feature and is not: it DELETES, and `rewrite`
+  // returns a replacement geometry with no way to say "this feature should not
+  // exist". The removal machinery lives on this side.
+  'remove-slivers',
+  // `extend-trim-lines` needs the line it is reaching for, which is another
+  // feature by definition.
+  'extend-trim-lines',
 ];
 
 export const REPAIR_LABEL: Record<RepairOperationId, string> = {
@@ -80,9 +90,12 @@ export const REPAIR_LABEL: Record<RepairOperationId, string> = {
   regularise: 'Regularise to right angles',
   'remove-holes': 'Remove small holes',
   'fill-holes': 'Fill all holes',
+  'repair-self-intersection': 'Repair self-intersecting rings',
   'snap-shared-edges': 'Snap shared edges between features',
   'rebuild-topology': 'Rebuild topology (snap and node)',
   'merge-adjacent-polygons': 'Merge adjacent polygons',
+  'remove-slivers': 'Remove sliver polygons',
+  'extend-trim-lines': 'Extend and trim line ends to junctions',
 };
 
 /**
@@ -149,6 +162,51 @@ export interface RepairOptions {
    * test that eats real geometry.
    */
   sharedEdgeTolerance: number;
+  /**
+   * What to do with the lobes of a self-intersecting ring.
+   *
+   * THE REASON THIS IS A CHOICE AND NOT A CONSTANT. A bowtie has two
+   * defensible resolutions and they are answers to different questions:
+   *
+   *   'split'   keep every lobe, as separate polygons. Conservative — no area
+   *             is lost, which on a parcel means no land quietly disappears.
+   *             The right answer when the crossing is a genuine feature, or
+   *             when you do not yet know which lobe is the mistake.
+   *   'largest' keep the biggest lobe and drop the rest. The right answer for
+   *             a digitising slip, where a vertex was typed one row out and
+   *             produced a hairline lobe nobody intended.
+   *
+   * There is no way to tell those apart from the geometry, so the tool does
+   * not guess: it defaults to the one that destroys nothing and says which it
+   * did in the plan.
+   */
+  selfIntersectionMode: 'split' | 'largest';
+  /**
+   * Thinness at or below which a polygon is a sliver: 4·pi·area / perimeter².
+   *
+   * The same measure `qa/defects.ts` detects with, deliberately — a repair
+   * that used a different definition from the check that reported the problem
+   * would leave defects on screen after "fixing" them. 1 is a perfect circle;
+   * a square is about 0.785; a 100 m × 2 cm shaving is about 0.0008.
+   */
+  sliverThinnessThreshold: number;
+  /**
+   * Area below which a thin polygon is a sliver, in squared dataset units.
+   *
+   * BOTH tests must pass. Thinness alone would delete a legitimate road
+   * reserve or a river strip, which are long, thin and entirely real.
+   */
+  sliverMaxArea: number;
+  /**
+   * How far `extend-trim-lines` will reach for a junction, in dataset units.
+   *
+   * Separate from `sharedEdgeTolerance`, which asks "is this already the same
+   * node". This one asks "was this meant to reach that line", and the answer
+   * is a survey judgement about digitising error — a couple of centimetres on
+   * a plan sheet, not a fraction of a millimetre. Beyond it a line end is
+   * taken to be a genuine dangle, ending where it was drawn to end.
+   */
+  danglingTolerance: number;
 }
 
 export const DEFAULT_REPAIR_SETTINGS: RepairOptions = {
@@ -162,6 +220,14 @@ export const DEFAULT_REPAIR_SETTINGS: RepairOptions = {
   regulariseAngleDegrees: 15,
   maxHoleArea: 1,
   sharedEdgeTolerance: 0.05,
+  // The resolution that loses nothing. Dropping a lobe is a decision the user
+  // makes, not one a default makes for them.
+  selfIntersectionMode: 'split',
+  // Matching `DEFAULT_TOPOLOGY_SETTINGS` in qa/defects.ts, so what the scan
+  // calls a sliver is what the repair removes.
+  sliverThinnessThreshold: 0.02,
+  sliverMaxArea: 0.5,
+  danglingTolerance: 0.25,
 };
 
 /** One concrete change the plan would make, in terms a person can check. */
@@ -332,6 +398,152 @@ function ringArea(ring: Position[]): number {
     sum += ring[index][0] * ring[index + 1][1] - ring[index + 1][0] * ring[index][1];
   }
   return Math.abs(sum) / 2;
+}
+
+/**
+ * Where two segments cross, or null when they do not.
+ *
+ * Returns the parameters along BOTH segments as well as the point, because
+ * every caller here needs to know how far along a crossing is: the ring
+ * decomposition sorts insertions by it, and the trim decides whether the tail
+ * past the crossing is short enough to be an overshoot.
+ *
+ * Endpoints count as crossings (`>= 0`, `<= 1`) on purpose. A line ending
+ * exactly on another line is the T-junction the whole exercise is about, and
+ * excluding it would make `extend-trim-lines` blind to the case where the
+ * digitiser got it right.
+ */
+function segmentIntersection(
+  a: Position,
+  b: Position,
+  c: Position,
+  d: Position
+): { point: Position; t: number; u: number } | null {
+  const rx = b[0] - a[0];
+  const ry = b[1] - a[1];
+  const sx = d[0] - c[0];
+  const sy = d[1] - c[1];
+  const denominator = rx * sy - ry * sx;
+  // Parallel, which includes collinear. Collinear overlap has no single
+  // crossing point, and inventing one would put a vertex at an arbitrary
+  // place along a shared edge.
+  if (denominator === 0) return null;
+  const t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / denominator;
+  const u = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / denominator;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return { point: [a[0] + t * rx, a[1] + t * ry], t, u };
+}
+
+/** The perimeter of a path, used by the sliver test. */
+function pathLength(path: Position[]): number {
+  let total = 0;
+  for (let index = 1; index < path.length; index++) total += distance(path[index - 1], path[index]);
+  return total;
+}
+
+/**
+ * How round a ring is: 4·pi·area / perimeter², between 0 and 1.
+ *
+ * The SAME measure `qa/defects.ts` reports a sliver with. Sharing it is the
+ * point: a repair that used its own definition would leave the scan still
+ * showing defects it had just been told were fixed.
+ *
+ * 1 is a circle, ~0.785 a square, and a 100 m by 2 cm shaving about 0.0008.
+ */
+function thinness(ring: Position[]): number {
+  const perimeter = pathLength(ring);
+  if (perimeter <= 0) return 1;
+  return (4 * Math.PI * ringArea(ring)) / (perimeter * perimeter);
+}
+
+/**
+ * Breaks a self-intersecting ring into the simple rings it is made of.
+ *
+ * WHAT A BOWTIE IS. A ring whose boundary crosses itself encloses no
+ * well-defined area: the shoelace sum counts one lobe positive and the other
+ * negative, so a figure-eight of two equal lobes reports an area of zero. Every
+ * downstream consumer — the writers, the boolean engine, a CAD hatch — is
+ * entitled to assume that does not happen, and most of them fail quietly
+ * rather than loudly when it does.
+ *
+ * THE ALGORITHM, and why this one. Every crossing point is inserted into the
+ * ring as a real vertex first, so the ring becomes a closed walk in which each
+ * crossing appears TWICE. Walking that with a stack, a point seen before means
+ * everything since its first appearance is a closed loop: pop it off and emit
+ * it. What remains continues the walk. This is the standard decomposition and
+ * it terminates because each pop shortens the stack by at least the loop.
+ *
+ * Rings are returned largest first, so a caller keeping one keeps the one a
+ * person would call "the parcel".
+ */
+function decomposeSelfIntersection(ring: Position[]): Position[][] {
+  if (ring.length < 4) return [ring];
+
+  // ---- pass one: find every crossing, grouped by the segment it lies on.
+  const insertions = new Map<number, { t: number; point: Position }[]>();
+  let found = 0;
+  for (let i = 0; i < ring.length - 1; i++) {
+    for (let j = i + 1; j < ring.length - 1; j++) {
+      // Adjacent segments share an endpoint by construction, and the first and
+      // last share one because the ring is closed. Neither is a crossing.
+      if (j === i || j === i + 1 || (i === 0 && j === ring.length - 2)) continue;
+      const hit = segmentIntersection(ring[i], ring[i + 1], ring[j], ring[j + 1]);
+      if (!hit) continue;
+      // A crossing exactly at a shared vertex is the vertex, not a crossing.
+      if ((hit.t === 0 || hit.t === 1) && (hit.u === 0 || hit.u === 1)) continue;
+      found++;
+      for (const [segment, parameter] of [
+        [i, hit.t],
+        [j, hit.u],
+      ] as [number, number][]) {
+        const list = insertions.get(segment) ?? [];
+        list.push({ t: parameter, point: hit.point });
+        insertions.set(segment, list);
+      }
+    }
+  }
+  if (found === 0) return [ring];
+
+  // ---- pass two: rebuild the ring with the crossings in it, in order.
+  const walk: Position[] = [];
+  for (let i = 0; i < ring.length - 1; i++) {
+    walk.push(ring[i]);
+    const list = insertions.get(i);
+    if (!list) continue;
+    for (const entry of [...list].sort((left, right) => left.t - right.t)) {
+      const last = walk[walk.length - 1];
+      if (distance(last, entry.point) > 0) walk.push(entry.point);
+    }
+  }
+
+  // ---- pass three: pop a loop each time the walk revisits a point.
+  //
+  // Keyed on the coordinate pair rather than on identity, because a crossing
+  // point is a DIFFERENT array object on each of the two segments it was
+  // inserted into — identity would never match and nothing would ever pop.
+  const key = (position: Position): string => `${position[0]},${position[1]}`;
+  const loops: Position[][] = [];
+  const stack: Position[] = [];
+  const seen = new Map<string, number>();
+
+  for (const position of walk) {
+    const at = seen.get(key(position));
+    if (at !== undefined) {
+      const loop = stack.splice(at);
+      for (const dropped of loop) seen.delete(key(dropped));
+      loop.push(loop[0]);
+      if (loop.length >= 4 && ringArea(loop) > 0) loops.push(loop);
+    }
+    seen.set(key(position), stack.length);
+    stack.push(position);
+  }
+  if (stack.length >= 3) {
+    const tail = [...stack, stack[0]];
+    if (ringArea(tail) > 0) loops.push(tail);
+  }
+
+  if (loops.length === 0) return [ring];
+  return loops.sort((left, right) => ringArea(right) - ringArea(left));
 }
 
 /**
@@ -622,6 +834,76 @@ function rewrite(feature: CirFeature, operation: RepairOperationId, settings: Re
   // each ring to a ring. They also only mean anything on a polygon, so they
   // are handled here rather than being a case that silently does nothing on
   // every line in the layer.
+  // SELF-INTERSECTION, handled here for the same reason the hole operations
+  // are: `mapPaths` maps one ring to one ring, and the whole point of this is
+  // that one ring becomes several.
+  if (operation === 'repair-self-intersection') {
+    const geometry = feature.geometry;
+    if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') return null;
+    const all = geometry.type === 'Polygon' ? [geometry.coordinates as Position[][]] : (geometry.coordinates as Position[][][]);
+
+    const rebuilt: Position[][][] = [];
+    let repaired = 0;
+    let dropped = 0;
+    let droppedArea = 0;
+    let where: Position | undefined;
+
+    for (const polygon of all) {
+      if (polygon.length === 0) continue;
+      const exterior = polygon[0];
+      const holes = polygon.slice(1);
+      const loops = decomposeSelfIntersection(exterior);
+
+      if (loops.length <= 1) {
+        rebuilt.push(polygon);
+        continue;
+      }
+      repaired++;
+      where = where ?? loops[0][0];
+
+      if (settings.selfIntersectionMode === 'largest') {
+        // `decomposeSelfIntersection` returns largest first, so this is it.
+        for (const loop of loops.slice(1)) droppedArea += ringArea(loop);
+        dropped += loops.length - 1;
+        rebuilt.push([loops[0], ...holes]);
+      } else {
+        // Every lobe survives as its own polygon. The holes ride with the
+        // FIRST (largest) lobe rather than being tested against each: a hole
+        // belongs inside exactly one lobe, and re-deciding which without a
+        // point-in-polygon test would be a guess. Testing properly is what
+        // the boolean engine is for, and running a union here would change
+        // the boundary, which this operation must not do.
+        loops.forEach((loop, index) => rebuilt.push(index === 0 ? [loop, ...holes] : [loop]));
+      }
+    }
+
+    if (repaired === 0) return null;
+
+    changes.push({
+      location: where,
+      description:
+        settings.selfIntersectionMode === 'largest'
+          ? `${repaired} self-intersecting ring${repaired === 1 ? '' : 's'} resolved by keeping the largest lobe; ` +
+            `${dropped} smaller lobe${dropped === 1 ? '' : 's'} totalling ${droppedArea.toFixed(4)} sq units removed.`
+          : `${repaired} self-intersecting ring${repaired === 1 ? '' : 's'} split into separate polygons at the crossing. ` +
+            'No area is lost and no boundary moves.',
+      // Nothing is moved: a vertex is inserted at the crossing, which already
+      // lies on both edges, and the ring is cut there. Reporting a
+      // displacement would overstate it — even in `largest` mode, where the
+      // change is a deletion rather than a move.
+      maxDisplacement: 0,
+    });
+
+    return {
+      geometry:
+        rebuilt.length === 1
+          ? { ...geometry, type: 'Polygon', coordinates: rebuilt[0] }
+          : { ...geometry, type: 'MultiPolygon', coordinates: rebuilt },
+      changes,
+      maxDisplacement: 0,
+    };
+  }
+
   if (operation === 'remove-holes' || operation === 'fill-holes') {
     const geometry = feature.geometry;
     if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') return null;
@@ -1053,6 +1335,12 @@ function rewriteAcross(
   if (operation === 'merge-adjacent-polygons') {
     return mergeAdjacent(items, refused, settings);
   }
+  if (operation === 'remove-slivers') {
+    return removeSlivers(items, refused, settings);
+  }
+  if (operation === 'extend-trim-lines') {
+    return extendTrimLines(items, refused, settings);
+  }
 
   const tolerance = settings.sharedEdgeTolerance;
   const moves = buildNodeClusters(items, tolerance);
@@ -1305,6 +1593,314 @@ function mergeAdjacent(
   }
 
   return { geometries, removals, changes, refused, maxDisplacement: 0 };
+}
+
+/**
+ * Deletes sliver polygons — thin AND small, never merely small.
+ *
+ * WHY BOTH TESTS. A road reserve, a river strip and a boundary buffer are all
+ * long, thin and entirely real; thinness alone would delete them. A small
+ * garden plot is small and entirely real; area alone would delete it. What
+ * makes a sliver a sliver is being both at once — a shaving left where two
+ * surveys of the same boundary disagree by centimetres, with no ground
+ * meaning at all.
+ *
+ * WHY IT DELETES RATHER THAN MERGES. Merging a sliver into whichever neighbour
+ * it touches is what a topology cleaner does, and it is a decision about whose
+ * land grows. `merge-adjacent-polygons` already exists for when the user wants
+ * that and can see which parcels are involved. This one removes an artefact,
+ * and says how much area went with it so the number can be checked against the
+ * schedule.
+ *
+ * MULTIPART POLYGONS are measured per part: one thin shaving hanging off an
+ * otherwise sound parcel is dropped as a part, and the feature survives. Only
+ * a feature whose every part is a sliver is removed outright.
+ */
+function removeSlivers(
+  items: Addressed[],
+  refused: RepairPlan['refused'],
+  settings: RepairOptions
+): CrossRewrite {
+  const geometries = new Map<string, Map<number, CirFeature['geometry']>>();
+  const removals = new Map<string, Set<number>>();
+  const changes: RepairChange[] = [];
+
+  const isSliver = (ring: Position[]): boolean => {
+    const area = ringArea(ring);
+    if (area <= 0) return true;
+    return thinness(ring) <= settings.sliverThinnessThreshold && area <= settings.sliverMaxArea;
+  };
+
+  for (const item of items) {
+    const geometry = item.feature.geometry;
+    if (!geometry) continue;
+    if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') continue;
+
+    const all =
+      geometry.type === 'Polygon' ? [geometry.coordinates as Position[][]] : (geometry.coordinates as Position[][][]);
+    if (all.length === 0) continue;
+
+    const kept = all.filter((polygon) => polygon.length > 0 && !isSliver(polygon[0]));
+    if (kept.length === all.length) continue;
+
+    const removedArea = all
+      .filter((polygon) => polygon.length > 0 && isSliver(polygon[0]))
+      .reduce((total, polygon) => total + ringArea(polygon[0]), 0);
+    const where = all.find((polygon) => polygon.length > 0 && isSliver(polygon[0]))?.[0]?.[0];
+    const worst = Math.min(
+      ...all.filter((polygon) => polygon.length > 0 && isSliver(polygon[0])).map((polygon) => thinness(polygon[0]))
+    );
+
+    if (kept.length === 0) {
+      const drop = removals.get(item.layer) ?? new Set<number>();
+      drop.add(item.featureIndex);
+      removals.set(item.layer, drop);
+      changes.push({
+        layer: item.layer,
+        featureId: item.feature.id,
+        location: where,
+        description:
+          `Sliver removed: ${removedArea.toFixed(4)} sq units at thinness ${worst.toFixed(4)}, at or below the ` +
+          `${settings.sliverThinnessThreshold} threshold and under ${settings.sliverMaxArea} sq units. The whole feature goes, with its attributes.`,
+        maxDisplacement: 0,
+      });
+      continue;
+    }
+
+    const edits = geometries.get(item.layer) ?? new Map<number, CirFeature['geometry']>();
+    edits.set(
+      item.featureIndex,
+      kept.length === 1
+        ? { ...geometry, type: 'Polygon', coordinates: kept[0] }
+        : { ...geometry, type: 'MultiPolygon', coordinates: kept }
+    );
+    geometries.set(item.layer, edits);
+    changes.push({
+      layer: item.layer,
+      featureId: item.feature.id,
+      location: where,
+      description:
+        `${all.length - kept.length} sliver part${all.length - kept.length === 1 ? '' : 's'} dropped from a multipart polygon, ` +
+        `totalling ${removedArea.toFixed(4)} sq units. The feature and its attributes survive.`,
+      maxDisplacement: 0,
+    });
+  }
+
+  // Nothing MOVES: a sliver is deleted, not shifted. Reporting a displacement
+  // would make the panel offer "moves up to N units" for an operation whose
+  // whole effect is a removal.
+  return { geometries, removals, changes, refused, maxDisplacement: 0 };
+}
+
+/**
+ * Closes undershoots and cuts overshoots at line junctions.
+ *
+ * THE TARGET PROBLEM, and how it is answered without a second selection. The
+ * reason this went unbuilt is that "extend" and "trim" in a CAD package take a
+ * cutting edge you pick by hand, and `RepairScope` addresses a layer and a set
+ * of features — there is nowhere to say "against THAT one". Waiting for a
+ * second selection model would have meant waiting indefinitely.
+ *
+ * The survey case does not need one. A dangle is a line end that was MEANT to
+ * meet another line and misses it by a digitising error, and `qa/defects.ts`
+ * already reports exactly that, down to the gap. The target is therefore not a
+ * user choice at all: it is whichever line the end is closest to within
+ * `danglingTolerance`. That is the same question the detector answers, so what
+ * the scan flags is what this fixes.
+ *
+ * TWO DIRECTIONS, ONE OPERATION, because they are the same mistake with the
+ * sign flipped and a dataset has both:
+ *
+ *   UNDERSHOOT  the end stops short. The last segment is extended ALONG ITS OWN
+ *               BEARING to where it would meet the other line. Not moved to the
+ *               nearest point on it, which would bend the line — the direction
+ *               the surveyor drew is evidence, and the intersection of that
+ *               bearing with the target is where the junction was intended.
+ *   OVERSHOOT   the end runs past. The tail beyond the crossing is cut off at
+ *               the crossing itself.
+ *
+ * WHAT IS LEFT ALONE. An end already within `sharedEdgeTolerance` of another
+ * line is connected and is not touched — running this twice must be the same
+ * as running it once. An end with nothing within `danglingTolerance` is a
+ * genuine dangle, a line ending where it was drawn to end, and reaching for
+ * something that far away would invent a junction rather than repair one.
+ */
+function extendTrimLines(
+  items: Addressed[],
+  refused: RepairPlan['refused'],
+  settings: RepairOptions
+): CrossRewrite {
+  const geometries = new Map<string, Map<number, CirFeature['geometry']>>();
+  const removals = new Map<string, Set<number>>();
+  const changes: RepairChange[] = [];
+  let maxDisplacement = 0;
+
+  const lines = items.filter(
+    (item) => item.feature.geometry?.type === 'LineString' || item.feature.geometry?.type === 'MultiLineString'
+  );
+  if (lines.length < 2) return { geometries, removals, changes, refused, maxDisplacement: 0 };
+
+  const reach = settings.danglingTolerance;
+  // "ALREADY CONNECTED" MEANS TOUCHING, and it is `tolerance` rather than
+  // `sharedEdgeTolerance` that says so.
+  //
+  // Found by driving the panel: with the shipped defaults the shared-edge
+  // number is 0.05 and the reach is 0.25, so an end 4 cm short of a junction —
+  // the commonest undershoot there is — was declared already connected and
+  // left alone. Only gaps between 5 and 25 cm were repaired, which is a band
+  // narrow enough that the operation looks broken on a real file. Every unit
+  // test passed, because each one set both numbers explicitly.
+  //
+  // The reasoning behind the old value was that `snap-shared-edges` would
+  // handle anything inside its tolerance. That is passing the buck: somebody
+  // who chose "extend and trim line ends" is asking for their undershoots
+  // fixed, not to be told a different operation might have done it. `tolerance`
+  // asks the only question that matters here — is the end ON the line — and
+  // idempotency still holds, because an extended end lands exactly on the
+  // segment it was aimed at, seven orders of magnitude inside 1 mm.
+  const connected = settings.tolerance;
+
+  /** Every segment of every OTHER feature, as a flat list to test against. */
+  const pathsOf = (item: Addressed): Position[][] => {
+    const geometry = item.feature.geometry;
+    if (!geometry) return [];
+    if (geometry.type === 'LineString') return [geometry.coordinates as Position[]];
+    if (geometry.type === 'MultiLineString') return geometry.coordinates as Position[][];
+    return [];
+  };
+
+  const segments: { owner: number; a: Position; b: Position }[] = [];
+  lines.forEach((item, owner) => {
+    for (const path of pathsOf(item)) {
+      for (let index = 1; index < path.length; index++) segments.push({ owner, a: path[index - 1], b: path[index] });
+    }
+  });
+  const index = new SpatialIndex(
+    segments.map((segment, position) => ({
+      bounds: expandBounds(
+        {
+          minX: Math.min(segment.a[0], segment.b[0]),
+          maxX: Math.max(segment.a[0], segment.b[0]),
+          minY: Math.min(segment.a[1], segment.b[1]),
+          maxY: Math.max(segment.a[1], segment.b[1]),
+        },
+        reach
+      ),
+      value: position,
+    }))
+  );
+
+  lines.forEach((item, owner) => {
+    let extended = 0;
+    let trimmed = 0;
+    let largest = 0;
+    let where: Position | undefined;
+
+    const fixPath = (path: Position[]): Position[] => {
+      if (path.length < 2) return path;
+      let working = path;
+
+      // Both ends, same logic mirrored. `end` is the index of the terminal
+      // vertex and `inner` the one before it, which together give the bearing.
+      for (const atStart of [false, true]) {
+        const end = atStart ? 0 : working.length - 1;
+        const inner = atStart ? 1 : working.length - 2;
+        if (working.length < 2) break;
+        const tip = working[end];
+        const back = working[inner];
+
+        const query = expandBounds({ minX: tip[0], maxX: tip[0], minY: tip[1], maxY: tip[1] }, reach);
+        const near = index.search(query).map((position) => segments[index.item(position).value]);
+        const foreign = near.filter((segment) => segment.owner !== owner);
+        if (foreign.length === 0) continue;
+
+        // Already joined? Then there is nothing to repair, and running this a
+        // second time must do nothing.
+        const joined = foreign.some(
+          (segment) => projectOnSegment(tip, segment.a, segment.b).distance <= connected
+        );
+        if (joined) continue;
+
+        // ---- OVERSHOOT. Does the terminal segment CROSS a foreign line, with
+        // only a short tail past the crossing? Then the tail is the mistake.
+        let cut: { point: Position; tail: number } | null = null;
+        for (const segment of foreign) {
+          const hit = segmentIntersection(back, tip, segment.a, segment.b);
+          if (!hit) continue;
+          const tail = distance(hit.point, tip);
+          if (tail <= 0 || tail > reach) continue;
+          if (!cut || tail < cut.tail) cut = { point: hit.point, tail };
+        }
+        if (cut) {
+          const next = [...working];
+          next[end] = next[end].length > 2 ? ([cut.point[0], cut.point[1], next[end][2]] as Position) : cut.point;
+          working = next;
+          trimmed++;
+          if (cut.tail > largest) {
+            largest = cut.tail;
+            where = cut.point;
+          }
+          continue;
+        }
+
+        // ---- UNDERSHOOT. Cast the bearing forward and take the first foreign
+        // line it meets within reach.
+        const dx = tip[0] - back[0];
+        const dy = tip[1] - back[1];
+        const span = Math.hypot(dx, dy);
+        if (span === 0) continue;
+        const probe: Position = [tip[0] + (dx / span) * reach, tip[1] + (dy / span) * reach];
+
+        let hitAt: { point: Position; gap: number } | null = null;
+        for (const segment of foreign) {
+          const hit = segmentIntersection(tip, probe, segment.a, segment.b);
+          if (!hit) continue;
+          const gap = distance(tip, hit.point);
+          if (gap <= 0 || gap > reach) continue;
+          if (!hitAt || gap < hitAt.gap) hitAt = { point: hit.point, gap };
+        }
+        if (!hitAt) continue;
+
+        const next = [...working];
+        next[end] = next[end].length > 2 ? ([hitAt.point[0], hitAt.point[1], next[end][2]] as Position) : hitAt.point;
+        working = next;
+        extended++;
+        if (hitAt.gap > largest) {
+          largest = hitAt.gap;
+          where = hitAt.point;
+        }
+      }
+
+      return working;
+    };
+
+    const geometry = item.feature.geometry;
+    if (!geometry) return;
+    const rebuilt =
+      geometry.type === 'LineString'
+        ? { ...geometry, coordinates: fixPath(geometry.coordinates as Position[]) }
+        : { ...geometry, coordinates: (geometry.coordinates as Position[][]).map(fixPath) };
+
+    if (extended === 0 && trimmed === 0) return;
+
+    const edits = geometries.get(item.layer) ?? new Map<number, CirFeature['geometry']>();
+    edits.set(item.featureIndex, rebuilt as CirFeature['geometry']);
+    geometries.set(item.layer, edits);
+
+    const parts: string[] = [];
+    if (extended) parts.push(`${extended} end${extended === 1 ? '' : 's'} extended to a junction`);
+    if (trimmed) parts.push(`${trimmed} overshoot${trimmed === 1 ? '' : 's'} trimmed back to the crossing`);
+    changes.push({
+      layer: item.layer,
+      featureId: item.feature.id,
+      location: where,
+      description: `${parts.join(' and ')}; the largest move is ${largest.toFixed(4)} units, within the ${reach} reach.`,
+      maxDisplacement: largest,
+    });
+    if (largest > maxDisplacement) maxDisplacement = largest;
+  });
+
+  return { geometries, removals, changes, refused, maxDisplacement };
 }
 
 export interface SafeFixResult {
