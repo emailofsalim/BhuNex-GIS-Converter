@@ -17,7 +17,8 @@ import {
   PRIORITY_LABEL,
 } from '../../qa/burn-in';
 import { type AppSettings, DEFAULT_SETTINGS, store } from '../../state/store';
-import { applyPreset, isOnline, TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
+import { applyPreset, isOnline, RELIEF_PROVIDERS, TILE_PRESETS, TILE_PROVIDERS, validateTemplate } from '../../ui/basemap';
+import { TERRAIN_SOURCE } from '../../ui/terrain';
 import { CANVAS_ACTIONS, CANVAS_TOOLS, GLOBAL_SHORTCUTS, PANEL_TABS, RIBBON_TABS } from './toolbar';
 import { ui } from '../ui-state';
 import { configurePool, poolStatus } from '../../workers/client';
@@ -883,7 +884,7 @@ export function openHelpDialog(): void {
   const rules: [string, string][] = [
     [
       'Your files are never uploaded',
-      'Every conversion, QA check, measurement, edit and export runs in this browser, and no file byte leaves this machine on any path. Two things do reach outside it, and neither touches your data: the optional DWG helper, which is a program on your own machine, and the map basemap if you switch it on, which asks a tile server for the map squares covering the area on screen — tile coordinates only, no file bytes, names or attributes. With the basemap off, the extension makes no network request at all.',
+      'Every conversion, QA check, measurement, edit and export runs in this browser, and no file byte leaves this machine on any path. Two things do reach outside it, and neither touches your data: the optional DWG helper, which is a program on your own machine, and the map basemap if you switch it on — the tiles, the shaded relief over them, and the ground-elevation readout, each of which asks a server for the map squares covering the area on screen. Tile coordinates only, no file bytes, names or attributes. With the basemap off, the extension makes no network request at all.',
     ],
     ['A CRS is never invented', 'If a file declares no coordinate system and the numbers are ambiguous, the conversion stops and asks. The same easting is valid in all 60 UTM zones.'],
     [
@@ -1298,6 +1299,55 @@ function basemapSection(state: { settings: AppSettings }): HTMLElement {
       void store.patchSettings({ basemapOpacity: Math.min(1, Math.max(0.1, value)) });
       host.render();
     })
+  );
+
+  // ---- TERRAIN.
+  //
+  // The same two switches the canvas popover carries, reading and writing the
+  // same settings, so neither surface can claim something the other denies. The
+  // popover is the switch you reach for while looking at the drawing; this is
+  // where the consequences are written out, which is why the explanation lives
+  // here and not in a tooltip over the canvas.
+  section.append(element('h3', { class: 'section__title', text: 'Terrain' }));
+  section.append(
+    checkbox('Shaded relief over the map', state.settings.basemapReliefEnabled, (value) => {
+      void store.patchSettings({ basemapReliefEnabled: value });
+      host.render();
+    })
+  );
+
+  if (state.settings.basemapReliefEnabled) {
+    const relief = element('select', { class: 'select' }) as HTMLSelectElement;
+    for (const provider of RELIEF_PROVIDERS) {
+      relief.append(element('option', { value: provider.id, text: provider.name }));
+    }
+    relief.value = state.settings.basemapReliefId;
+    relief.addEventListener('change', () => {
+      void store.patchSettings({ basemapReliefId: relief.value });
+      host.render();
+    });
+    section.append(relief);
+
+    const chosenRelief = RELIEF_PROVIDERS.find((entry) => entry.id === state.settings.basemapReliefId);
+    if (chosenRelief?.note) {
+      section.append(element('p', { class: 'small faint', text: `${chosenRelief.note} · ${chosenRelief.attribution}` }));
+    }
+  }
+
+  section.append(
+    checkbox('Ground elevation under the cursor', state.settings.terrainReadout, (value) => {
+      void store.patchSettings({ terrainReadout: value });
+      host.render();
+    })
+  );
+
+  section.append(
+    messageBlock(
+      'info',
+      'This is terrain, not a level.',
+      `Heights come from ${TERRAIN_SOURCE.name} — SRTM-class global coverage, roughly 30 m on the ground with a vertical error of several metres. It is for orientation: whether you are on the hill or in the valley, which way the ground falls, whether a Z on your traverse is plausible. It is never a substitute for a levelled height and must not be written into a deliverable as one.`,
+      'A tilted 3D terrain view is not offered. This canvas draws your survey in its own CRS, and every tool on it — snap, vertex drag, measurement, the tile placement — is built on that; a 3D renderer would have to reproject your coordinates into its own space, which is exactly the drift the tile code avoids. Shaded relief and this readout give what terrain is actually for in survey work without moving a single coordinate.'
+    )
   );
 
   // Connectivity, stated where the control is. The basemap is the ONLY part of

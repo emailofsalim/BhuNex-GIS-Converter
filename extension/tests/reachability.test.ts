@@ -22,7 +22,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { GEOMETRY_LABEL, type GeometryOperation } from '@core/geometry-ops';
-import { TILE_PRESETS, TILE_PROVIDERS } from '@ui/basemap';
+import { RELIEF_PROVIDERS, TILE_PRESETS, TILE_PROVIDERS } from '@ui/basemap';
+import { TERRAIN_SOURCE } from '@ui/terrain';
 import { PANEL_TABS } from '../src/workspace/panels/toolbar';
 
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -393,6 +394,19 @@ describe('the offline guard knows about every tile source', () => {
     ).toEqual([]);
   });
 
+  it('allows every relief layer and the elevation source', () => {
+    // Added for the same reason as the check above, after the same thing
+    // happened again: relief and terrain are new remote sources, and the guard
+    // caught them at `npm run verify`. It was right both times. This makes the
+    // omission fail in the unit tests instead, where it costs seconds.
+    const missing = RELIEF_PROVIDERS.filter((provider) => !guard.includes(provider.url));
+    expect(
+      missing.map((provider) => provider.id),
+      `relief layers missing from scripts/assert-offline.mjs: ${missing.map((p) => p.url).join(', ')}`
+    ).toEqual([]);
+    expect(guard.includes(TERRAIN_SOURCE.url), 'the elevation source is missing from scripts/assert-offline.mjs').toBe(true);
+  });
+
   it('allows every preset template', () => {
     const missing = TILE_PRESETS.filter((preset) => !guard.includes(preset.template));
     expect(
@@ -408,7 +422,9 @@ describe('the offline guard knows about every tile source', () => {
     const entries = [...allowed.matchAll(/'(https:\/\/[^']+)'/g)].map((match) => match[1]);
     const known = new Set([
       ...TILE_PROVIDERS.map((provider) => provider.url),
+      ...RELIEF_PROVIDERS.map((provider) => provider.url),
       ...TILE_PRESETS.map((preset) => preset.template),
+      TERRAIN_SOURCE.url,
       // The example shown beside the custom-template field. `your-server` does
       // not resolve, which is the point of it.
       'https://your-server/tiles/{z}/{x}/{y}.png',

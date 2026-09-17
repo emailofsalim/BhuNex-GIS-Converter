@@ -137,7 +137,17 @@
               </div>
 
               <div class="preview__overlay">
+                <!-- THE BASEMAP SWITCH, on the canvas rather than four actions
+                     away inside a ribbon family. The decision it makes is about
+                     what you are looking at, so it belongs where you are
+                     looking — which is what every map application does with it.
+                     Built in `panels/map-control.ts`. -->
+                <div class="mapctl" id="basemapControl"></div>
                 <span class="preview__readout" id="readout">—</span>
+                <!-- Ground elevation under the pointer, when terrain is on.
+                     Beside the coordinate readout because it is the same kind
+                     of thing: what is true at the point under the cursor. -->
+                <span class="preview__readout hidden" id="terrainReadout">Terrain —</span>
                 <span class="badge badge--warn hidden" id="previewOnlyBadge">Preview only — export uses all data</span>
                 <!-- Says why the basemap is not drawing, when it is not. Blank
                      imagery with no explanation reads as a broken tool; the two
@@ -145,6 +155,15 @@
                      with different answers. -->
                 <span class="badge badge--muted hidden" id="basemapBadge"></span>
               </div>
+
+              <!-- BOTTOM RIGHT: who must be credited, and what else is
+                   reachable. The open tile services require attribution as a
+                   licence condition, so this is an obligation rather than a
+                   nicety; the full list also answers "which of these need an
+                   account" before somebody picks one. The active layer's credit
+                   is ALSO drawn into the canvas itself, which is what survives
+                   a screenshot. -->
+              <div class="mapsources" id="mapSources"></div>
             </div>
 
             <!-- The whole stage is the drop target. With nothing loaded it says so

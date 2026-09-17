@@ -181,6 +181,27 @@ export interface AppSettings {
   basemapOpacity: number;
 
   /**
+   * A shaded-relief layer composited over the basemap.
+   *
+   * Separate from `basemapProviderId` because a hillshade used ALONE shows the
+   * shape of the ground and nothing about where you are — no roads, no labels,
+   * no parcels. It earns its place on top of a street map or imagery, so it is
+   * a second switch rather than a sixth entry in the provider list.
+   */
+  basemapReliefEnabled: boolean;
+  basemapReliefId: string;
+
+  /**
+   * Ground elevation under the cursor, from open terrain tiles.
+   *
+   * Its own switch rather than riding on the basemap: it is a different request
+   * to a different service, and somebody working over imagery with no interest
+   * in heights should not be making it. Off by default, like every other thing
+   * here that touches a network.
+   */
+  terrainReadout: boolean;
+
+  /**
    * Helmert parameters for a datum this tool does not bundle any for.
    *
    * Null until the user enters a set. There is no default and no table of
@@ -308,6 +329,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   basemapCustomUrl: '',
   basemapPresetId: '',
   basemapOpacity: 0.7,
+  basemapReliefEnabled: false,
+  basemapReliefId: 'esri-hillshade',
+  terrainReadout: false,
   datumShift: null,
   checkCoverageGaps: false,
   decimationMode: 'none',

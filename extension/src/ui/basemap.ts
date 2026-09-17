@@ -119,6 +119,47 @@ export const TILE_PROVIDERS: TileProvider[] = [
 ];
 
 /**
+ * Relief layers, drawn ON TOP of a basemap rather than instead of one.
+ *
+ * WHY THIS IS NOT JUST ANOTHER PROVIDER. A hillshade is a shaded-relief image
+ * with no roads, no labels and no parcels — used alone it tells you the shape
+ * of the ground and nothing about where you are. Its value is composited: the
+ * street map or the imagery underneath for context, the relief over it for
+ * terrain. So these are a separate list with their own switch, and the draw
+ * order is fixed: base tiles, then relief, then the imported sheet, then data.
+ *
+ * WHAT THIS IS AND IS NOT, because "3D terrain" was the request and this is the
+ * honest answer to it. A tilted, extruded, fly-around terrain view needs a WebGL
+ * renderer and a mesh built from an elevation raster. This canvas is a 2D
+ * context drawing a survey in its own CRS, and rewriting it as a 3D globe would
+ * cost the thing that makes it useful — geometry drawn through exactly the same
+ * transform as the data, with no reprojection drift. What terrain is actually
+ * FOR in survey work is two questions: what shape is this ground, and how high
+ * is this point. The relief layer answers the first, and `ui/terrain.ts`
+ * answers the second from the same open elevation data a 3D view would be
+ * built from.
+ */
+export const RELIEF_PROVIDERS: TileProvider[] = [
+  {
+    id: 'esri-hillshade',
+    name: 'Esri World Hillshade',
+    // {y}/{x}, like every ArcGIS MapServer tile endpoint — not the usual order.
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Hillshade © Esri, USGS, NOAA',
+    maxZoom: 16,
+    note: 'Shaded relief from a global elevation model. Reads the shape of the ground through whatever is under it.',
+  },
+  {
+    id: 'esri-hillshade-dark',
+    name: 'Esri Hillshade (dark)',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade_Dark/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Hillshade © Esri, USGS, NOAA',
+    maxZoom: 16,
+    note: 'The same relief inverted, for the dark theme or over imagery.',
+  },
+];
+
+/**
  * Services that need an account, offered as templates rather than as providers.
  *
  * The owner named Stadia and Jawg. Both are genuinely free for this kind of
@@ -192,12 +233,53 @@ export const TILE_PRESETS: TilePreset[] = [
   },
 ];
 
+/**
+ * One credit line naming every tile layer currently on screen.
+ *
+ * Exists because two layers can draw at once. Each drawing its own line would
+ * stack two boxes in the same corner of the canvas with the upper covering the
+ * lower — and a covered attribution is still an attribution the licence
+ * requires. So the caller composes one string and hands it to the bottom layer.
+ *
+ * Duplicates are dropped rather than repeated: a hillshade over a Carto style
+ * credits OpenStreetMap twice otherwise, which reads as a bug and makes the
+ * line long enough to crowd the corner.
+ */
+export function composeCredit(...providers: (TileProvider | null | undefined)[]): string {
+  const seen: string[] = [];
+  for (const provider of providers) {
+    const text = provider?.attribution?.trim();
+    if (text && !seen.includes(text)) seen.push(text);
+  }
+  return seen.join(' · ');
+}
+
 /** Fills a preset in with a key, ready to be used as a custom template. */
 export function applyPreset(preset: TilePreset, key: string): string {
   return preset.template.replace('{key}', key.trim());
 }
 
 export const TILE_SIZE = 256;
+
+/**
+ * The band the credit is drawn in, measured up from the bottom of the canvas.
+ *
+ * NOT ZERO, and the reason is a collision found by looking at a screenshot
+ * rather than at the code. `PreviewCanvas` draws the CRS-and-grid caption
+ * right-aligned in the bottom 20 pixels, and the credit was drawn right-aligned
+ * in the bottom 15 — the same corner, overlapping almost exactly. The caption
+ * is painted after the underlay, so the credit came out sliced in half:
+ * present enough to look deliberate, and short enough to lose the second
+ * provider's name entirely once two layers could be on at once. A truncated
+ * attribution is a licence problem, not a cosmetic one.
+ *
+ * So the bottom band belongs to the caption and the credit takes the one above
+ * it. Exported because the HTML source list in the same corner has to clear
+ * both, and three files agreeing on the same two numbers by coincidence is how
+ * this drifts apart again.
+ */
+export const CREDIT_BAND_BOTTOM = 22;
+export const CREDIT_BAND_HEIGHT = 16;
 
 // ------------------------------------------------------------------ tile math
 
@@ -354,6 +436,17 @@ export interface BasemapOptions {
   /** Called when a tile arrives, so the canvas can redraw with it. */
   onTileLoaded: () => void;
   opacity?: number;
+  /**
+   * The credit to draw, when it is not simply this provider's.
+   *
+   * Needed once two tile layers can be on at the same time. Each drawing its
+   * own line would stack two boxes in the same corner, and the second would
+   * cover the first — so the caller composes one string naming every layer on
+   * screen and gives it to the bottom layer. The relief layer above it is
+   * passed `''`, which draws nothing. Undefined keeps the provider's own, so
+   * the single-layer case is unchanged.
+   */
+  credit?: string;
 }
 
 /**
@@ -652,7 +745,7 @@ export class Basemap {
    * where the credit is owed.
    */
   private drawAttribution(context: CanvasRenderingContext2D, width: number, height: number): void {
-    const text = this.options.provider.attribution;
+    const text = this.options.credit ?? this.options.provider.attribution;
     if (!text) return;
     context.save();
     // NOT reset to identity. `width` and `height` here are CSS pixels, and the
@@ -661,13 +754,19 @@ export class Basemap {
     // middle of the canvas instead of the bottom-right corner. Every tile above
     // restores its own transform, so what is in effect here is already the base.
     context.font = '10px ui-sans-serif, system-ui, sans-serif';
-    const metrics = context.measureText(text);
     const padding = 4;
-    const boxWidth = metrics.width + padding * 2;
+    const boxWidth = context.measureText(text).width + padding * 2;
+    // Clamped to 0 rather than allowed to go negative: a credit longer than the
+    // canvas is wide would otherwise start off the left edge and lose its
+    // FIRST provider, which is the one actually drawing.
+    const left = Math.max(0, width - boxWidth);
+    // The band sits with its BOTTOM edge `CREDIT_BAND_BOTTOM` up from the
+    // canvas floor, leaving the floor itself to the CRS caption.
+    const bottom = height - CREDIT_BAND_BOTTOM;
     context.fillStyle = 'rgba(255, 255, 255, 0.72)';
-    context.fillRect(width - boxWidth, height - 15, boxWidth, 15);
+    context.fillRect(left, bottom - CREDIT_BAND_HEIGHT, boxWidth, CREDIT_BAND_HEIGHT);
     context.fillStyle = '#1a1a1a';
-    context.fillText(text, width - boxWidth + padding, height - 4);
+    context.fillText(text, left + padding, bottom - 4);
     context.restore();
   }
 }
