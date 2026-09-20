@@ -1,0 +1,223 @@
+/**
+ * Regressions built from a real trial, on the operator's own files.
+ *
+ * Three deliverables were converted and the results handed back: a 3.9 MB mining
+ * DXF, a 1,025-feature cadastral KMZ, and a 188-point boundary-pillar CSV. Two
+ * defects in that batch were the kind this tool exists to prevent — output that
+ * is well-formed, opens cleanly, and is wrong.
+ *
+ * THE ONE THAT MATTERED MOST. The CSV opened with a title banner above its real
+ * header:
+ *
+ *     Pakhar-A 115.13 Ha Boundary Pillars,,,
+ *     Sl No,NORTHING,EASTING,Code
+ *     1,2605201.531,256320.247,BP1
+ *
+ * The reader tested row 0 for "does this look like a header", and a banner does
+ * — it is text with no numbers. So the real names were never read, NORTHING and
+ * EASTING could not be matched, and the mapping fell through to COLUMN
+ * POSITION: column 2 became X. Every one of the seventeen exported formats put
+ * the northing in the easting's place, and 188 boundary pillars landed about
+ * 2,600 km east of the site. Nothing in any output looked wrong.
+ *
+ * The same banner cost the format detector its header bonus and left an
+ * ordinary four-column survey CSV at 35% confidence — below the floor, so the
+ * conversion stopped and asked the user to name the format by hand.
+ *
+ * WHY THE FIXTURES ARE SYNTHETIC AND THE REAL FILES OPTIONAL. The shape of the
+ * defect — a banner row, then a header naming northing before easting — is what
+ * has to stay fixed, and a small fixture pins it whether or not the trial
+ * folders are still in the tree. Where the operator's actual files are present
+ * they are used as well, because a fixture I wrote cannot surprise me and a
+ * file from the field can.
+ */
+
+import { existsSync, readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+import { convert } from '@core/pipeline';
+import { detectFormat } from '@core/detect';
+import { SURVEY_DEFAULT_PRECISION } from '@core/precision';
+import { crsFromEpsg } from '@crs/epsg';
+import { findHeaderRow } from '../src/engines/survey/schema';
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/** The operator's file, shrunk to the four rows that carry the defect. */
+const BANNER_CSV = [
+  'Pakhar-A 115.13 Ha Boundary Pillars,,,',
+  'Sl No,NORTHING,EASTING,Code',
+  '1,2605201.531,256320.247,BP1',
+  '2,2605250.660,256329.539,BP2',
+  '3,2605279.989,256335.087,BP3',
+].join('\n');
+
+/** UTM zone 45N: eastings are six digits, northings seven. */
+const UTM45N = crsFromEpsg(32645);
+
+async function toGeoJson(text: string, force = true) {
+  const result: never = (await convert({
+    input: { fileName: 'pillars.csv', bytes: encoder.encode(text) },
+    targetFormatId: 'geojson',
+    ...(force ? { forcedSourceFormatId: 'csv' } : {}),
+    settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N, runQa: false },
+  } as never)) as never;
+  const value = result as unknown as { outputs: { bytes: Uint8Array }[]; warnings: { code: string }[] };
+  return {
+    json: JSON.parse(decoder.decode(value.outputs[0].bytes)),
+    codes: value.warnings.map((entry) => entry.code),
+  };
+}
+
+describe('finding the header under a title banner', () => {
+  it('skips the banner and takes the row that names the columns', () => {
+    const grid = BANNER_CSV.split('\n').map((line) => line.split(','));
+    expect(findHeaderRow(grid)).toBe(1);
+  });
+
+  it('still takes row 0 when there is no banner', () => {
+    const grid = [
+      ['Sl No', 'NORTHING', 'EASTING', 'Code'],
+      ['1', '2605201.531', '256320.247', 'BP1'],
+    ];
+    expect(findHeaderRow(grid)).toBe(0);
+  });
+
+  it('reports no header for a bare coordinate table', () => {
+    // Three numeric columns and nothing naming them. Inventing a header here
+    // would eat the first point.
+    const grid = [
+      ['256320.247', '2605201.531', '412.5'],
+      ['256329.539', '2605250.660', '413.1'],
+    ];
+    expect(findHeaderRow(grid)).toBeNull();
+  });
+
+  it('does not hunt indefinitely for a header', () => {
+    // Ten lines of letterhead is likelier to be a file with no header at all
+    // than a file with ten lines of letterhead. Guessing further would start
+    // consuming data.
+    const grid = [
+      ...Array.from({ length: 10 }, () => ['Report', '', '', '']),
+      ['Sl No', 'NORTHING', 'EASTING', 'Code'],
+      ['1', '2605201.531', '256320.247', 'BP1'],
+    ];
+    expect(findHeaderRow(grid)).toBeNull();
+  });
+});
+
+describe('a survey CSV behind a title banner converts correctly', () => {
+  it('puts the EASTING in x, not the northing', async () => {
+    // THE DEFECT. Before the fix this came back [2605201.531, 256320.247] —
+    // northing first — in all seventeen delivered formats.
+    const { json } = await toGeoJson(BANNER_CSV);
+    expect(json.features).toHaveLength(3);
+    expect(json.features[0].geometry.coordinates[0]).toBeCloseTo(256320.247, 6);
+    expect(json.features[0].geometry.coordinates[1]).toBeCloseTo(2605201.531, 6);
+  });
+
+  it('keeps every point on the grid it was surveyed on', async () => {
+    // The magnitude test, which is what makes a swap obvious: on zone 45N an
+    // easting is six digits and a northing seven. A swapped pair passes every
+    // structural check and fails this one.
+    const { json } = await toGeoJson(BANNER_CSV);
+    for (const feature of json.features) {
+      const [x, y] = feature.geometry.coordinates;
+      expect(x).toBeGreaterThan(100_000);
+      expect(x).toBeLessThan(1_000_000);
+      expect(y).toBeGreaterThan(1_000_000);
+    }
+  });
+
+  it('recovers the real field names instead of Column 2, Column 3', async () => {
+    const { json } = await toGeoJson(BANNER_CSV);
+    const properties = json.features[0].properties;
+    expect(Object.keys(properties)).toContain('Sl No');
+    expect(properties.Code).toBe('BP1');
+    expect(Object.keys(properties).some((key) => /^Column \d/.test(key))).toBe(false);
+  });
+
+  it('says out loud that it skipped the banner', async () => {
+    // Silently dropping a row is how a header becomes a data point. The count
+    // is stated so it can be checked against the file.
+    const { codes } = await toGeoJson(BANNER_CSV);
+    expect(codes).toContain('CSV_PREAMBLE_SKIPPED');
+  });
+
+  it('no longer needs the columns confirmed by hand', async () => {
+    // With the names readable the schema matches on them, so the warning that
+    // sent the user to the mapping panel is gone.
+    const { codes } = await toGeoJson(BANNER_CSV);
+    expect(codes).not.toContain('CSV_SCHEMA_UNCONFIRMED');
+  });
+});
+
+describe('detection is not defeated by a title banner', () => {
+  it('scores the table on its data rows, not on line 0', () => {
+    const result = detectFormat({ fileName: 'pillars.csv', bytes: encoder.encode(BANNER_CSV) });
+    expect(result.formatId).toBe('csv');
+    // 35% before the fix — under the floor, so the conversion refused to start.
+    expect(result.confidence).toBeGreaterThan(0.6);
+    expect(result.requiresConfirmation).toBe(false);
+  });
+
+  it('credits the header that names the coordinate columns', () => {
+    const result = detectFormat({ fileName: 'pillars.csv', bytes: encoder.encode(BANNER_CSV) });
+    const notes = result.evidence.map((entry) => entry.note).join(' | ');
+    expect(notes).toMatch(/Header names coordinate columns/);
+  });
+
+  it('converts without the format being named by hand', async () => {
+    const { json } = await toGeoJson(BANNER_CSV, false);
+    expect(json.features).toHaveLength(3);
+  });
+});
+
+// --------------------------------------------------------------------------
+// The operator's own files, when they are still in the tree.
+// --------------------------------------------------------------------------
+
+const PILLARS = '3_Trial_Feedback_Files/imported file/Pakhar-A 115.13 Ha Boundary Pillars.csv';
+const MINING_DXF = '1_Trial_Feedback_Files/imported file/RAM_Pakhar-115.13 Ha Entity LMS Final Data.dxf';
+
+describe.skipIf(!existsSync(PILLARS))('the delivered boundary-pillar CSV', () => {
+  it('reads all 188 pillars with the axes the right way round', async () => {
+    const text = readFileSync(PILLARS, 'utf8');
+    const { json, codes } = await toGeoJson(text, false);
+    expect(json.features).toHaveLength(188);
+    const [x, y] = json.features[0].geometry.coordinates;
+    expect(x).toBeCloseTo(256320.247, 3);
+    expect(y).toBeCloseTo(2605201.531, 3);
+    expect(codes).not.toContain('CSV_SCHEMA_UNCONFIRMED');
+  });
+});
+
+describe.skipIf(!existsSync(MINING_DXF))('the delivered mining DXF', () => {
+  it('keeps all 76 entities, lines included', async () => {
+    // The delivered GeoJSON held 56 of 76: three layers had collapsed to one
+    // feature each and every LineString was gone. Whatever caused that, this
+    // is the count that has to stay true.
+    const result: never = (await convert({
+      input: { fileName: 'mining.dxf', bytes: new Uint8Array(readFileSync(MINING_DXF)) },
+      targetFormatId: 'geojson',
+      settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N, runQa: false },
+    } as never)) as never;
+    const value = result as unknown as { outputs: { bytes: Uint8Array }[] };
+    const json = JSON.parse(decoder.decode(value.outputs[0].bytes));
+    expect(json.features).toHaveLength(76);
+
+    const byLayer = new Map<string, number>();
+    for (const feature of json.features) {
+      const layer = String(feature.properties?._layer ?? '?');
+      byLayer.set(layer, (byLayer.get(layer) ?? 0) + 1);
+    }
+    expect(byLayer.get('ML Boundary')).toBe(2);
+    expect(byLayer.get('Mined Out Area')).toBe(7);
+    expect(byLayer.get('Reclaimed')).toBe(14);
+
+    // Lines survived. The delivered file had none at all.
+    const lines = json.features.filter((f: { geometry?: { type?: string } }) => f.geometry?.type === 'LineString');
+    expect(lines.length).toBeGreaterThan(0);
+  });
+});

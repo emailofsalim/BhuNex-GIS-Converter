@@ -229,12 +229,80 @@ From the screenshots, on real 1,025-feature and 76-feature files:
 
 ---
 
+---
+
+# UI audit
+
+Driven in headless Chromium against the built extension, instrumenting
+`addEventListener`/`removeEventListener` on `window` and `document` and
+measuring real geometry. Numbers below are measured, not estimated.
+
+## U1 — Every popover open leaks two window listeners `OPEN` `HIGH`
+
+`closeCanvasMenu()` and `closeMapMenu()` remove the element and null the
+handle. They do **not** remove the `pointerdown`/`keydown` capture listeners —
+those are only removed inside `dismiss` itself, which never runs when the menu
+is closed any other way (a menu item click, the button toggling it shut,
+`host.render()`).
+
+Measured over five open/close cycles of the basemap popover:
+
+| listener | before | after |
+|---|---|---|
+| `pointerdown` (capture, window) | 0 | **5** |
+| `keydown` (capture, window) | 3 | **8** |
+
+Unbounded across a working session, and each stale closure pins a detached DOM
+node.
+
+**To do** — give `closeMapMenu`/`closeCanvasMenu`/the layers popover ownership
+of their own teardown, so closing by any route removes the listeners.
+
+## U2 — The popover shuts on the first click inside it `OPEN` `HIGH`
+
+Direct consequence of U1. Reopen the basemap popover and click its own title:
+
+```
+openedOk: true    stillOpen: false
+```
+
+A stale `dismiss` from a previous open still holds the OLD menu element. The
+click is not inside that detached node, so it calls `closeMapMenu()` and takes
+down the CURRENT popover. After the first use the control is barely usable —
+every choice inside it closes it.
+
+This is very likely part of why the trial screenshots show the same panels
+being opened again and again.
+
+**To do** — fixed by U1; pin it with a test that opens, clicks inside, and
+asserts the popover is still up.
+
+## U3 — F5 confirmed by measurement `OPEN` `MEDIUM`
+
+The bottom-left overlay occupies y 913–940. The drawn credit band is y 912–928.
+**They overlap by 15 px** — the attribution passes behind the basemap button,
+the coordinate readout and the Terrain box.
+
+## What the UI audit found healthy
+
+- **No horizontal overflow at any width** — 1920, 1440, 1024, 820, 600, 400 px
+  all report 0 px of document overflow, and no body overflow.
+- **Canvas controls are keyboard reachable** — the basemap button and
+  *Sources & APIs* are both real `<button>`s at tab index 0.
+- **No clipped text** in the dock, rail or ribbon: nothing with
+  `overflow: visible` exceeds its box without an ellipsis.
+- **Zero page errors** across load, file drop, popover use and six viewport
+  changes.
+
+---
+
 ## Execution order
 
 1. **F1** — CSV header detection and named axis mapping (critical, silent, wrong data)
 2. **F2** — table detection confidence (same root cause, same file)
-3. **F3** — basemap/terrain honour an assumed CRS
-4. **F4** — one-click "clear the target CRS" in the refusal
-5. **F5** — credit band vs the bottom-left cluster
-6. **F6/F7/F8** — regression tests pinning what is already fixed
-7. **F9/F10** — UX confirmations
+3. **U1 + U2** — popover listener ownership (cheap, and makes the UI usable)
+4. **F3** — basemap/terrain honour an assumed CRS
+5. **F4** — one-click "clear the target CRS" in the refusal
+6. **F5 / U3** — credit band vs the bottom-left cluster
+7. **F6/F7/F8** — regression tests pinning what is already fixed
+8. **F9/F10** — UX confirmations

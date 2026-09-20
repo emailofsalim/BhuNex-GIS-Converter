@@ -348,7 +348,26 @@ function probeText(text: string, add: Scores): void {
       const columnCounts = lines.map((line) => (typeof delimiter === 'string' ? line.split(delimiter) : line.trim().split(delimiter)).length);
       const consistent = columnCounts.every((count) => count === columnCounts[0]) && columnCounts[0] >= 2;
       if (!consistent) continue;
-      const dataRows = lines.slice(1);
+      // DATA STARTS AFTER THE PREAMBLE, not after line 0.
+      //
+      // `countNumericColumns` requires a column to be numeric in EVERY row it
+      // is given, which is right — one stray word means the column is not a
+      // coordinate. But slicing from line 1 assumed the header was line 0. A
+      // survey CSV that opens with a title banner leaves its REAL header
+      // sitting inside the data rows, where its text poisons every column, the
+      // count comes back 0, and this whole block is skipped. The file then
+      // scores on its extension alone: 35%, below the floor, and the
+      // conversion stops to ask the user what an ordinary CSV is.
+      const numericish = (line: string): number => {
+        const cells = typeof delimiter === 'string' ? line.split(delimiter) : line.trim().split(delimiter);
+        return cells.filter((cell) => {
+          const value = cell.trim().replace(/^"|"$/g, '');
+          return value !== '' && Number.isFinite(Number(value));
+        }).length;
+      };
+      let firstData = 1;
+      while (firstData < lines.length && numericish(lines[firstData]) < 2) firstData++;
+      const dataRows = lines.slice(firstData);
       const numericColumns = countNumericColumns(dataRows, delimiter);
       if (numericColumns >= 2) {
         const isWhitespaceXyz = label === 'whitespace' && columnCounts[0] >= 3 && numericColumns >= 3;
@@ -357,8 +376,22 @@ function probeText(text: string, add: Scores): void {
 
         // A header naming coordinate columns is what separates a survey table
         // from an arbitrary CSV, and it is strong independent evidence.
-        const headerCells = typeof delimiter === 'string' ? lines[0].split(delimiter) : lines[0].trim().split(delimiter);
-        const roles = new Set(matchHeaders(headerCells.map((cell) => cell.trim().replace(/^"|"$/g, ''))).map((match) => match.role));
+        //
+        // SEARCHED OVER THE FIRST FEW LINES, not just line 0. A survey CSV
+        // routinely opens with a title banner — "Pakhar-A 115.13 Ha Boundary
+        // Pillars,,," above "Sl No,NORTHING,EASTING,Code" — and reading only
+        // line 0 finds no roles, forfeits this bonus, and leaves a perfectly
+        // ordinary four-column survey table sitting at 35% confidence, where
+        // the conversion stops and asks the user to name the format by hand.
+        let roles = new Set<string>();
+        for (const line of lines.slice(0, 6)) {
+          const cells = typeof delimiter === 'string' ? line.split(delimiter) : line.trim().split(delimiter);
+          const found = new Set(
+            matchHeaders(cells.map((cell) => cell.trim().replace(/^"|"$/g, ''))).map((match) => match.role)
+          );
+          if (found.size > roles.size) roles = found;
+          if ((found.has('easting') && found.has('northing')) || (found.has('latitude') && found.has('longitude'))) break;
+        }
         const hasCoordinatePair =
           (roles.has('easting') && roles.has('northing')) || (roles.has('latitude') && roles.has('longitude'));
         if (hasCoordinatePair) {
