@@ -672,6 +672,14 @@ textarea {
   max-width: calc(100% - 20px);
 }
 
+/* Lifted clear of the credit band while one is drawn. The credit is
+   right-aligned, but a long attribution reaches across a narrow canvas and
+   would otherwise pass behind this cluster. 22 (the band's offset) + 16 (its
+   height) + 2. Matches `.mapsources--credited`. */
+.preview__overlay--credited {
+  bottom: 40px;
+}
+
 .preview__readout {
   font: 11px var(--mono);
   color: var(--text-muted);

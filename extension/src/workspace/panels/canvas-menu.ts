@@ -52,8 +52,25 @@ interface MenuEntry {
 
 let open: HTMLElement | null = null;
 
+/**
+ * How the open menu is taken down, INCLUDING its window listeners.
+ *
+ * Teardown used to live inside `dismiss`, which never runs when the menu is
+ * closed any other way — and the commonest way by far is clicking one of its
+ * own items. So every use of the menu left a `pointerdown` and a `keydown`
+ * capture listener on `window` for good, each pinning the detached menu it
+ * closed over.
+ *
+ * The leak was the smaller half: on the next open, a click inside the NEW menu
+ * was not inside the OLD one that the stale handler still referenced, so the
+ * stale handler closed the new menu out from under the click.
+ */
+let teardown: (() => void) | null = null;
+
 /** Takes the menu down, if one is up. Safe to call at any time. */
 export function closeCanvasMenu(): void {
+  teardown?.();
+  teardown = null;
   open?.remove();
   open = null;
 }
@@ -226,17 +243,21 @@ export function openCanvasMenu(screenX: number, screenY: number, world: { x: num
   menu.style.left = `${Math.max(8, left)}px`;
   menu.style.top = `${Math.max(8, top)}px`;
 
-  // One-shot dismissal. `capture` so a click on any control still closes the
-  // menu before that control runs, and `once` so nothing accumulates.
+  // Dismissal. `capture` so a click on any control still closes the menu
+  // before that control runs. Removal is registered as `teardown` rather than
+  // done inside the handler, so closing by a menu-item click takes the
+  // listeners with it — see `teardown` above.
   const dismiss = (event: Event) => {
     if (event instanceof KeyboardEvent && event.key !== 'Escape') return;
     if (event.type === 'pointerdown' && menu.contains(event.target as Node)) return;
     closeCanvasMenu();
-    window.removeEventListener('pointerdown', dismiss, true);
-    window.removeEventListener('keydown', dismiss, true);
   };
   window.addEventListener('pointerdown', dismiss, true);
   window.addEventListener('keydown', dismiss, true);
+  teardown = () => {
+    window.removeEventListener('pointerdown', dismiss, true);
+    window.removeEventListener('keydown', dismiss, true);
+  };
 }
 
 /**
