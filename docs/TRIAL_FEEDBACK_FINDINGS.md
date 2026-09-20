@@ -102,7 +102,7 @@ absent.
 
 ---
 
-## F4 — A target CRS set for one file silently breaks the next `OPEN` `HIGH` `UX`
+## F4 — A target CRS set for one file silently breaks the next `FIXED` `HIGH` `UX`
 
 Screenshots 1146–1147: `PKR_CADASTRAL_MAP.kmz` → KML shows **`failed`** with
 `Retry 1 failed`.
@@ -119,12 +119,33 @@ The refusal is right. The problem is that the target CRS was set while working
 on the **DXF**, is a **global setting**, survived the file swap, and the only
 remedy offered is prose telling the user to go and find a control.
 
-**To do**
-1. Put a **"Clear the target CRS"** button in that error, so the remedy is one
-   click from where the problem is reported.
-2. Consider scoping the target CRS to the file it was set for, or warning when
-   a target CRS carried over from a different source is about to block an
-   export.
+**Done**
+
+1. **A button in the refusal.** `workspace/remedies.ts` maps an error code to a
+   remedy that needs no judgement; `messageBlock` grew an optional button, and
+   the inspector's error block offers it. For `TARGET_CRS_NOT_STORABLE` it reads
+   *"Clear the target CRS (EPSG:32645) and convert again"* — it names the code,
+   so the user recognises the setting as one they made for another file — and it
+   clears the setting and re-runs that file in one click.
+2. **The same problem, said before the conversion.** The CRS panel now warns as
+   soon as the chosen target format cannot store the chosen target CRS, with the
+   same button (minus the re-run — nothing has failed yet). That is the half
+   that matters: the refusal is now the fallback, not the first the user hears
+   of it.
+
+Deliberately NOT done: scoping the target CRS per file. It is one global setting
+on purpose — a 200-file batch reprojecting to one grid is the common case, and
+per-file CRS would make that twenty minutes of clicking. The warning above
+addresses the carry-over without breaking the batch.
+
+No remedy is offered for `CRS_REQUIRED`, the other cause of the same refusal:
+the only fix there is a CRS the tool refuses to invent (R4), and a button that
+guessed a UTM zone would be the guess wearing a click.
+
+**Verified** in headless Chromium on the built bundle, not only in unit tests:
+CSV → KML with source and target both EPSG:32645 shows the warning on the CRS
+panel, the conversion is refused with the button, and pressing it clears the
+setting and takes the file to `pass with warnings` → KML.
 
 ---
 

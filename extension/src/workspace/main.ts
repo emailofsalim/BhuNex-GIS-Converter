@@ -32,6 +32,7 @@ import {
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { installCollapse, makeCollapsible } from './collapse';
 import { host, installHost } from './host';
+import { remedyFor } from './remedies';
 import { attributesTab } from './panels/attributes';
 import { backdropTab } from './panels/backdrop-tab';
 import { clearPreview, ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
@@ -342,7 +343,11 @@ function renderInspector(): void {
   }
 
   if (item.error) {
-    body.append(messageBlock('error', item.error.what, item.error.why, item.error.action));
+    // The remedy is offered alongside the sentence, not instead of it: a
+    // refusal has to say what happened whether or not the tool can undo it.
+    body.append(
+      messageBlock('error', item.error.what, item.error.why, item.error.action, remedyFor(item.id, item.error))
+    );
   }
 
   // Only once there is a dataset to describe. Rendering during inspection is

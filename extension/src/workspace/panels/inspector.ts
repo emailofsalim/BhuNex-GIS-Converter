@@ -9,6 +9,7 @@ import { type QueueItem, store } from '../../state/store';
 import { inspectItem } from '../conversion';
 import { element, formatBytes, keyValues, messageBlock, numberField, textField } from '../dom';
 import { host } from '../host';
+import { clearTargetCrsRemedy } from '../remedies';
 import { assignSourceCrs } from './history';
 
 export function overviewTab(item: QueueItem): HTMLElement[] {
@@ -176,6 +177,24 @@ export function crsTab(item: QueueItem): HTMLElement[] {
         'info',
         `${targetFormat!.name} stores its coordinates in ${crsLabel(crsFromEpsg(imposedEpsg))}, so the conversion reprojects into it automatically.`,
         'There is no field anywhere in this format in which a different CRS could be recorded, so leaving this unset is the right choice for it.'
+      )
+    );
+  } else if (imposedEpsg !== undefined && state.settings.targetCrsEpsg && state.settings.targetCrsEpsg !== imposedEpsg) {
+    // THE CONFLICT, SAID BEFORE THE CONVERSION RATHER THAN AFTER IT.
+    //
+    // The target CRS is one global setting shared by the whole queue, so a CRS
+    // set for a site grid while working on a DXF is still set when a KMZ is
+    // selected an hour later. The pipeline refuses that export — correctly, it
+    // cannot record the CRS — but by then the user is reading a red block on a
+    // file that is not the file they changed the setting for. Here it is a
+    // warning attached to the control that causes it.
+    targetSection.append(
+      messageBlock(
+        'warn',
+        `${targetFormat!.name} cannot be written in EPSG:${state.settings.targetCrsEpsg}, so this export will be refused.`,
+        `It stores coordinates in ${crsLabel(crsFromEpsg(imposedEpsg))} and has no field in which to record any other, so a reader would take whatever is written for longitude and latitude. The target CRS is one setting for the whole queue — it may have been set for a different file.`,
+        undefined,
+        clearTargetCrsRemedy(null)
       )
     );
   }

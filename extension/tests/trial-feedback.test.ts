@@ -260,3 +260,99 @@ describe('F3 — the CRS the canvas works in', () => {
     expect(previewCrs(null, 0).crs).toBeNull();
   });
 });
+
+/**
+ * F4 — a refusal whose remedy is one setting should offer to change it.
+ *
+ * Screenshot 1147: `PKR_CADASTRAL_MAP.kmz` → KML, "failed", then "Retry 1
+ * failed". Nothing was wrong with the file. A target CRS of EPSG:32645 had been
+ * set while working on the mining DXF — the right grid for that site — and the
+ * target CRS is ONE GLOBAL SETTING, so it was still set when the cadastral KMZ
+ * was converted an hour later. KML stores nothing but WGS 84 and has no field
+ * in which to record anything else, so the export was refused.
+ *
+ * The refusal is correct and stays. What it lacked was a way out: its `action`
+ * said "clear the target CRS", and the operator, reading a red block on a file
+ * whose settings they had not touched, pressed Retry instead — which re-runs
+ * the same settings and fails identically.
+ */
+describe('F4 — clearing a target CRS the format cannot store', () => {
+  it('still refuses the export, with the code that names the cause', async () => {
+    // The trial case, reproduced: projected source, KML target, EPSG:32645 left
+    // over from another file. A refusal here is the correct behaviour — writing
+    // eastings into a longitude field would open cleanly off the coast of
+    // Africa. This pins that the refusal survives the remedy being added.
+    await expect(
+      convert({
+        input: { fileName: 'pillars.csv', bytes: encoder.encode(BANNER_CSV) },
+        targetFormatId: 'kml',
+        forcedSourceFormatId: 'csv',
+        settings: {
+          precision: SURVEY_DEFAULT_PRECISION,
+          sourceCrs: UTM45N,
+          targetCrs: UTM45N,
+          runQa: false,
+        },
+      } as never)
+    ).rejects.toMatchObject({ code: 'TARGET_CRS_NOT_STORABLE' });
+  });
+
+  it('offers to clear the setting, naming the code that is in the way', async () => {
+    const { remedyFor } = await import('../src/workspace/remedies');
+    const { store } = await import('../src/state/store');
+
+    await store.patchSettings({ targetCrsEpsg: 32645 });
+    const remedy = remedyFor('item-1', { code: 'TARGET_CRS_NOT_STORABLE' });
+    // Named, not "clear the setting": the point is that the user recognises the
+    // code as one they set for a different file.
+    expect(remedy?.label).toContain('32645');
+    expect(remedy?.label).toContain('convert again');
+    await store.patchSettings({ targetCrsEpsg: null });
+  });
+
+  it('offers nothing when no target CRS is set', async () => {
+    // The same error has a second cause — a source CRS that never resolved —
+    // and there the only fix is a CRS the tool refuses to invent (R4). A button
+    // that cleared an unset setting would be a click that changes nothing.
+    const { remedyFor } = await import('../src/workspace/remedies');
+    const { store } = await import('../src/state/store');
+    await store.patchSettings({ targetCrsEpsg: null });
+    expect(remedyFor('item-1', { code: 'TARGET_CRS_NOT_STORABLE' })).toBeNull();
+  });
+
+  it('offers nothing for errors it has no answer to', async () => {
+    const { remedyFor } = await import('../src/workspace/remedies');
+    const { store } = await import('../src/state/store');
+    await store.patchSettings({ targetCrsEpsg: 32645 });
+    expect(remedyFor('item-1', { code: 'CRS_REQUIRED' })).toBeNull();
+    expect(remedyFor('item-1', { code: 'TOO_LARGE_FOR_BROWSER' })).toBeNull();
+    await store.patchSettings({ targetCrsEpsg: null });
+  });
+
+  it('actually clears it, and says so in the log', async () => {
+    // The button pressed, not merely built. The CRS-panel form takes no item id
+    // and so runs no conversion, which is what makes it testable without a
+    // worker pool — and is also the right behaviour: nothing has failed yet.
+    const { clearTargetCrsRemedy } = await import('../src/workspace/remedies');
+    const { store } = await import('../src/state/store');
+    const { installHost } = await import('../src/workspace/host');
+
+    let renders = 0;
+    installHost({ render: () => void renders++ });
+    await store.patchSettings({ targetCrsEpsg: 32645 });
+
+    const remedy = clearTargetCrsRemedy(null);
+    expect(remedy?.label).not.toContain('convert again');
+    remedy?.run();
+    // `run` is synchronous and starts an async settings write; one turn of the
+    // microtask queue is enough for a store that persists through a no-op.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store.get().settings.targetCrsEpsg).toBeNull();
+    expect(renders).toBeGreaterThan(0);
+    const last = store.get().log.at(-1);
+    expect(last?.message).toContain('Target CRS cleared');
+    // It was global, and saying so is the part that prevents the next surprise.
+    expect(last?.message).toContain('whole queue');
+  });
+});

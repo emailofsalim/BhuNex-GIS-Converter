@@ -44,13 +44,42 @@ export function badge(text: string, kind = 'muted', title?: string): HTMLElement
 
 // ----------------------------------------------------------------- ingestion
 
-export function messageBlock(kind: 'error' | 'warn' | 'info', what: string, why?: string, action?: string): HTMLElement {
+/**
+ * A one-click way out of the problem the message describes.
+ *
+ * `action` is a sentence telling the user what to do. That is the right thing
+ * to write when the remedy is a judgement — "check the source CRS" cannot be a
+ * button, because only the user knows which CRS. But where the remedy is a
+ * single unambiguous setting change, prose sends someone hunting through panels
+ * for a control the tool could simply operate itself.
+ */
+export interface Remedy {
+  label: string;
+  /** Title text: what the click will do, in full, before it is clicked. */
+  hint?: string;
+  run: () => void;
+}
+
+export function messageBlock(
+  kind: 'error' | 'warn' | 'info',
+  what: string,
+  why?: string,
+  action?: string,
+  remedy?: Remedy | null
+): HTMLElement {
   const node = element('div', { class: `msg msg--${kind}`, style: 'margin:12px' });
   node.append(element('span', { class: 'msg__icon', text: kind === 'error' ? '✕' : kind === 'warn' ? '!' : 'i' }));
   const body = element('div', { class: 'msg__body' });
   body.append(element('div', { class: 'msg__what', text: what }));
   if (why) body.append(element('div', { class: 'msg__why', text: why }));
   if (action) body.append(element('div', { class: 'msg__action', text: action }));
+  if (remedy) {
+    const row = element('div', { class: 'msg__remedy' });
+    const button = ghostButton(remedy.label, remedy.run);
+    if (remedy.hint) button.title = remedy.hint;
+    row.append(button);
+    body.append(row);
+  }
   node.append(body);
   return node;
 }
