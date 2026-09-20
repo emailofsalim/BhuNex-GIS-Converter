@@ -76,6 +76,35 @@ export function clearPreview(): void {
   if (context) context.clearRect(0, 0, canvas.element.width, canvas.element.height);
 }
 
+/**
+ * Which coordinate system the canvas is working in, and whether it was assumed.
+ *
+ * ONE FUNCTION, TWO CALLERS, and that is the whole point. The caption under the
+ * drawing and the basemap underneath it must agree about the grid, and they did
+ * not: `renderPreview` resolved `declared ?? assumed` for the caption, while
+ * `attachBasemap` read only `dataset.crs`.
+ *
+ * A DXF almost never declares a CRS — the surveyor knows the grid and assigns
+ * it in Settings — so for CAD work, which is most of this tool's work, the
+ * caption read "UTM 45N (assumed)" over a canvas with no tiles and a terrain
+ * readout stuck on a dash. A KMZ, which declares EPSG:4326, worked. That is
+ * what the trial screenshots show, twenty of them.
+ *
+ * `assumed` is carried out separately rather than folded in, because the
+ * caption has to SAY so. A drawing labelled "UTM 45N" that never said it was
+ * is a claim the file does not support, and marking it is the difference
+ * between a caption and a guess.
+ */
+export function previewCrs(
+  declared: CrsRef | null,
+  assumedEpsg: number | null | undefined
+): { crs: CrsRef | null; assumed: boolean } {
+  if (declared) return { crs: declared, assumed: false };
+  if (!assumedEpsg) return { crs: null, assumed: false };
+  const crs = crsFromEpsg(assumedEpsg);
+  return crs ? { crs, assumed: true } : { crs: null, assumed: false };
+}
+
 export function renderPreview(item: QueueItem): void {
   const canvas = $('previewCanvas') as HTMLCanvasElement;
   if (!ui.previewCanvas) ui.previewCanvas = new PreviewCanvas(canvas, (text) => ($('readout').textContent = text));
@@ -95,13 +124,10 @@ export function renderPreview(item: QueueItem): void {
   // assignment is shown, MARKED AS ASSUMED — a drawing labelled "UTM 44N" that
   // never said so is a claim the file does not support, and telling the two
   // apart is the difference between a caption and a guess.
-  const declared = (dataset?.crs ?? null) as CrsRef | null;
-  const assumedEpsg = store.get().settings.sourceCrsEpsg;
-  const assumed = !declared && assumedEpsg ? crsFromEpsg(assumedEpsg) : null;
-  const crs = declared ?? assumed;
+  const resolved = previewCrs((dataset?.crs ?? null) as CrsRef | null, store.get().settings.sourceCrsEpsg);
   data.crs = {
-    label: assumed ? `${crsShortLabel(assumed)} (assumed)` : crsShortLabel(declared),
-    unit: crsGridUnit(crs),
+    label: resolved.assumed ? `${crsShortLabel(resolved.crs)} (assumed)` : crsShortLabel(resolved.crs),
+    unit: crsGridUnit(resolved.crs),
   };
 
   if (dataset?.layers?.length) {
@@ -203,7 +229,24 @@ function attachBasemap(canvas: PreviewCanvas, dataset: any): void {
   // During a placement the working copy already carries the target CRS, so the
   // tiles draw for a drawing that declared nothing — which is the entire point
   // of being able to see the map while aligning against it.
-  const crs: CrsRef | null = dataset?.crs ?? ui.georefSession?.targetCrs ?? null;
+  //
+  // THE ASSIGNED CRS COUNTS TOO, and leaving it out was the defect. A DXF
+  // almost never declares a CRS: the surveyor knows the grid and sets it in
+  // Settings, and `renderPreview` already honours that for the caption, which
+  // is why the drawing reads "UTM 45N (assumed)". This chain did not, so the
+  // basemap had nothing to place tiles in and the terrain readout had no
+  // longitude to sample at. In the trial that meant every DXF screenshot shows
+  // an empty canvas and "Terrain —" while the KMZ, which declares EPSG:4326,
+  // shows imagery and "Terrain 1070.0 m" — and CAD work is the normal case
+  // here, not the edge one.
+  //
+  // `previewCrs` is the SAME function the caption uses, so the two cannot
+  // disagree about which grid the drawing is on — and disagreeing is exactly
+  // what the defect was.
+  const crs: CrsRef | null =
+    previewCrs((dataset?.crs ?? null) as CrsRef | null, settings.sourceCrsEpsg).crs ??
+    ui.georefSession?.targetCrs ??
+    null;
 
   let toLonLat: ((x: number, y: number) => { lon: number; lat: number }) | null = null;
   let fromLonLat: ((lon: number, lat: number) => { x: number; y: number }) | null = null;

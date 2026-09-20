@@ -221,3 +221,42 @@ describe.skipIf(!existsSync(MINING_DXF))('the delivered mining DXF', () => {
     expect(lines.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * F3 — the basemap and the caption must agree about the grid.
+ *
+ * Twenty of the trial screenshots show a DXF with the caption "UTM 45N
+ * (assumed)" over an empty canvas and a terrain readout stuck on a dash, while
+ * the KMZ beside it — which declares EPSG:4326 — draws imagery and reads
+ * "Terrain 1070.0 m". The caption resolved `declared ?? assumed`; the basemap
+ * read only `dataset.crs`. A DXF almost never declares a CRS, so for CAD work
+ * the layer was simply never placeable.
+ *
+ * These pin the shared resolution rather than the rendering, because it is the
+ * disagreement between the two callers that was the defect.
+ */
+describe('F3 — the CRS the canvas works in', () => {
+  it('prefers what the file declared, and does not call it assumed', async () => {
+    const { previewCrs } = await import('../src/workspace/panels/canvas');
+    const { crsFromEpsg } = await import('@crs/epsg');
+    const declared = crsFromEpsg(4326);
+    const result = previewCrs(declared, 32645);
+    expect(result.crs).toBe(declared);
+    expect(result.assumed).toBe(false);
+  });
+
+  it('falls back to the CRS assigned in settings, and says it is assumed', async () => {
+    // THE DEFECT. This is the DXF case, and it returned null to the basemap.
+    const { previewCrs } = await import('../src/workspace/panels/canvas');
+    const result = previewCrs(null, 32645);
+    expect(result.crs?.epsg).toBe(32645);
+    expect(result.assumed).toBe(true);
+  });
+
+  it('has nothing to offer when the file declares nothing and none was assigned', async () => {
+    const { previewCrs } = await import('../src/workspace/panels/canvas');
+    expect(previewCrs(null, null).crs).toBeNull();
+    expect(previewCrs(null, undefined).crs).toBeNull();
+    expect(previewCrs(null, 0).crs).toBeNull();
+  });
+});
