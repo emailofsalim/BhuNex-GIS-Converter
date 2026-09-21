@@ -436,7 +436,69 @@ The bottom-left overlay occupies y 913–940. The drawn credit band is y 912–9
 **They overlap by 15 px** — the attribution passes behind the basemap button,
 the coordinate readout and the Terrain box.
 
-## What the UI audit found healthy
+## U4 — inverting the fold default reached four things it should not have `FIXED` `PINNED`
+
+Folding everything by default was asked for and is right for panels. It was
+wrong for everything that had quietly been relying on the old default, and the
+only way to find that was to open the workspace and look.
+
+**U4a — the ribbon folded itself.** The ribbon persists through the same store
+as every other fold, deliberately, so that it cannot forget its state on
+reload. So the new default applied to it too. A first run opened at a 32-pixel
+strip: eight tab labels, a chevron, and not one tool. Fit, undo, the draw and
+measure families and the whole Convert flow were all behind a fold nobody had
+asked for. That is not decluttering, it is hiding the application. Fixed by
+seeding `ribbon` open alongside Files, the format list and the section box, and
+pinned by two tests — one for the default, one that reads `RIBBON_FOLD` out of
+the toolbar source, because renaming that constant would silently break the
+first test's string match.
+
+**U4b — the section box's chevron did nothing on Results.** Data and Export
+render into `inspectorBody`; Results renders into `bottomBody`, and exactly one
+is ever visible. The fold was wired to the inspector alone, so pressing it while
+Results was showing folded a body that was already hidden and left the visible
+one where it was. The request had named Data, Export **and** Results, and one of
+the three never folded. Both bodies now sit inside a `sectionBox` wrapper, so the
+fold is about the box rather than about whichever body is filling it.
+
+**U4c — the folded bar named the wrong section.** Same root cause: the heading
+read `inspectorTab` unconditionally, but Results tracks `bottomTab`. Opening
+Results › QA left the bar reading "Export › What will be lost" — a heading
+describing a body the user was no longer looking at, which is worse than the
+bare "Details" it replaced. It now reads the tab of whichever body is showing.
+
+**U4d — the layer list was never in the store at all.** It toggled
+`rail--nolayers` straight onto the rail and stopped there. That made it the one
+fold in the workspace a reload forgot — a file with sixty layers unfolded itself
+on every reload — and left it unreachable by the folded-by-default rule, because
+nothing knew it had a state to have a default for. It keeps its own button,
+beside the layer search where a list's fold belongs, but the state behind it is
+now the shared one.
+
+Measured, not reasoned about: first run folded, opens on click, still open after
+a reload.
+
+## What the second UI audit found healthy
+
+Re-measured after the fold inversion, with the operator's own 115.13 Ha DXF
+loaded, at phone (390), tablet (820), laptop (1280) and desktop (1920):
+
+- **Still no horizontal overflow at any width** — 0 px at all four, with the
+  ribbon open, 18 tools visible and Convert reachable at every size.
+- **Folded sections read as folded, not as broken** — the heading stays, keeps
+  `role="button"` and `tabindex="0"`, and the caret rotates −90°. (The caret is
+  one glyph rotated by CSS, not two glyphs: a first pass read `content` alone
+  and nearly filed a finding that was not there.)
+- **The settings groups fold as asked** — all four start shut.
+- **Auto-colour survives the writer.** Converted through the real UI to KML and
+  the downloaded file read back: 22 `<color>` tags, **seven distinct hues**,
+  each as an opaque line colour and a 50%-alpha fill, with no user action. The
+  palette the preview canvas uses and the file a user opens in Google Earth
+  agree.
+- **Zero page errors** across load, file drop, a full convert-and-download, four
+  viewports and every ribbon tab.
+
+## What the first UI audit found healthy
 
 - **No horizontal overflow at any width** — 1920, 1440, 1024, 820, 600, 400 px
   all report 0 px of document overflow, and no body overflow.
@@ -465,3 +527,4 @@ read as broken, then the tests that stop any of it coming back.
 | 7 | **F6/F7/F8** — pin what was already fixed | label-and-magnitude checks on the operator's KMZ and DXF, plus a check that the checks still bite |
 | 8 | **F9/F10** — UX confirmations | Download says it already delivered; Settings fills without a format chosen |
 | 9 | **F11/F12** — found by auditing the files nobody had opened | GML labelled degrees as a metre grid; KML and GeoJSON Sequence put the site on the equator. Both already fixed, both now pinned by one site check across every delivered format |
+| 10 | **U4** — found by auditing the fold change itself | The ribbon folded itself away; the chevron did nothing on Results; the folded bar named the wrong section; the layer list was never in the store. All four fixed and browser-verified, the ribbon pinned by two tests and the layer list by one |
