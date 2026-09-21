@@ -944,6 +944,22 @@ export function openHelpDialog(): void {
       'Escape steps back one level, not all the way out',
       'One press gives up one thing: the part-drawn polygon, then the rubber band, then the selected vertices, then the feature open for editing, then the selection. Returning to Pan is the last rung, and only once nothing else is left — so a press meant to cancel a click cannot also close the tool you were working in.',
     ],
+    [
+      'Undo covers every operation, not only the drawing ones',
+      'Ctrl+Z takes back whatever you last did — a dragged vertex, a CRS you assigned, a reprojection, a repair, a polygonisation, a layer colour. It used to reach only the canvas edits, so the key most people press after assigning the wrong coordinate system did nothing at all. Ctrl+Shift+Z (or Ctrl+Y) puts it back, and each press moves exactly one step.',
+    ],
+    [
+      'The Undo button and the History panel are the same stack',
+      'Results › History lists every operation in order and lets you click straight back to any of them; the toolbar button walks that same list one step at a time and names what it is about to take back. They cannot disagree, and what is on screen is what will be written: undoing an edit removes it from the file the conversion produces, which previously it did not.',
+    ],
+    [
+      'How far back you can go depends on how much each step cost',
+      'Small corrections are the ones you walk backwards through, so they are kept in depth — hundreds of them. An operation that rewrites the whole drawing, such as a reprojection, is bounded by its real size instead. An edit too old to undo is still APPLIED: losing the ability to reverse something never means losing the something.',
+    ],
+    [
+      'The bar under the drawing says what the armed tool expects',
+      'Whatever tool is live states its own gesture there — "click each corner", "drag a vertex to move it", "click along a run of legs" — beside the live readout for the selection count or running measurement. Five of the fourteen tools used to print the Select tool\'s instructions instead, which is worse than printing nothing.',
+    ],
   ];
   for (const [title, text] of rules) body.append(messageBlock('info', title, text));
 

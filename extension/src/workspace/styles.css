@@ -2662,6 +2662,21 @@ details.adv > div {
   text-align: right;
 }
 
+/* THE ARMED TOOL'S INSTRUCTION, set apart from the readouts beside it.
+
+   It is prose, not a measurement, so it drops the monospace and the accent
+   colour the readouts use and sits left with the room to wrap. Giving it the
+   same weight as "128.44 m" would put a sentence and a number in the same
+   visual register, and the number is the one a surveyor is scanning for. */
+.edit__hint {
+  font-family: inherit;
+  color: var(--text-muted);
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: left;
+  white-space: normal;
+}
+
 /* ==========================================================================
    Layer manager (§25.4) and attribute table (§25.5)
    ========================================================================== */

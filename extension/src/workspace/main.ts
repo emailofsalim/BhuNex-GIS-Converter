@@ -48,7 +48,7 @@ import { historyPanel, stepHistory } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
-import { type CanvasToolId, engineOf, ownerOfGroup, ownerOfSection, PANEL_TABS, renderToolbar, RIBBON_TABS, ribbonIsFolded, setCanvasTool, toggleRibbonFold, toolForKey } from './panels/toolbar';
+import { asCanvasTool, engineOf, hintOf, ownerOfGroup, ownerOfSection, PANEL_TABS, renderToolbar, RIBBON_TABS, ribbonIsFolded, setCanvasTool, toggleRibbonFold, toolForKey } from './panels/toolbar';
 import { GeorefCanvas } from '../ui/georef-canvas';
 import { centreOf, georefPanel, pickToLocal, replaceFromOriginal } from './panels/georef';
 import { renderSelect, selectTab } from './panels/select-tab';
@@ -230,7 +230,7 @@ function updateLocalBadge(state: { settings: AppSettings }): void {
  */
 function applyCanvasTool(selected: boolean): void {
   const item = store.selected();
-  const tool = (store.get().canvasTool ?? 'pan') as CanvasToolId;
+  const tool = asCanvasTool(store.get().canvasTool);
   const engine = selected ? engineOf(tool) : 'none';
 
   // --- stop everything ---------------------------------------------------
@@ -239,13 +239,27 @@ function applyCanvasTool(selected: boolean): void {
   ui.georefCanvas?.setEnabled(false);
   if (engine !== 'measure') stopMeasuring();
 
-  if (!item || engine === 'none') {
+  // With no file there is nothing for any tool to act on, so the bar goes.
+  if (!item) {
     $('toolStatus').classList.add('hidden');
     return;
   }
+
+  // THE INSTRUCTION IS SET FOR EVERY TOOL, INCLUDING PAN, AND BEFORE THE ENGINE
+  // STARTS.
+  //
+  // Before, `pan` fell into the same branch as "no file" and hid the bar
+  // entirely, so the one tool that is armed by default said nothing at all
+  // about what it does. Pan has no engine; it still has instructions.
+  //
+  // It is written from the tool's own row rather than by whichever engine
+  // happens to be live, which is what was wrong: five tools were showing the
+  // Select hint. Engines overwrite their OWN spans underneath with live detail.
   $('toolStatus').classList.remove('hidden');
+  $('toolHint').textContent = hintOf(tool);
 
   // --- start the one ----------------------------------------------------
+  if (engine === 'none') return; // Pan: the instruction above, and no engine.
   if (engine === 'tool') {
     renderSelect(item);
     // SWITCH THE ENGINE ON. Everything above was turned off, and `setTool`

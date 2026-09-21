@@ -428,6 +428,22 @@ both, for a building line, a right of way or a corridor; buffer, clip, erase,
 dissolve, hull, centroid, envelope, split and merge. Every one is drawn over
 your data before it is applied, and every one is undoable.
 
+**One undo, over everything.** Ctrl+Z takes back whatever you last did — a
+dragged vertex, a CRS you assigned, a reprojection, a repair, a layer colour —
+one operation per press, and the button names what it is about to take back.
+The toolbar and the History panel under *Results* move the same stack, so they
+cannot disagree, and what is on screen is what gets written: undoing an edit
+removes it from the file the conversion produces.
+
+How far back you can go depends on what each step cost rather than on a flat
+count. Small corrections are the ones you actually walk backwards through, so
+hundreds are kept; an operation that rewrites the whole drawing is bounded by
+its real size. An edit too old to undo is still **applied** — losing the
+ability to reverse something never means losing the something.
+
+Whichever tool is armed states its own gesture in the bar under the drawing,
+beside the live readout for the selection count or the running measurement.
+
 ## Layout
 
 ```

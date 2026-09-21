@@ -253,7 +253,18 @@ export class ToolCanvas {
     this.drawing = null;
     this.preview.element.style.cursor = this.cursorFor(tool);
     this.host.onToolChange?.(tool);
-    this.host.onStatus?.(TOOL_HINT[tool]);
+    // NO HINT FROM HERE ANY MORE. `onStatus` is the LIVE READOUT — a selection
+    // count, a running vertex tally — and the armed tool's instruction is now
+    // its own span, written from `CANVAS_TOOLS` for all fourteen tools rather
+    // than by whichever engine happens to be live.
+    //
+    // Emitting the hint here as well put both in the bar at once, so Point read
+    // "Click to place a single point. Click to place a point. Snapping puts it
+    // exactly on an existing vertex." — one instruction twice, in two voices,
+    // running together as a single sentence. Clearing the readout instead
+    // leaves the instruction standing alone until there is something live to
+    // report beside it.
+    this.host.onStatus?.('');
     this.preview.render();
   }
 
