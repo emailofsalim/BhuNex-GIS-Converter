@@ -7,12 +7,15 @@ row was reproduced against the current pipeline or read out of the delivered
 bytes.
 
 **Status key** — `OPEN` still broken today · `FIXED` corrected, in code that is
-on this branch · `PINNED` a regression test now holds it · `UX` works but reads
-as broken · `NOTE` observation, no change proposed.
+on this branch · `PINNED` a regression test now holds it · `NEEDS FIELD CHECK`
+fixed and unit-tested, but the last mile cannot be observed from this sandbox ·
+`UX` works but reads as broken · `NOTE` observation, no change proposed.
 
-**Every row in this register is now closed.** The statuses below were written
-during the inspection and have been updated as each was executed — nothing here
-says `OPEN`.
+**Every row in this register is now closed** — nothing says `OPEN`. One row, F3,
+carries `NEEDS FIELD CHECK`: the fix and its rule are tested, but the basemap
+tiles it restores cannot be seen from a sandbox with no route to a tile server,
+and a control case that fails for the same reason cannot stand in for the test.
+What to check, and on what, is written out under that row.
 
 ---
 
@@ -80,7 +83,7 @@ title row costs a little confidence instead of most of it.
 
 ---
 
-## F3 — Basemap and terrain ignore an assumed CRS `FIXED` `HIGH`
+## F3 — Basemap and terrain ignore an assumed CRS `FIXED` `NEEDS FIELD CHECK` `HIGH`
 
 Screenshots 1125–1144 (the DXF, **CRS not declared**, source CRS assigned as
 EPSG:32645 in Settings):
@@ -100,9 +103,30 @@ this is the normal case for CAD work, not an edge case.
 Worse, no badge appears explaining it, so the basemap looks broken rather than
 unplaceable.
 
-**To do** — feed the same resolved CRS to the basemap that the caption uses, and
-make sure the "no placeable CRS" badge actually shows when it is genuinely
-absent.
+**Done** — `previewCrs` is now the single answer to "which CRS is this canvas
+working in", and both the caption and `attachBasemap` call it. The two cannot
+disagree about the grid, which is the invariant that was broken. `assumed` is
+carried out separately rather than folded in, because the caption has to SAY so:
+a drawing labelled "UTM 45N" that never claimed to be is a claim the file does
+not support.
+
+**What is proven, and what is not.** The resolution rule is unit-tested — revert
+the fallback and a test fails — and in the browser the operator's own 3.9 MB DXF
+ingests at 90% confidence with 76 features, and assigning EPSG:32645 on the CRS
+panel lands on the file (the queue row reads `EPSG:32645`).
+
+The pixels are NOT proven, and cannot be from here. Tile hosts are unreachable
+from this sandbox: a page-side `fetch` of both `tile.openstreetmap.org` and
+`server.arcgisonline.com` throws, and the KMZ — the case that demonstrably drew
+imagery in the operator's trial — also attempts no tiles here. A control that
+fails identically to the subject cannot tell them apart, so no end-to-end claim
+is made from it.
+
+**To check on a machine with network**, in one sitting: switch the basemap on
+with the KMZ selected and confirm imagery draws, then select the DXF, assign
+EPSG:32645 as the source CRS, and confirm imagery draws for it too and the
+terrain readout gives a height rather than a dash. That is the exact A/B the
+screenshots showed failing.
 
 ---
 
