@@ -40,6 +40,9 @@
  */
 
 import type { CirDataset, CirFeature, CirLayer, CrsRef } from './cir';
+// Type-only: `core/edits.ts` does not import this module, and a `type` import
+// emits nothing, so there is no cycle at runtime either way.
+import type { EditCommand } from './edits';
 
 /**
  * What kind of operation an entry records.
@@ -126,6 +129,21 @@ export interface HistoryEntry {
   settings?: Record<string, unknown>;
   /** True for a named point the user can return to. */
   checkpoint?: string;
+  /**
+   * The command this entry came from, for an entry that came from one.
+   *
+   * THIS IS WHAT KEEPS THE SCREEN AND THE OUTPUT AGREEING. The patch above
+   * reverses the PREVIEW; `item.edits` is a separate list of commands that
+   * `pipeline.ts` replays against the freshly-read source, and it is the only
+   * thing that reaches the exported file. They used to move independently, so
+   * undoing an edit from the History panel reverted the drawing on screen and
+   * shipped the edit anyway — the worst shape a bug like this can take, because
+   * the preview is the evidence the user checks the output against.
+   *
+   * Holding the command on its own entry makes `item.edits` derivable from the
+   * history position (`editsAt`) instead of a second thing to keep in step.
+   */
+  command?: EditCommand;
 }
 
 export interface HistoryOptions {
@@ -137,9 +155,44 @@ export interface HistoryOptions {
    * stops going back far enough is worse than one that admits its limit.
    */
   limit: number;
+  /**
+   * How many patched features to keep across the whole stack.
+   *
+   * WHY A SECOND BOUND, AND WHY THIS IS THE ONE THAT MATTERS
+   *
+   * Counting entries treats a one-vertex nudge and a reprojection of the whole
+   * drawing as the same size, and they differ by four orders of magnitude. A
+   * flat cap of 200 therefore buys the worst of both: it throws away the cheap
+   * steps long before it needs to, and still lets 200 whole-dataset patches
+   * sit in memory.
+   *
+   * Cheap steps are also the ones undo is FOR. Nobody drags a parcel forty
+   * times and wants only the last twenty back; that is exactly the run of small
+   * corrections a surveyor walks backwards through. So the budget is spent in
+   * proportion to what an entry actually costs: a stack of single-feature
+   * edits now runs to the entry limit and nothing is dropped, while a handful
+   * of whole-dataset operations are bounded by their real weight instead of by
+   * a number that cannot see them.
+   *
+   * 120,000 is about 24 full-width preview patches (the preview is capped at
+   * 5,000 features), or several thousand ordinary edits.
+   *
+   * Optional, so a caller that only wants to pin the entry count — the project
+   * tests do — keeps working and still gets the weight bound.
+   */
+  maxPatchedFeatures?: number;
 }
 
-export const DEFAULT_HISTORY_OPTIONS: HistoryOptions = { limit: 200 };
+export const DEFAULT_HISTORY_OPTIONS: HistoryOptions = { limit: 1000, maxPatchedFeatures: 120_000 };
+
+/** What an entry costs against `maxPatchedFeatures`. */
+export function weightOf(entry: HistoryEntry): number {
+  let weight = entry.change.features.length;
+  for (const patch of entry.change.layers) {
+    weight += featuresOf(patch.before ?? patch.after ?? ({} as CirLayer)).length;
+  }
+  return weight;
+}
 
 export interface HistoryState {
   entries: HistoryEntry[];
@@ -152,12 +205,41 @@ export interface HistoryState {
    * user which future they meant.
    */
   position: number;
-  /** Entries dropped off the front because `limit` was reached. */
+  /** Entries dropped off the front because a budget was reached. */
   dropped: number;
+  /**
+   * Commands from entries that have scrolled out of the window.
+   *
+   * An entry that falls off the front is no longer UNDOABLE. It is still
+   * APPLIED, and the difference is the whole reason this field exists: with
+   * `item.edits` derived from the live entries alone, the moment the oldest
+   * edit was dropped it would vanish from the command list, and the next
+   * conversion would silently ship a file missing an edit the user made and
+   * never took back. Dropping the ability to reverse something is a documented
+   * limit; dropping the something is data loss.
+   */
+  baseEdits: EditCommand[];
 }
 
 export function createHistory(): HistoryState {
-  return { entries: [], position: 0, dropped: 0 };
+  return { entries: [], position: 0, dropped: 0, baseEdits: [] };
+}
+
+/**
+ * The edit commands that a given history position implies.
+ *
+ * `item.edits` is set from this on every move through the history, so the
+ * commands replayed into the exported file are always the ones whose entries
+ * are currently applied — plus the ones too old to reverse, which are applied
+ * whether or not they can still be undone.
+ */
+export function editsAt(history: HistoryState): EditCommand[] {
+  const commands: EditCommand[] = [...(history.baseEdits ?? [])];
+  for (let index = 0; index < history.position; index++) {
+    const command = history.entries[index]?.command;
+    if (command) commands.push(command);
+  }
+  return commands;
 }
 
 let sequence = 0;
@@ -224,6 +306,35 @@ export function diffDatasets(before: CirDataset, after: CirDataset): ChangeSet {
 function featuresOf(layer: CirLayer): CirFeature[] {
   const shaped = layer as CirLayer & { preview?: CirFeature[] };
   return shaped.features ?? shaped.preview ?? [];
+}
+
+/**
+ * WHICH KEY a layer keeps its features under, so a patch is written back to the
+ * one it was read from.
+ *
+ * `featuresOf` fixed the READING side of this and `applyChange` was left
+ * reading `layer.features` directly, which is the same defect one function
+ * over. It did not throw during the diff — it threw during the undo, from
+ *
+ *     const features = layer.features.slice();
+ *
+ * with "Cannot read properties of undefined (reading 'slice')", on every
+ * history entry that touched a feature. The History panel's Undo button was
+ * therefore broken for the entire class of operation it exists to reverse, and
+ * nothing caught it because every test built a CIR dataset by hand — the shape
+ * `summarise()` never produces.
+ *
+ * Writing back under the SAME key matters as much as reading: returning
+ * `{...layer, features}` for a summarised layer would leave the original
+ * `preview` in place and quietly add a second, disagreeing copy of the
+ * geometry, which the canvas would go on reading while the patch sat unused
+ * beside it.
+ */
+function featureKeyOf(layer: CirLayer): 'features' | 'preview' {
+  const shaped = layer as CirLayer & { preview?: CirFeature[] };
+  if (Array.isArray(shaped.features)) return 'features';
+  if (Array.isArray(shaped.preview)) return 'preview';
+  return 'features';
 }
 
 function diffLayer(name: string, before: CirLayer, after: CirLayer): FeaturePatch[] {
@@ -305,6 +416,8 @@ export interface RecordOptions {
   settings?: Record<string, unknown>;
   maxDisplacement?: number;
   checkpoint?: string;
+  /** The command this operation came from, when it came from one. */
+  command?: EditCommand;
 }
 
 /**
@@ -335,18 +448,32 @@ export function recordOperation(
     maxDisplacement: options.maxDisplacement,
     settings: options.settings,
     checkpoint: options.checkpoint,
+    command: options.command,
   };
 
   const kept = history.entries.slice(0, history.position);
   kept.push(entry);
 
   let dropped = history.dropped;
-  while (kept.length > settings.limit) {
-    kept.shift();
+  const baseEdits = [...(history.baseEdits ?? [])];
+
+  // Both budgets, oldest first. A dropped entry's command is BANKED rather
+  // than discarded: it stays applied to the data and simply stops being
+  // reversible. See `HistoryState.baseEdits`.
+  const budget = settings.maxPatchedFeatures ?? DEFAULT_HISTORY_OPTIONS.maxPatchedFeatures!;
+  const over = (): boolean =>
+    kept.length > settings.limit || kept.reduce((sum, item) => sum + weightOf(item), 0) > budget;
+
+  // Never drop the entry just recorded, however heavy it is: a single
+  // operation larger than the whole budget would otherwise be unrecordable and
+  // therefore unundoable the instant it happened.
+  while (kept.length > 1 && over()) {
+    const gone = kept.shift()!;
+    if (gone.command) baseEdits.push(gone.command);
     dropped++;
   }
 
-  return { entries: kept, position: kept.length, dropped };
+  return { entries: kept, position: kept.length, dropped, baseEdits };
 }
 
 /** Marks the entry at the top of the history as a named checkpoint. */
@@ -462,7 +589,10 @@ export function applyChange(dataset: CirDataset, change: ChangeSet, side: 'befor
     next.layers = next.layers.map((layer) => {
       const patches = byLayer.get(layer.name);
       if (!patches) return layer;
-      const features = layer.features.slice();
+      // Read and write the same key: CIR layers carry `features`, the
+      // workspace's summarised layers carry `preview`. See `featureKeyOf`.
+      const key = featureKeyOf(layer);
+      const features = featuresOf(layer).slice();
 
       // Removals first, highest index down, so removing one does not shift the
       // index of another still to be removed. Then the replacements and
@@ -484,7 +614,7 @@ export function applyChange(dataset: CirDataset, change: ChangeSet, side: 'befor
         else features.push(wanted);
       }
 
-      return { ...layer, features };
+      return { ...layer, [key]: features };
     });
   }
 
@@ -537,14 +667,28 @@ export interface HistorySnapshot {
   entries: HistoryEntry[];
   position: number;
   dropped: number;
+  /** Carried too: without it a reopened project loses the edits it cannot undo. */
+  baseEdits?: EditCommand[];
 }
 
 export function snapshotHistory(history: HistoryState): HistorySnapshot {
-  return { entries: history.entries, position: history.position, dropped: history.dropped };
+  return {
+    entries: history.entries,
+    position: history.position,
+    dropped: history.dropped,
+    baseEdits: history.baseEdits ?? [],
+  };
 }
 
 export function restoreHistory(snapshot: HistorySnapshot | undefined): HistoryState {
   if (!snapshot || !Array.isArray(snapshot.entries)) return createHistory();
   const position = Math.max(0, Math.min(snapshot.position ?? snapshot.entries.length, snapshot.entries.length));
-  return { entries: snapshot.entries, position, dropped: snapshot.dropped ?? 0 };
+  return {
+    entries: snapshot.entries,
+    position,
+    dropped: snapshot.dropped ?? 0,
+    // A project written before this field existed restores with none, which is
+    // correct: its entries were never dropped, so nothing was banked.
+    baseEdits: Array.isArray(snapshot.baseEdits) ? snapshot.baseEdits : [],
+  };
 }

@@ -130,6 +130,22 @@
                    only thing still floating over the drawing. -->
               <div class="cstack">
                 <div class="cbar cbar--status hidden" id="toolStatus">
+                  <!-- THE ARMED TOOL'S INSTRUCTION, and it is a separate span
+                       from the readouts on purpose.
+
+                       These used to be one thing, written only by ToolCanvas —
+                       so a tool running on any other engine showed whatever
+                       ToolCanvas had last said, and Info, which rides the
+                       select engine, was actively told to print the SELECT
+                       instructions. Five of fourteen tools gave directions for
+                       a different tool.
+
+                       An instruction ("click each corner") and a readout
+                       ("3 features", "128.44 m") answer different questions and
+                       change at different times. Separated, the tool owns the
+                       first from its own row in CANVAS_TOOLS and each engine
+                       owns the second. -->
+                  <span class="edit__readout edit__hint" id="toolHint"></span>
                   <span class="edit__readout" id="selectStatus">Nothing selected</span>
                   <span class="edit__readout" id="editReadout"></span>
                   <span class="edit__readout" id="measureReadout"></span>

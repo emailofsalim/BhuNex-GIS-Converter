@@ -30,6 +30,7 @@
  * prevent — so neither is written twice.
  */
 
+import { canRedo, canUndo, nextRedoLabel, nextUndoLabel } from '../../core/history';
 import { isCollapsed, setCollapsed } from '../collapse';
 import { element } from '../dom';
 import { host } from '../host';
@@ -114,8 +115,22 @@ export const CANVAS_ACTIONS: CanvasActionDef[] = [
   { id: 'grid', label: 'Grid', key: 'R', hint: 'Show or hide the reference grid.' },
   { id: 'snap', label: 'Snap', key: 'S', hint: 'Snap new geometry to existing vertices, midpoints and segments.' },
   { id: 'ortho', label: 'Ortho', key: 'F8', hint: 'Constrain new segments to one axis, as F8 does in AutoCAD. Shift does it for one segment.' },
-  { id: 'undo', label: 'Undo', key: 'Ctrl+Z', hint: 'Take back the last edit.' },
-  { id: 'redo', label: 'Redo', key: 'Ctrl+Shift+Z', hint: 'Reapply the edit that was taken back.' },
+  // "the last edit" was accurate when these walked `item.edits` and could
+  // reach nothing else. They move the operation history now, so the wording
+  // has to say so: a CRS assignment, a reprojection and a repair are all one
+  // press back, and they were not before.
+  {
+    id: 'undo',
+    label: 'Undo',
+    key: 'Ctrl+Z',
+    hint: 'Take back the last operation — an edit, a CRS you assigned, a reprojection, a repair, a layer colour. One press, one step.',
+  },
+  {
+    id: 'redo',
+    label: 'Redo',
+    key: 'Ctrl+Shift+Z',
+    hint: 'Put back the operation that Undo took. Ctrl+Y does the same, for the hand that expects it.',
+  },
 ];
 
 /** Shortcuts that belong to the workspace rather than to the canvas. */
@@ -376,6 +391,51 @@ export function setCanvasTool(id: CanvasToolId): void {
   host.render();
 }
 
+/**
+ * What the armed tool tells the user to do, from the one table that defines it.
+ *
+ * THE STATUS LINE USED TO BELONG TO AN ENGINE RATHER THAN TO THE TOOL, and it
+ * showed. `#selectStatus` is written only by `ToolCanvas`, so:
+ *
+ *   · Vertex, Distance, Area and Georef run on OTHER engines, leaving whatever
+ *     ToolCanvas had last written sitting there — in practice the Select hint.
+ *   · Info is worse, because it is not stale. Info rides the select engine
+ *     (`setTool('select')`, a read-only click on the same layer), so ToolCanvas
+ *     actively writes the SELECT instructions while the Info tool is armed.
+ *
+ * Five of fourteen tools therefore gave the user instructions for a different
+ * tool. Measured in a browser, all five reading "Click a feature to select it,
+ * Shift-click to add or remove…".
+ *
+ * The hint belongs to the tool, so it is read from `CANVAS_TOOLS` — the same
+ * row that supplies the button label, the shortcut key and the tooltip. The
+ * engines keep their own readouts beside it for live detail: a selection count,
+ * a running measurement, a dragged vertex's coordinates. Instruction and
+ * readout are different things and now occupy different spans.
+ */
+export function hintOf(id: CanvasToolId): string {
+  return CANVAS_TOOLS.find((tool) => tool.id === id)?.hint ?? '';
+}
+
+/**
+ * Narrows the store's tool id, falling back to Pan for anything unrecognised.
+ *
+ * `store.canvasTool` is deliberately a bare `string`: the state layer must not
+ * import from the workspace, and `CanvasToolId` lives here. That rule is worth
+ * keeping — but it means the value arrives unvalidated, and `applyCanvasTool`
+ * used to CAST it. A cast asserts rather than checks, so a tool id that no
+ * longer exists (renamed here, or restored from an older saved project) would
+ * pass straight through, match no branch, start no engine, and leave the canvas
+ * inert with a lit button and no way to tell why.
+ *
+ * Falling back to Pan is the safe end of that: Pan owns no pointer and can
+ * damage nothing, so an unknown id degrades to "no tool armed" rather than to
+ * "a tool that silently does nothing".
+ */
+export function asCanvasTool(value: string | undefined): CanvasToolId {
+  return CANVAS_TOOLS.some((tool) => tool.id === value) ? (value as CanvasToolId) : 'pan';
+}
+
 /** Which engine a tool belongs to. Used to decide what to stop and what to start. */
 export function engineOf(id: CanvasToolId): 'tool' | 'edit' | 'measure' | 'info' | 'georef' | 'none' {
   if (id === 'pan') return 'none';
@@ -435,13 +495,41 @@ export function renderToolbar(into: HTMLElement, enabled: boolean): void {
           ui.toolCanvas?.setOrtho(ui.orthoOn);
           host.render();
         });
+      // THE HISTORY DECIDES, and it names what it would take back.
+      //
+      // These read `item.history` rather than `edits` and `redoStack`, which
+      // is the same state the History panel's own buttons read, so the two can
+      // no longer disagree about whether there is anything to undo. It also
+      // widens what the button covers: assigning a CRS, reprojecting or
+      // repairing are history entries too, and were previously unreachable
+      // from here however many of them the user had just done.
+      //
+      // The tooltip carries the entry's label — "Take back Move 2 vertices"
+      // rather than "Take back the last edit" — because the one question a
+      // user has before pressing Undo is what exactly is about to go.
       case 'undo': {
-        const node = button('Undo', 'Take back the last edit (Ctrl+Z)', false, () => ui.undo?.(), (item?.edits?.length ?? 0) === 0);
+        const history = item?.history;
+        const label = history ? nextUndoLabel(history) : null;
+        const node = button(
+          'Undo',
+          label ? `Take back “${label}” (Ctrl+Z)` : 'Nothing to take back (Ctrl+Z)',
+          false,
+          () => ui.undo?.(),
+          !history || !canUndo(history)
+        );
         node.id = 'undoBtn';
         return node;
       }
       case 'redo': {
-        const node = button('Redo', 'Reapply the edit that was taken back (Ctrl+Shift+Z)', false, () => ui.redo?.(), (state.redoStack?.length ?? 0) === 0);
+        const history = item?.history;
+        const label = history ? nextRedoLabel(history) : null;
+        const node = button(
+          'Redo',
+          label ? `Put “${label}” back (Ctrl+Shift+Z)` : 'Nothing to put back (Ctrl+Shift+Z)',
+          false,
+          () => ui.redo?.(),
+          !history || !canRedo(history)
+        );
         node.id = 'redoBtn';
         return node;
       }

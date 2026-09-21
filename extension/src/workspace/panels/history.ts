@@ -5,6 +5,7 @@ import {
   canUndo,
   createHistory,
   describeEntry,
+  editsAt,
   type HistoryState,
   markCheckpoint,
   nextRedoLabel,
@@ -140,15 +141,27 @@ export function historyRow(
  * Moves a file's data to a point in its history.
  *
  * The dataset held in the workspace is the worker's summary, not the full CIR,
- * so what is reversed here is the preview. The conversion itself always re-reads
- * the source in the worker, which is why undoing in the UI cannot leave the
- * exported bytes disagreeing with what is on screen.
+ * so what is reversed here is the preview. The conversion re-reads the source
+ * in the worker and replays `item.edits` onto it, so the COMMAND LIST has to
+ * move with the position or the two disagree.
+ *
+ * It did not, and the note that used to sit here said the opposite — that
+ * undoing in the UI "cannot leave the exported bytes disagreeing with what is
+ * on screen". It could, and in the one direction that matters: undoing an edit
+ * reverted the drawing and left the command in `item.edits`, so the next
+ * conversion shipped a file containing an edit the user had taken back, with
+ * the preview standing as evidence that it had not been. `edits` is now
+ * DERIVED from the position rather than kept alongside it.
  */
 export function stepHistory(itemId: string, position: number): void {
   const item = store.get().items.find((entry) => entry.id === itemId);
   if (!item?.history) return;
   const stepped = revertTo(item.history, item.dataset, position);
-  store.updateItem(itemId, { history: stepped.history, dataset: stepped.dataset });
+  store.updateItem(itemId, {
+    history: stepped.history,
+    dataset: stepped.dataset,
+    edits: editsAt(stepped.history),
+  });
   if (stepped.entry) {
     store.log('info', `${item.fileName}: history moved to “${position === 0 ? 'as imported' : stepped.entry.label}”.`);
   }

@@ -76,14 +76,30 @@ describe('clearing the queue clears what described it', () => {
   });
 
   it('drops the state that addressed the files being removed', () => {
-    // A redo stack and a vertex target both address layers and feature indices.
-    // Kept across a clear, they point into whatever loads next.
+    // A vertex target addresses a layer and a feature index. Kept across a
+    // clear, it points into whatever loads next.
+    //
+    // The undo history used to be on this list, as a session-wide `redoStack`
+    // that had to be emptied here by hand. It is per-item now, so emptying
+    // `items` takes every file's history with it and there is nothing left to
+    // forget — which is why this no longer looks for it. The assertion below
+    // holds that the items really are the thing being cleared.
     const start = MAIN.indexOf("$('clearQueueBtn')");
     const handler = MAIN.slice(start, MAIN.indexOf('});', MAIN.indexOf("store.log('info', 'Queue cleared.')")));
     expect(handler, 'the clear handler could not be located').not.toBe('');
-    expect(handler).toContain('redoStack: []');
+    expect(handler).toContain('items: []');
     expect(handler).toContain('ui.editTarget = null');
     expect(handler).toContain('ui.editCanvas?.setTarget(null)');
+  });
+
+  it('keeps no session-wide redo stack for a per-file history to disagree with', () => {
+    // Two stacks meant two answers to "is there anything to undo": the toolbar
+    // read `edits` and `redoStack`, the History panel read `history.position`,
+    // and undoing from either left the other stale. This holds the single
+    // source of truth in place.
+    const store = readFileSync(join(ROOT, 'state', 'store.ts'), 'utf8');
+    expect(store).not.toMatch(/^\s*redoStack:/m);
+    expect(MAIN).not.toMatch(/redoStack:\s*\[/);
   });
 });
 
