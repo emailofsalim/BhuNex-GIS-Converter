@@ -166,7 +166,7 @@ cap the credit's width and keep the full list under *Sources & APIs*.
 
 ---
 
-## F6 — GeoJSON declared EPSG:32645 while holding degrees `FIXED`
+## F6 — GeoJSON declared EPSG:32645 while holding degrees `FIXED` `PINNED`
 
 The delivered `PKR_CADASTRAL_MAP_converted_to_geojson.geojson` declares
 `urn:ogc:def:crs:EPSG::32645` and **all 62,111 of its coordinates are degrees**
@@ -176,21 +176,30 @@ Current code is correct — same input and target now gives
 `[254374.143, 2605788.719]` with a `CRS_TRANSFORMED` warning. The delivered file
 came from a build predating the fix.
 
-**To do** — add a regression test pinning it, since nothing currently proves the
-labelled CRS matches the written magnitudes.
+**Done** — `trial-feedback.test.ts` converts the operator's own KMZ and checks
+the label and the magnitudes TOGETHER, in both directions: declaring EPSG:32645
+must come with six-digit eastings and seven-digit northings, and declaring
+nothing (RFC 7946) must come with degrees. Checking either alone is what let the
+delivered file out.
 
 ---
 
-## F7 — DXF written in degrees `FIXED`
+## F7 — DXF written in degrees `FIXED` `PINNED`
 
 `PKR_CADASTRAL_MAP_converted_to_dxf.dxf` has `firstX = 84.594` — longitude in
 the X ordinate, the defect fixed in PR #77.
 
 Current code on the same file: `firstX = 254348.202`. Correct.
 
+**Done** — pinned on the KMZ, in the no-target-CRS case the trial actually ran:
+all 60,748 vertices are on a metre grid, none is left in degrees, and the
+drawing measures kilometres across rather than the 0.033 units that opens as a
+dot at the origin. The explicit-EPSG:32645 run is pinned to the same numbers, so
+"leave it unset" cannot become advice that moves the drawing.
+
 ---
 
-## F8 — 20 of 76 DXF features missing from the delivered GeoJSON `NOTE`
+## F8 — 20 of 76 DXF features missing from the delivered GeoJSON `PINNED`
 
 The delivered file has 56 features where the UI reported 76:
 
@@ -207,8 +216,15 @@ Current code returns all **76**. Tested with polygonise off, on, and on with
 keep-lines: all three give 76, so that setting does not explain it either. The
 delivered file predates a fix I have not identified.
 
-**To do** — pin 76-in/76-out for this file as a regression test so it cannot
-come back unnoticed.
+**Done** — `trial-feedback.test.ts` pins 76 features on the operator's own DXF,
+the three per-layer counts that had collapsed to 1, and the presence of
+LineStrings, which the delivered file had none of.
+
+**And the checks are checked.** A regression test that passes proves the code is
+right today, not that the test would have noticed when it was wrong. The two
+broken files are still in the tree, so the same two helpers are pointed at them
+in `the checks bite`: if those ever stop failing the delivered files, the checks
+above have gone blind.
 
 ---
 

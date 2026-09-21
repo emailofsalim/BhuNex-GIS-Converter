@@ -223,6 +223,187 @@ describe.skipIf(!existsSync(MINING_DXF))('the delivered mining DXF', () => {
 });
 
 /**
+ * F6 and F7 — the label on a file and the numbers inside it must agree.
+ *
+ * Both defects in the delivered cadastral batch were the same defect wearing
+ * two formats, and both are already fixed. Nothing pinned them, which is why
+ * they are pinned here: this is the class of bug the whole tool exists to
+ * prevent, because the output opens, draws, and is wrong.
+ *
+ * F6. `PKR_CADASTRAL_MAP_converted_to_geojson.geojson` declares
+ * `urn:ogc:def:crs:EPSG::32645` — a metre grid — and all 62,111 of its
+ * coordinates are degrees (`84.594, 23.544`). Any reader that honours the
+ * declaration treats 84.594 as an easting 84 metres from the zone's western
+ * edge. The file lies about itself.
+ *
+ * F7. `..._converted_to_dxf.dxf` has `firstX = 84.594`: longitude written into
+ * the X ordinate of a CAD drawing, which has no CRS at all and takes its
+ * numbers as plan units. The whole 3.5 km site arrives 0.033 units across and
+ * opens as a dot at the origin.
+ *
+ * The tests below convert the operator's real KMZ and check the two things
+ * together — what the output SAYS its CRS is, and what magnitude its numbers
+ * actually are. Checking either alone is what let both files out.
+ */
+const CADASTRAL_KMZ = '2_Trial_Feedback_Files/imported file/PKR_CADASTRAL_MAP.kmz';
+
+/** Every `[code, value]` pair in a DXF, in file order. */
+function dxfGroups(text: string): [string, string][] {
+  const lines = text.split(/\r?\n/);
+  const pairs: [string, string][] = [];
+  for (let index = 0; index + 1 < lines.length; index += 2) pairs.push([lines[index].trim(), lines[index + 1]]);
+  return pairs;
+}
+
+/** The x and y of every VERTEX, which is where a CAD drawing's coordinates live. */
+function dxfVertices(text: string): { xs: number[]; ys: number[] } {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  let inVertex = false;
+  for (const [code, value] of dxfGroups(text)) {
+    // Group 0 opens a new entity, so it is also what closes the last one.
+    if (code === '0') inVertex = value.trim() === 'VERTEX';
+    if (!inVertex) continue;
+    if (code === '10') xs.push(Number(value));
+    if (code === '20') ys.push(Number(value));
+  }
+  return { xs, ys };
+}
+
+async function convertCadastral(targetFormatId: string, targetCrs: ReturnType<typeof crsFromEpsg> | null) {
+  const result: never = (await convert({
+    input: { fileName: 'PKR_CADASTRAL_MAP.kmz', bytes: new Uint8Array(readFileSync(CADASTRAL_KMZ)) },
+    targetFormatId,
+    settings: { precision: SURVEY_DEFAULT_PRECISION, targetCrs, runQa: false },
+  } as never)) as never;
+  const value = result as unknown as { outputs: { bytes: Uint8Array }[]; warnings: { code: string }[] };
+  return { text: decoder.decode(value.outputs[0].bytes), codes: value.warnings.map((entry) => entry.code) };
+}
+
+describe.skipIf(!existsSync(CADASTRAL_KMZ))('F6/F7 — the delivered cadastral KMZ', () => {
+  it('writes metres when it declares a metre grid', async () => {
+    // THE DEFECT, in the format it was delivered in. Before the fix this file
+    // said EPSG:32645 and held 84.594.
+    const { text, codes } = await convertCadastral('geojson', crsFromEpsg(32645));
+    const json = JSON.parse(text);
+
+    expect(json.crs?.properties?.name).toContain('32645');
+    expect(json.features).toHaveLength(1025);
+
+    // The label and the numbers, checked against each other. On zone 45N an
+    // easting is six digits and a northing seven; a longitude is two.
+    for (const feature of json.features.slice(0, 50)) {
+      for (const [x, y] of flatCoords(feature.geometry)) {
+        expect(x).toBeGreaterThan(100_000);
+        expect(x).toBeLessThan(1_000_000);
+        expect(y).toBeGreaterThan(1_000_000);
+      }
+    }
+    expect(flatCoords(json.features[0].geometry)[0]).toEqual([254374.143, 2605788.719]);
+
+    // RFC 7946 has no CRS member, so writing one is off-spec and is stated as
+    // such rather than done quietly.
+    expect(codes).toContain('GEOJSON_NON_WGS84');
+    expect(codes).toContain('CRS_TRANSFORMED');
+  }, 120_000);
+
+  it('writes degrees when it declares nothing, which is what WGS 84 GeoJSON is', async () => {
+    // The same agreement, from the other side: no `crs` member means RFC 7946,
+    // which means degrees. A file that omitted the member and held metres
+    // would be exactly as wrong as the delivered one.
+    const { text } = await convertCadastral('geojson', null);
+    const json = JSON.parse(text);
+    expect(json.crs).toBeUndefined();
+    for (const [x, y] of flatCoords(json.features[0].geometry)) {
+      expect(Math.abs(x)).toBeLessThanOrEqual(180);
+      expect(Math.abs(y)).toBeLessThanOrEqual(90);
+    }
+  }, 120_000);
+
+  it('puts a CAD drawing on a metre grid even though no target CRS was asked for', async () => {
+    // F7's real fix. DXF has nowhere to record a CRS, so the pipeline chooses
+    // the UTM zone the data falls in rather than writing the degrees it
+    // arrived as. This is the no-target case, which is how the trial ran it.
+    const { text, codes } = await convertCadastral('dxf', null);
+    const { xs, ys } = dxfVertices(text);
+
+    expect(xs).toHaveLength(60_748);
+    expect(ys).toHaveLength(60_748);
+    expect(xs[0]).toBeCloseTo(254374.143, 3);
+    expect(ys[0]).toBeCloseTo(2605788.719, 3);
+
+    // Nothing left in degrees anywhere in the drawing. A single stray vertex
+    // at 84.594 would sit 254 km from the rest of the site.
+    expect(Math.min(...xs)).toBeGreaterThan(100_000);
+    expect(Math.min(...ys)).toBeGreaterThan(1_000_000);
+
+    // And the consequence that made it obvious: the site is kilometres across,
+    // not hundredths of a unit. 0.033 units is what a degree-written drawing
+    // measured, and it opens as a dot at the origin.
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(3_000);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(3_000);
+
+    expect(codes).toContain('CRS_TRANSFORMED');
+  }, 120_000);
+
+  it('lands on the same grid when that zone is asked for explicitly', async () => {
+    // The automatic choice and the explicit one must agree, or "leave it unset"
+    // would be advice that moves the drawing.
+    const { text } = await convertCadastral('dxf', crsFromEpsg(32645));
+    const { xs, ys } = dxfVertices(text);
+    expect(xs[0]).toBeCloseTo(254374.143, 3);
+    expect(ys[0]).toBeCloseTo(2605788.719, 3);
+  }, 120_000);
+});
+
+/**
+ * The checks above, run against the files that were actually delivered.
+ *
+ * A regression test that passes proves the code is right today. It does not
+ * prove the test would have noticed when the code was wrong — and a check that
+ * cannot fail is worse than no check, because it reads like cover. The two
+ * broken files are still in the tree, so the same two helpers are pointed at
+ * them here. If these ever stop failing, the checks above have gone blind.
+ */
+const DELIVERED_GEOJSON = '2_Trial_Feedback_Files/exported file/PKR_CADASTRAL_MAP_converted_to_geojson.geojson';
+const DELIVERED_DXF = '2_Trial_Feedback_Files/exported file/PKR_CADASTRAL_MAP_converted_to_dxf.dxf';
+
+describe.skipIf(!existsSync(DELIVERED_GEOJSON) || !existsSync(DELIVERED_DXF))('the checks bite', () => {
+  it('sees that the delivered GeoJSON says metres and holds degrees', () => {
+    const json = JSON.parse(readFileSync(DELIVERED_GEOJSON, 'utf8'));
+    expect(json.crs?.properties?.name).toContain('32645');
+    const [x, y] = flatCoords(json.features[0].geometry)[0];
+    // What the file says it is, against what it is.
+    expect(x).toBeLessThan(180);
+    expect(y).toBeLessThan(90);
+  });
+
+  it('sees that the delivered DXF is a third of a unit across', () => {
+    const { xs, ys } = dxfVertices(readFileSync(DELIVERED_DXF, 'utf8'));
+    expect(xs.length).toBeGreaterThan(0);
+    expect(xs[0]).toBeLessThan(180);
+    // 0.033 units, where the site is 3.5 km. This is the dot at the origin.
+    expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(1);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1);
+  });
+});
+
+/** Every `[x, y]` in a GeoJSON geometry, however deeply nested. */
+function flatCoords(geometry: { coordinates: unknown }): [number, number][] {
+  const out: [number, number][] = [];
+  const walk = (node: unknown): void => {
+    if (!Array.isArray(node)) return;
+    if (typeof node[0] === 'number') {
+      out.push([node[0] as number, node[1] as number]);
+      return;
+    }
+    for (const child of node) walk(child);
+  };
+  walk(geometry.coordinates);
+  return out;
+}
+
+/**
  * F3 — the basemap and the caption must agree about the grid.
  *
  * Twenty of the trial screenshots show a DXF with the caption "UTM 45N
