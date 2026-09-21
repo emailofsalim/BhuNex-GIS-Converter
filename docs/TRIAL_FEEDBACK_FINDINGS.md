@@ -7,17 +7,16 @@ row was reproduced against the current pipeline or read out of the delivered
 bytes.
 
 **Status key** — `OPEN` still broken today · `FIXED` corrected, in code that is
-on this branch · `PINNED` a regression test now holds it · `NEEDS FIELD CHECK`
-fixed and unit-tested, but the last mile cannot be observed from this sandbox ·
+on this branch · `PINNED` a regression test now holds it · `VERIFIED`
+confirmed in the browser on the operator's own file, not only in tests ·
 `UX` works but reads as broken · `NOTE` observation, no change proposed.
 
-**Every row in this register is now closed** — nothing says `OPEN`. Rows F11 and
-F12 were added by a second pass that opened the delivered files the first pass
-had not: 68 files across the four folders, every one accounted for. One row, F3,
-carries `NEEDS FIELD CHECK`: the fix and its rule are tested, but the basemap
-tiles it restores cannot be seen from a sandbox with no route to a tile server,
-and a control case that fails for the same reason cannot stand in for the test.
-What to check, and on what, is written out under that row.
+**Every row in this register is now closed** — nothing says `OPEN`, and nothing
+is left waiting on someone else's machine. Rows F11 and F12 were added by a
+second pass that opened the delivered files the first pass had not: 68 files
+across the four folders, every one accounted for. F3, the one row that had been
+left for a field check, has since been verified in the browser on the operator's
+own DXF.
 
 ---
 
@@ -85,7 +84,7 @@ title row costs a little confidence instead of most of it.
 
 ---
 
-## F3 — Basemap and terrain ignore an assumed CRS `FIXED` `NEEDS FIELD CHECK` `HIGH`
+## F3 — Basemap and terrain ignore an assumed CRS `FIXED` `VERIFIED` `HIGH`
 
 Screenshots 1125–1144 (the DXF, **CRS not declared**, source CRS assigned as
 EPSG:32645 in Settings):
@@ -112,23 +111,33 @@ carried out separately rather than folded in, because the caption has to SAY so:
 a drawing labelled "UTM 45N" that never claimed to be is a claim the file does
 not support.
 
-**What is proven, and what is not.** The resolution rule is unit-tested — revert
-the fallback and a test fails — and in the browser the operator's own 3.9 MB DXF
-ingests at 90% confidence with 76 features, and assigning EPSG:32645 on the CRS
-panel lands on the file (the queue row reads `EPSG:32645`).
+**Verified, end to end, on the operator's own DXF.** With that file loaded
+ALONE — nothing else to prime the tile cache or set the view — detected at 90%
+with 76 features, EPSG:32645 assigned on the CRS panel so the panel reads
+`Origin: Selected by you`:
 
-The pixels are NOT proven, and cannot be from here. Tile hosts are unreachable
-from this sandbox: a page-side `fetch` of both `tile.openstreetmap.org` and
-`server.arcgisonline.com` throws, and the KMZ — the case that demonstrably drew
-imagery in the operator's trial — also attempts no tiles here. A control that
-fails identically to the subject cannot tell them apart, so no end-to-end claim
-is made from it.
+- OpenStreetMap tiles draw beneath the survey, credited bottom-right
+- the coordinate readout gives **255713.304, 2606033.837**, inside the
+  drawing's own extent (X 254348–257201, Y 2604859–2607328)
+- the terrain readout gives **1009.0 m** — a real ground elevation, where every
+  DXF screenshot in the trial showed `Terrain —`
+- the OSM mine symbols fall inside the surveyed ML Boundary polygons, which is
+  a stronger check than "pixels appeared": the basemap's own idea of where the
+  mine is agrees with the survey's
 
-**To check on a machine with network**, in one sitting: switch the basemap on
-with the KMZ selected and confirm imagery draws, then select the DXF, assign
-EPSG:32645 as the source CRS, and confirm imagery draws for it too and the
-terrain readout gives a height rather than a dash. That is the exact A/B the
-screenshots showed failing.
+**Correcting what this row said before.** It was marked `NEEDS FIELD CHECK` on
+the conclusion that tile servers are unreachable from this sandbox. That was
+wrong, and wrong in an avoidable way: a page-side `fetch` of the tile hosts
+threw, and I took the throw for a routing failure without checking WHY. Tiles
+were reachable from Node the whole time. The page could not load them because
+Chromium does not trust the agent proxy's CA — a TLS-interception detail of this
+environment, fixed by running the check with `ignoreHTTPSErrors`. Nothing in the
+extension or its settings had to change to make the check run.
+
+One earlier reading also needs correcting: a run in which the DXF requested zero
+tiles was the tile CACHE, not a failure. The KMZ had been loaded first and had
+already fetched the same tiles for the same site at the same zoom. Loaded on its
+own, the DXF requests them itself.
 
 ---
 
@@ -450,7 +459,7 @@ read as broken, then the tests that stop any of it coming back.
 | 1 | **F1** — CSV header under a title banner | `findHeaderRow` skips a banner and matches NORTHING/EASTING by name |
 | 2 | **F2** — detection confidence on the same file | scored on data rows, and the header searched over the first six lines: 35% → 85% |
 | 3 | **U1 + U2** — popover listener ownership | each popover owns its own `teardown`, so closing by any route takes its listeners with it |
-| 4 | **F3** — basemap/terrain honour an assumed CRS | `previewCrs` shared by the caption and the tiles |
+| 4 | **F3** — basemap/terrain honour an assumed CRS | `previewCrs` shared by the caption and the tiles; verified in the browser — tiles draw and the terrain readout gives 1009 m on the operator's DXF |
 | 5 | **F4** — clearing the target CRS | a button in the refusal, and a warning on the CRS panel before it |
 | 6 | **F5 / U3** — credit band vs the bottom-left cluster | the overlay lifts clear while a credit is drawn |
 | 7 | **F6/F7/F8** — pin what was already fixed | label-and-magnitude checks on the operator's KMZ and DXF, plus a check that the checks still bite |
