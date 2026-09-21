@@ -2535,6 +2535,15 @@ details.adv > div {
   color: var(--accent);
 }
 
+/* A button whose work is already done — Download, once these bytes have been
+   saved. Quieter than `--on`, because it marks a completed action rather than
+   an armed mode, and it must still read as pressable: downloading the same
+   outputs twice is legitimate, it just should not look like the first time. */
+.btn--done {
+  border-color: var(--ok);
+  color: var(--text-muted);
+}
+
 /* ------------------------------------------- project health (spec §29.2) */
 
 .health__component {

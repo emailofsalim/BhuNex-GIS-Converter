@@ -6,9 +6,13 @@ file against the code as it stands at v1.11.12. Nothing here is a guess: every
 row was reproduced against the current pipeline or read out of the delivered
 bytes.
 
-**Status key** — `OPEN` still broken today · `FIXED` already corrected since the
-trial build · `UX` works but reads as broken · `NOTE` observation, no change
-proposed.
+**Status key** — `OPEN` still broken today · `FIXED` corrected, in code that is
+on this branch · `PINNED` a regression test now holds it · `UX` works but reads
+as broken · `NOTE` observation, no change proposed.
+
+**Every row in this register is now closed.** The statuses below were written
+during the inspection and have been updated as each was executed — nothing here
+says `OPEN`.
 
 ---
 
@@ -23,7 +27,7 @@ proposed.
 
 ---
 
-## F1 — Survey CSV with a title row swaps easting and northing `OPEN` `CRITICAL`
+## F1 — Survey CSV with a title row swaps easting and northing `FIXED` `CRITICAL`
 
 The source file is an ordinary survey deliverable:
 
@@ -65,7 +69,7 @@ The tool is not silent — it raises `CSV_SCHEMA_UNCONFIRMED` and
 
 ---
 
-## F2 — Format detection scores this CSV at 35% `OPEN` `HIGH`
+## F2 — Format detection scores this CSV at 35% `FIXED` `HIGH`
 
 The same title row drops CSV detection below the confidence floor, so the
 conversion throws `FORMAT_UNCONFIRMED` and the user must pick the format by
@@ -76,7 +80,7 @@ title row costs a little confidence instead of most of it.
 
 ---
 
-## F3 — Basemap and terrain ignore an assumed CRS `OPEN` `HIGH`
+## F3 — Basemap and terrain ignore an assumed CRS `FIXED` `HIGH`
 
 Screenshots 1125–1144 (the DXF, **CRS not declared**, source CRS assigned as
 EPSG:32645 in Settings):
@@ -149,7 +153,7 @@ setting and takes the file to `pass with warnings` → KML.
 
 ---
 
-## F5 — The canvas credit runs under the bottom-left controls `OPEN` `MEDIUM`
+## F5 — The canvas credit runs under the bottom-left controls `FIXED` `MEDIUM`
 
 Screenshots 1125, 1128, 1133, 1145: `Imagery © Esri, Maxar, Earthstar
 Geographics and the GIS User Community` is drawn right-aligned across the canvas
@@ -228,22 +232,44 @@ above have gone blind.
 
 ---
 
-## F9 — Same GeoJSON downloaded twelve times `NOTE` `UX`
+## F9 — Same GeoJSON downloaded twelve times `FIXED` `UX`
 
 Folder 1 holds twelve byte-identical copies, `(1)` … `(12)`. Either the Download
 button gave no feedback that it had already delivered, or the user was retrying
 something that looked like it had not worked.
 
-**To do** — confirm Download gives visible confirmation; low cost, and twelve
-retries is a signal.
+**Done.** A browser download is silent by design — no dialog, no toast, just a
+file appearing in a folder nobody is looking at — and the only acknowledgement
+was a line in a log dock that can be folded shut. So the button itself says it:
+
+- after a save it reads **Download again**, with a tooltip giving the time and
+  warning that these are the same bytes, so the browser will number the copy
+- the queue row gains a **`saved`** badge
+- converting again clears both, because those would be different bytes
+
+`downloadedAt` on the queue item carries it, set in `downloadSelected` and
+cleared by every conversion.
 
 ---
 
-## F10 — Settings › Conversion is empty until a format is chosen `NOTE` `UX`
+## F10 — Settings › Conversion is empty until a format is chosen `FIXED` `UX`
 
 Screenshot 1135: the section reads "Choose an output format to see the settings
 that apply to it". Defensible, but a user opening Settings to look for
 conversion options finds an empty panel.
+
+**Done.** Only the LAST section of that panel is genuinely format-specific.
+Output structure, precision, whether Z and attributes travel, and what gets
+checked apply to every conversion this tool runs, are set once and reused, and
+are exactly what someone opens the dialog to change — so they now render whether
+or not a format has been picked. The format-specific section is replaced by one
+line naming what is waiting on a choice (DXF arc tolerance, KML balloon
+templates, LAS scaling), rather than a union of options for a conversion nobody
+asked for.
+
+Verified in headless Chromium: with nothing queued and no format chosen, the
+dialog shows four groups and ten controls; with GeoJSON chosen, the
+"GeoJSON options" section is still there.
 
 ---
 
@@ -274,7 +300,7 @@ Driven in headless Chromium against the built extension, instrumenting
 `addEventListener`/`removeEventListener` on `window` and `document` and
 measuring real geometry. Numbers below are measured, not estimated.
 
-## U1 — Every popover open leaks two window listeners `OPEN` `HIGH`
+## U1 — Every popover open leaks two window listeners `FIXED` `HIGH`
 
 `closeCanvasMenu()` and `closeMapMenu()` remove the element and null the
 handle. They do **not** remove the `pointerdown`/`keydown` capture listeners —
@@ -295,7 +321,7 @@ node.
 **To do** — give `closeMapMenu`/`closeCanvasMenu`/the layers popover ownership
 of their own teardown, so closing by any route removes the listeners.
 
-## U2 — The popover shuts on the first click inside it `OPEN` `HIGH`
+## U2 — The popover shuts on the first click inside it `FIXED` `HIGH`
 
 Direct consequence of U1. Reopen the basemap popover and click its own title:
 
@@ -314,7 +340,7 @@ being opened again and again.
 **To do** — fixed by U1; pin it with a test that opens, clicks inside, and
 asserts the popover is still up.
 
-## U3 — F5 confirmed by measurement `OPEN` `MEDIUM`
+## U3 — F5 confirmed by measurement `FIXED` `MEDIUM`
 
 The bottom-left overlay occupies y 913–940. The drawn credit band is y 912–928.
 **They overlap by 15 px** — the attribution passes behind the basemap button,
@@ -333,13 +359,18 @@ the coordinate readout and the Terrain box.
 
 ---
 
-## Execution order
+## Execution order, and what was done
 
-1. **F1** — CSV header detection and named axis mapping (critical, silent, wrong data)
-2. **F2** — table detection confidence (same root cause, same file)
-3. **U1 + U2** — popover listener ownership (cheap, and makes the UI usable)
-4. **F3** — basemap/terrain honour an assumed CRS
-5. **F4** — one-click "clear the target CRS" in the refusal
-6. **F5 / U3** — credit band vs the bottom-left cluster
-7. **F6/F7/F8** — regression tests pinning what is already fixed
-8. **F9/F10** — UX confirmations
+Worked in this order — worst data defect first, then the ones that make the tool
+read as broken, then the tests that stop any of it coming back.
+
+| # | Item | Done |
+|---|---|---|
+| 1 | **F1** — CSV header under a title banner | `findHeaderRow` skips a banner and matches NORTHING/EASTING by name |
+| 2 | **F2** — detection confidence on the same file | scored on data rows, and the header searched over the first six lines: 35% → 85% |
+| 3 | **U1 + U2** — popover listener ownership | each popover owns its own `teardown`, so closing by any route takes its listeners with it |
+| 4 | **F3** — basemap/terrain honour an assumed CRS | `previewCrs` shared by the caption and the tiles |
+| 5 | **F4** — clearing the target CRS | a button in the refusal, and a warning on the CRS panel before it |
+| 6 | **F5 / U3** — credit band vs the bottom-left cluster | the overlay lifts clear while a credit is drawn |
+| 7 | **F6/F7/F8** — pin what was already fixed | label-and-magnitude checks on the operator's KMZ and DXF, plus a check that the checks still bite |
+| 8 | **F9/F10** — UX confirmations | Download says it already delivered; Settings fills without a format chosen |

@@ -105,6 +105,15 @@ export function renderQueue(): void {
     if (item.tree && item.tree.length > 1) {
       meta.append(badge(`${item.tree.length} files`, 'accent', item.tree.slice(0, 20).join('\n')));
     }
+    if (item.downloadedAt) {
+      meta.append(
+        badge(
+          'saved',
+          'ok',
+          `Saved to your downloads folder at ${new Date(item.downloadedAt).toLocaleTimeString()}. Converting again clears this, because those would be different bytes.`
+        )
+      );
+    }
     if (item.warnings.length > 0) meta.append(badge(`${item.warnings.length} warning${item.warnings.length === 1 ? '' : 's'}`, 'warn'));
     if (item.missingCompanions.length > 0) {
       meta.append(badge(`missing .${item.missingCompanions.join(', .')}`, 'error', 'A required companion file was not supplied.'));

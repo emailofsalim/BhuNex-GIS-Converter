@@ -45,9 +45,17 @@ export function renderSettingsPanel(into: HTMLElement): void {
   panel.replaceChildren();
   const item = store.selected();
   const targetId = item?.targetFormatId ?? state.settings.globalTargetFormatId;
-  if (!targetId) return;
-  const target = getFormat(targetId);
-  if (!target) return;
+  // A MISSING TARGET FORMAT NO LONGER EMPTIES THE WHOLE PANEL.
+  //
+  // This used to return here, so opening Settings before picking an output
+  // format showed one sentence and nothing else — a person who opened the
+  // dialog looking for conversion options found a blank panel and the
+  // instruction to go and do something first. Only the last section below is
+  // actually format-specific. Precision, output structure, what travels with
+  // the data and what gets checked apply to every conversion this tool runs,
+  // and they are set once and reused, so they are exactly what someone is in
+  // here to change.
+  const target = targetId ? getFormat(targetId) : undefined;
 
   const common = element('div', { class: 'section' });
   // NO "Conversion settings" heading here. This renders inside the dialog's
@@ -200,7 +208,20 @@ export function renderSettingsPanel(into: HTMLElement): void {
 
   panel.append(common);
 
-  // Target-specific settings, so the panel only ever shows what applies.
+  // Target-specific settings, so the panel only ever shows what applies. With
+  // no format chosen there is nothing truthful to put here — the options differ
+  // per format and inventing a union of them would be a panel describing a
+  // conversion nobody asked for — so it says which are missing and why.
+  if (!target) {
+    panel.append(
+      element('p', {
+        class: 'small faint',
+        text: 'The settings above apply to every conversion. Choose an output format in the Output panel to add the ones only that format has — DXF arc tolerance, KML balloon templates, LAS scaling, and so on.',
+      })
+    );
+    return;
+  }
+
   const specific = element('details', { class: 'adv' });
   specific.append(element('summary', { text: `${target.name} options` }));
   const body = element('div');
@@ -730,15 +751,10 @@ export function openSettingsDialog(): void {
   // this dialog looking for.
   body.append(element('h3', { class: 'section__title', text: 'Conversion' }));
   const conversion = element('div', { class: 'section' });
+  // No empty-state branch here any more: the panel fills whether or not a
+  // format has been chosen, and says for itself which settings are waiting on
+  // one. See `renderSettingsPanel`.
   renderSettingsPanel(conversion);
-  if (conversion.childNodes.length === 0) {
-    conversion.append(
-      element('p', {
-        class: 'small faint',
-        text: 'Choose an output format to see the settings that apply to it — precision, elevations, attributes, QA and the options specific to that format.',
-      })
-    );
-  }
   body.append(conversion);
 
   body.append(element('h3', { class: 'section__title', text: 'Privacy' }));

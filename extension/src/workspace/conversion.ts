@@ -450,6 +450,8 @@ export async function convertItem(id: string, withQa: boolean): Promise<void> {
       jobId: undefined,
       phase: undefined,
       outputs: result.outputs,
+      // These are new bytes, so any previous delivery no longer describes them.
+      downloadedAt: undefined,
       tree: result.tree,
       prediction: result.prediction,
       diff: result.diff,
@@ -599,11 +601,30 @@ export function downloadBytes(bytes: Uint8Array, name: string, mimeType: string)
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+/**
+ * Saves the selected file's outputs, and records that it happened.
+ *
+ * A browser download is silent by design — no dialog, no toast, just a file
+ * appearing in a folder the user is not looking at. The only acknowledgement
+ * this had was a line in the log dock, which can be folded shut, and the trial
+ * ended with twelve byte-identical copies of one GeoJSON: the operator had no
+ * way to tell a click had worked, so they clicked again. Eleven times.
+ *
+ * `downloadedAt` is what the button and the queue row read to say so.
+ */
 export function downloadSelected(): void {
   const item = store.selected();
   if (!item?.outputs?.length) return;
   for (const output of item.outputs) downloadBytes(output.bytes, output.name, output.mimeType);
-  store.log('ok', `Downloaded ${item.outputs.length} file(s) for ${item.fileName}.`);
+  const again = item.downloadedAt !== undefined;
+  store.updateItem(item.id, { downloadedAt: Date.now() });
+  store.log(
+    'ok',
+    again
+      ? `Saved ${item.outputs.length} file(s) for ${item.fileName} again — these are the same bytes as the previous download, so your browser will number the copy.`
+      : `Saved ${item.outputs.length} file(s) for ${item.fileName} to your downloads folder.`
+  );
+  host.render();
 }
 
 export async function downloadBatchZip(): Promise<void> {

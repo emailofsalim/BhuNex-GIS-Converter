@@ -93,7 +93,18 @@ function render(): void {
   const canConvert = Boolean(selected && (selected.status === 'ready' || selected.status === 'done') && (selected.targetFormatId ?? state.settings.globalTargetFormatId));
   ($('convertBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;
   ($('convertQaBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;
-  ($('downloadBtn') as HTMLButtonElement).disabled = !selected?.outputs?.length;
+  // THE BUTTON SAYS WHETHER IT HAS ALREADY DELIVERED. A browser download is
+  // silent — no dialog, no toast, just a file appearing in a folder nobody is
+  // looking at — and the trial ended with twelve byte-identical copies of one
+  // GeoJSON because there was nothing on screen to say the first click worked.
+  const download = $('downloadBtn') as HTMLButtonElement;
+  download.disabled = !selected?.outputs?.length;
+  const delivered = selected?.downloadedAt;
+  download.textContent = delivered ? 'Download again' : 'Download';
+  download.title = delivered
+    ? `Already saved at ${new Date(delivered).toLocaleTimeString()}. These are the same bytes, so your browser will number the new copy.`
+    : 'Save this file’s outputs to your downloads folder.';
+  download.classList.toggle('btn--done', Boolean(delivered));
   ($('batchZipBtn') as HTMLButtonElement).disabled = !state.items.some((item) => item.status === 'done');
 
   // Pause is only meaningful while a batch is running, and Retry only once
