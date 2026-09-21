@@ -421,6 +421,9 @@ export async function convertItem(id: string, withQa: boolean): Promise<void> {
       // merged — the style command names the layer as it will be by then.
       edits: [...(item.edits ?? []), ...layerStyleCommands(item)],
       protectedLayers: protectedFor(item),
+      // The user's own column mapping, when they set one. Per file, because
+      // two surveys in a batch can name their columns differently.
+      table: item.columnMapping ? { mapping: item.columnMapping } : undefined,
     };
     const result = await runConversion(
       {

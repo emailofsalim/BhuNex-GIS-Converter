@@ -8,7 +8,7 @@
  */
 
 import type { DetectionResult } from '../core/detect';
-import type { CrsRef, Warning } from '../core/cir';
+import type { ColumnMapping, CrsRef, Warning } from '../core/cir';
 import type { DatumShift } from '../crs/datum';
 import type { FidelityReport } from '../qa/fidelity';
 import type { NamingPattern } from '../core/naming';
@@ -45,6 +45,15 @@ export interface QueueItem {
   detection?: DetectionResult;
   /** Set when the user overrides detection. */
   forcedFormatId?: string;
+  /**
+   * The column mapping the user set by hand, when they have set one.
+   *
+   * Per file, not global: two surveys in one batch can name their columns
+   * differently, and a mapping that followed the queue would silently apply one
+   * file's answer to another's columns. Absent means "use detection", which is
+   * right for almost every file — this exists for the ones where it is not.
+   */
+  columnMapping?: ColumnMapping;
   dataset?: any;
   /**
    * One-pass summary of the dataset, computed where the full CIR lives.
