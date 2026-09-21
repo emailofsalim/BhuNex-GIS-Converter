@@ -75,8 +75,24 @@ describe('the remembered fold state', () => {
     expect(isCollapsed('Control points')).toBe(false);
   });
 
-  it('reports a section nobody has touched as open', () => {
-    expect(isCollapsed('a heading that has never been folded')).toBe(false);
+  it('reports a section nobody has touched as FOLDED', () => {
+    // The default was inverted deliberately. The workspace grew to fourteen
+    // panels and forty-odd sections, and opening them all by default met a new
+    // file with a wall of controls and the drawing squeezed between them. A
+    // section nobody has opened is one nobody has asked to see.
+    expect(isCollapsed('a heading that has never been folded')).toBe(true);
+  });
+
+  it('keeps the two frame panes open until the user says otherwise', () => {
+    // Files and the format list are not content, they are the frame: folded on
+    // a first run, the workspace opens as an empty grey column with no way to
+    // tell it is working. They are seeded open, and a user who folds one has
+    // that remembered like any other.
+    expect(isCollapsed('files')).toBe(false);
+    expect(isCollapsed('output formats')).toBe(false);
+    setCollapsed('files', true);
+    expect(isCollapsed('files')).toBe(true);
+    setCollapsed('files', false);
   });
 
   it('works with no localStorage at all', () => {

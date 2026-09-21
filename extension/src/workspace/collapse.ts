@@ -24,31 +24,79 @@
  * the user folded stays folded across a re-render, a file change and a reload.
  */
 
-const STORAGE_KEY = 'bhunex.collapsed';
+/**
+ * A NEW KEY, because the meaning of what is stored has been inverted.
+ *
+ * The old `bhunex.collapsed` listed the sections the user had FOLDED, on the
+ * understanding that everything else was open. This now stores the opposite —
+ * the sections they have OPENED — so reading the old list under the new rule
+ * would make the few sections someone had deliberately folded the only ones
+ * still showing, and hide everything they actually used. A different key lets
+ * the old value sit there harmlessly.
+ */
+const STORAGE_KEY = 'bhunex.opened';
 
 /**
- * Which sections are folded, by their heading text.
+ * Which sections the user has OPENED, by their heading text.
+ *
+ * FOLDED IS THE DEFAULT. Everything starts shut — layers, settings, every
+ * `.section` in every panel — and opens only where the user has asked for it.
+ * The workspace grew to fourteen panels and forty-odd sections, and defaulting
+ * them all open meant the first thing a new file showed was a wall of controls
+ * with the drawing squeezed between them. A section the user has never touched
+ * is a section they have not asked to see.
  *
  * Keyed by the TITLE rather than by position, because a panel's sections are
- * rebuilt in whatever order the data needs and an index would fold the wrong
+ * rebuilt in whatever order the data needs and an index would open the wrong
  * one. Titles are short, stable and unique within a panel.
  */
-const closed = new Set<string>(load());
+/**
+ * The two that start open, because without them the workspace looks broken.
+ *
+ * Everything else — every `.section` in every panel, the layer rail, the
+ * settings groups — starts folded. These do not, and the distinction is not
+ * arbitrary: they are not content, they are the frame. The file queue is how
+ * you see what is loaded; the format list is the choice every conversion turns
+ * on; and the dock's section box is what a ribbon tab fills, so folding it by
+ * default would mean clicking "Data › CRS" and being shown a closed bar. Asking
+ * for a section IS asking to see it. Its contents still start folded, which is
+ * where the decluttering actually belongs.
+ *
+ * A user who folds either still gets their preference remembered — this decides
+ * only what happens before anyone has expressed one.
+ */
+const DEFAULT_OPEN = ['files', 'output formats', 'section'];
 
-function load(): string[] {
+/**
+ * Seeded ONLY on a first run, never merged on every load.
+ *
+ * Merging the defaults in each time would mean folding Files sprang it open
+ * again on the next reload: the saved list would lack it, the merge would put
+ * it back, and the user's choice would be silently overruled by the default
+ * that was meant to apply before they had one. So a MISSING stored value seeds
+ * the defaults and writes them; a stored value, even an empty list, is taken
+ * exactly as it is.
+ */
+const stored = load();
+const opened = new Set<string>(stored ?? DEFAULT_OPEN);
+if (stored === null) save();
+
+/** The stored list, or null when nothing has ever been stored. */
+function load(): string[] | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as string[]) : [];
+    return raw ? (JSON.parse(raw) as string[]) : null;
   } catch {
     // A private window, or storage the browser has blocked. Folding is a
-    // convenience: losing it must never stop the workspace booting.
-    return [];
+    // convenience: losing it must never stop the workspace booting. Treated as
+    // a first run, so the defaults apply and nothing throws.
+    return null;
   }
 }
 
 function save(): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...closed]));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...opened]));
   } catch {
     /* As above: not worth a broken workspace. */
   }
@@ -83,16 +131,20 @@ export function elementFrom(target: unknown): Element | null {
   return null;
 }
 
-/** True when this section is folded. Exported so a test can read the state. */
+/**
+ * True when this section is folded — which, never having been opened, it is.
+ *
+ * Exported so a test can read the state without a DOM.
+ */
 export function isCollapsed(title: string): boolean {
-  return closed.has(title.trim().toLowerCase());
+  return !opened.has(title.trim().toLowerCase());
 }
 
 /** Folds or unfolds one section, and remembers which. */
 export function setCollapsed(title: string, collapse: boolean): void {
   const key = title.trim().toLowerCase();
-  if (collapse) closed.add(key);
-  else closed.delete(key);
+  if (collapse) opened.delete(key);
+  else opened.add(key);
   save();
 }
 
@@ -100,7 +152,7 @@ export function setCollapsed(title: string, collapse: boolean): void {
 function apply(section: Element): void {
   const title = section.querySelector(':scope > .section__title');
   if (!title) return;
-  const folded = closed.has(keyOf(title));
+  const folded = !opened.has(keyOf(title));
   section.classList.toggle('section--closed', folded);
   title.setAttribute('aria-expanded', String(!folded));
   // The heading IS the control, so it has to say so to a keyboard and to a
