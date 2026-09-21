@@ -348,6 +348,14 @@ function renderInspector(): void {
   const rail = $('layerRail');
   rail.replaceChildren();
 
+  // THE FOLDED BAR STAYS INFORMATIVE. A section box collapsed to a chevron and
+  // the word "Details" tells the user nothing about where they are; named, it
+  // still answers "which section is open" while taking one line instead of half
+  // the dock.
+  const owner = PANEL_TABS.find((panel) => panel.sections.some((section) => section.tab === state.inspectorTab));
+  const section = owner?.sections.find((entry) => entry.tab === state.inspectorTab);
+  $('inspectorTitle').textContent = owner && section ? `${owner.label} › ${section.label}` : 'Details';
+
   if (!item) {
     body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Select a queued file to inspect it.' }));
     return;
@@ -799,6 +807,11 @@ function wire(): void {
   installCollapse(document);
   makeCollapsible($('queueRail').querySelector('.rail__head'), $('queue'), 'files');
   makeCollapsible($('rightDock').querySelector('.dock__head'), $('rightDock').querySelector('.dock__formats'), 'output formats');
+  // The section box folds too. Without this the format list was the only thing
+  // that could give way, so opening a long section on the ribbon — CRS,
+  // Georeference — clipped the format cards mid-row with no way to reclaim the
+  // space short of navigating away from the section being used.
+  makeCollapsible($('inspectorHead'), $('inspectorBody'), 'section');
   $('railToggle').addEventListener('click', () => {
     const rail = $('queueRail');
     rail.classList.toggle('rail--closed');

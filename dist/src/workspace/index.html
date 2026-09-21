@@ -218,6 +218,24 @@
                of thing the ribbon's tabs said, one panel away. The dock shows a
                section's BODY now; which section is a ribbon question.
           -->
+          <!--
+               THE SECTION BOX FOLDS, and says what it is holding.
+
+               Picking Data, Export or Results on the ribbon fills this box, and
+               it shares the dock's height with the format list above it. A long
+               section — Georeference and the CRS panel are the worst — squeezed
+               that list until formats were clipped mid-row, and there was no way
+               to get the space back without switching ribbon tabs away from the
+               thing you were working on.
+
+               The heading carries the section's own name so the folded bar is
+               still informative: "Data › CRS" collapsed tells you where you are,
+               where a bare chevron would not.
+          -->
+          <div class="dock__split" id="inspectorHead">
+            <span class="pane__title" id="inspectorTitle">Details</span>
+            <div class="topbar__spacer"></div>
+          </div>
           <div class="dock__body" id="inspectorBody" role="tabpanel"></div>
           <div class="dock__body hidden" id="bottomBody" role="tabpanel"></div>
 

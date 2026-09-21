@@ -1739,6 +1739,19 @@ textarea {
   display: none !important;
 }
 
+/* The section box's own header, so it can be folded like everything else.
+   Same shape as `.rail__split`, which does this job on the left rail. */
+.dock__split {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex: 0 0 auto;
+}
+
 .pane__fold {
   margin-left: 4px;
 }
