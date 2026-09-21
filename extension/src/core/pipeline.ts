@@ -78,7 +78,7 @@ import { rasterizePolygons, vectorizeRaster, type VectorizeOptions } from '../en
 import { DEFAULT_GEOTIFF_OPTIONS, writeGeoTiff, type WriteGeoTiffOptions } from '../engines/raster/geotiff-write';
 import { buildWorldFile, readGcpPoints, worldFileExtensionFor, writeGcpPoints } from '../engines/raster/worldfile';
 import { decodeText, encodeText, sourceInfo } from '../engines/shared';
-import { DEFAULT_CSV_OPTIONS, readCsvTable, tableToPoints, writeCsv, type WriteCsvOptions } from '../engines/vector/csv';
+import { DEFAULT_CSV_OPTIONS, readCsvTable, tableToPoints, writeCsv, type ReadCsvOptions, type WriteCsvOptions } from '../engines/vector/csv';
 import { readGeoJson, writeGeoJson } from '../engines/vector/geojson';
 import { readGml, writeGml } from '../engines/vector/gml';
 import { readFlatGeobuf, writeFlatGeobuf } from '../engines/vector/flatgeobuf';
@@ -150,6 +150,17 @@ export interface ConversionSettings {
   kml?: Partial<WriteKmlOptions>;
   gpx?: Partial<WriteGpxOptions>;
   csv?: Partial<WriteCsvOptions>;
+  /**
+   * How a delimited table is READ: which column carries which role.
+   *
+   * Separate from `csv` above, which is about writing one. Detection gets this
+   * right for an ordinary survey export, but "ordinary" is doing a lot of work
+   * in that sentence — a file with `X`/`Y` columns that are actually longitude
+   * and latitude, or with two candidate easting columns, needs the surveyor to
+   * say which is which. Supplying a mapping here overrides detection entirely
+   * and is recorded in the output as user-defined rather than detected.
+   */
+  table?: ReadCsvOptions;
   shapefile?: Partial<WriteShapefileOptions>;
   las?: Partial<WriteLasOptions>;
   textCloud?: Partial<WriteTextCloudOptions>;
@@ -466,7 +477,10 @@ function dispatchReader(
         arcTolerance: settings.arcTolerance,
       } satisfies ReadDxfOptions);
     case 'csv':
-      return readCsvTable(decodeText(input.bytes), info);
+      // `settings.table` carries the user's own column mapping when they have
+      // set one. Passing nothing here was why the mapping panel could only ever
+      // report what detection decided: the override had no route to the reader.
+      return readCsvTable(decodeText(input.bytes), info, settings.table ?? {});
     case 'xlsx':
       return readXlsx(input.bytes, info);
     case 'las':

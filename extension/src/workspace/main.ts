@@ -30,7 +30,7 @@ import {
   toggleBatchPause,
 } from './conversion';
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
-import { installCollapse, makeCollapsible } from './collapse';
+import { installCollapse, isCollapsed, makeCollapsible, setCollapsed } from './collapse';
 import { host, installHost } from './host';
 import { remedyFor } from './remedies';
 import { attributesTab } from './panels/attributes';
@@ -347,6 +347,22 @@ function renderInspector(): void {
   // recolour them.
   const rail = $('layerRail');
   rail.replaceChildren();
+
+  // THE FOLDED BAR STAYS INFORMATIVE. A section box collapsed to a chevron and
+  // the word "Details" tells the user nothing about where they are; named, it
+  // still answers "which section is open" while taking one line instead of half
+  // the dock.
+  //
+  // It has to read the tab of whichever BODY is showing. Results renders into
+  // `bottomBody` and tracks `bottomTab`; Data and Export render into
+  // `inspectorBody` and track `inspectorTab`. Naming the inspector's tab
+  // unconditionally meant that opening Results › QA left the bar reading
+  // "Export › What will be lost" — a heading describing a body the user was no
+  // longer looking at, which is worse than the bare "Details" it replaced.
+  const active = state.inspectorGroup === 'results' ? state.bottomTab : state.inspectorTab;
+  const owner = PANEL_TABS.find((panel) => panel.sections.some((section) => section.tab === active));
+  const section = owner?.sections.find((entry) => entry.tab === active);
+  $('inspectorTitle').textContent = owner && section ? `${owner.label} › ${section.label}` : 'Details';
 
   if (!item) {
     body.append(element('p', { class: 'muted', style: 'padding:16px', text: 'Select a queued file to inspect it.' }));
@@ -779,11 +795,30 @@ function wire(): void {
   ui.redo = () => redoEdit();
   ui.openPanel = (group, tab) => showInspectorGroup(group, tab);
 
-  // Collapse toggles. The class does the work; the arrow is only a label.
-  $('layersToggle').addEventListener('click', () => {
-    const closed = $('queueRail').classList.toggle('rail--nolayers');
+  // THE LAYER LIST FOLDS THROUGH THE SAME STORE AS EVERYTHING ELSE.
+  //
+  // It used to toggle `rail--nolayers` straight onto the element and stop
+  // there, which made it the one fold in the workspace that was NOT
+  // remembered: folding it away lasted until the next render that reloaded the
+  // page, and a file with sixty layers unfolded itself again on every reload.
+  // It also could not honour the folded-by-default rule, because nothing knew
+  // it had a state to have a default for.
+  //
+  // It keeps its own button rather than taking `makeCollapsible`'s arrow —
+  // that button is in the markup, beside the layer search, where the fold for
+  // a list belongs — but the state behind it is now the shared one.
+  const paintLayers = (): void => {
+    const closed = isCollapsed('layers');
+    $('queueRail').classList.toggle('rail--nolayers', closed);
     $('layersToggle').textContent = closed ? '▸' : '▾';
+    $('layersToggle').title = closed ? 'Show the layer list' : 'Hide the layer list';
+    $('layersToggle').setAttribute('aria-expanded', String(!closed));
+  };
+  $('layersToggle').addEventListener('click', () => {
+    setCollapsed('layers', !isCollapsed('layers'));
+    paintLayers();
   });
+  paintLayers();
 
   // EVERYTHING FOLDS, by one mechanism and one remembered state.
   //
@@ -799,6 +834,16 @@ function wire(): void {
   installCollapse(document);
   makeCollapsible($('queueRail').querySelector('.rail__head'), $('queue'), 'files');
   makeCollapsible($('rightDock').querySelector('.dock__head'), $('rightDock').querySelector('.dock__formats'), 'output formats');
+  // The section box folds too. Without this the format list was the only thing
+  // that could give way, so opening a long section on the ribbon — CRS,
+  // Georeference — clipped the format cards mid-row with no way to reclaim the
+  // space short of navigating away from the section being used.
+  //
+  // It folds `sectionBox`, the wrapper, and NOT `inspectorBody`: Results
+  // renders into `bottomBody` instead, and folding the inspector while Results
+  // was showing hid a body that was already hidden and left the visible one
+  // untouched. The chevron did nothing on one of the three tabs it exists for.
+  makeCollapsible($('inspectorHead'), $('sectionBox'), 'section');
   $('railToggle').addEventListener('click', () => {
     const rail = $('queueRail');
     rail.classList.toggle('rail--closed');

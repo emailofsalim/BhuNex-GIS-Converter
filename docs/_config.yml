@@ -4,8 +4,11 @@
 # a listing can be published, and a link into the repository's file browser is
 # accepted but reads as an afterthought next to a real page.
 #
-# Enable at Settings -> Pages -> Deploy from a branch -> main -> /docs.
-# docs/PRIVACY.md is then served at /BhuNex-GIS-Converter/PRIVACY.html.
+# Pages is ENABLED and deploys from the repository ROOT, not from /docs, so the
+# site index is the README and these files are served one level down:
+#   docs/PRIVACY.md -> /BhuNex-GIS-Converter/docs/PRIVACY.html   (verified 200)
+# Switching the source to /docs would drop the /docs/ segment and break the URL
+# recorded in STORE_LISTING.md, so change both together or neither.
 title: BhuNex GIS Converter
 description: Offline GIS, CAD, survey, LiDAR and mining data conversion.
 theme: jekyll-theme-minimal

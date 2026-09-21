@@ -5,9 +5,10 @@ import { FORMATS } from '../../core/registry';
 import { validateShift, type DatumShift } from '../../crs/datum';
 import { crsFromEpsg, QUICK_ZONES, searchEpsg, utmCrs } from '../../crs/epsg';
 import { crsLabel, isWgs84Family } from '../../crs/transform';
+import type { ColumnMapping, ColumnRole } from '../../core/cir';
 import { type QueueItem, store } from '../../state/store';
 import { inspectItem } from '../conversion';
-import { element, formatBytes, keyValues, messageBlock, numberField, textField } from '../dom';
+import { element, formatBytes, ghostButton, keyValues, messageBlock, numberField, textField } from '../dom';
 import { host } from '../host';
 import { clearTargetCrsRemedy } from '../remedies';
 import { assignSourceCrs } from './history';
@@ -381,25 +382,81 @@ export function crsSelect(current: number | null, onChange: (epsg: number | null
 }
 
 /** Column mapping with a preview table, as instruction §E requires. */
+/**
+ * The roles a column can carry, in the order a surveyor thinks about them.
+ *
+ * `ignore` is not offered as a role to assign: leaving a column unassigned is
+ * how a column is ignored, and two ways to say the same thing in one panel is
+ * one way too many.
+ */
+const MAPPABLE_ROLES: { role: Exclude<ColumnRole, 'ignore'>; label: string; hint: string }[] = [
+  { role: 'easting', label: 'Easting / X', hint: 'The eastward coordinate on a projected grid, in the grid’s own linear units.' },
+  { role: 'northing', label: 'Northing / Y', hint: 'The northward coordinate. On UTM this is the seven-digit one.' },
+  { role: 'longitude', label: 'Longitude', hint: 'Degrees east of Greenwich, between −180 and 180.' },
+  { role: 'latitude', label: 'Latitude', hint: 'Degrees north of the equator, between −90 and 90.' },
+  { role: 'elevation', label: 'Elevation / Z', hint: 'Height, in the same linear unit as the grid unless the file says otherwise.' },
+  { role: 'id', label: 'Point ID', hint: 'The station or pillar number. Carried through as an attribute.' },
+  { role: 'code', label: 'Code', hint: 'Feature code — BP, TP, CH and so on. Carried through as an attribute.' },
+  { role: 'description', label: 'Description', hint: 'Free text. Carried through as an attribute.' },
+];
+
+/** The axis order implied by which pair of roles the user has filled in. */
+function orderFor(roles: ColumnMapping['roles']): ColumnMapping['coordinateOrder'] {
+  if (roles.longitude !== undefined || roles.latitude !== undefined) {
+    return (roles.longitude ?? Infinity) < (roles.latitude ?? Infinity) ? 'lon-lat' : 'lat-lon';
+  }
+  return (roles.easting ?? Infinity) < (roles.northing ?? Infinity) ? 'easting-northing' : 'northing-easting';
+}
+
+/**
+ * Column mapping: what was detected, and how to disagree with it.
+ *
+ * WHY THIS IS EDITABLE NOW
+ *
+ * It used to report the detected mapping and stop. That is fine while detection
+ * is right, and detection is right for an ordinary survey export — but the
+ * trial produced the case that proves the panel needed more: a file whose real
+ * header sat under a title banner mapped its columns BY POSITION, put the
+ * northing in X, and wrote 188 pillars 2,600 km off. Detection is better now
+ * and that exact file is pinned by a test, but "the detector improved" is not
+ * the same as "the surveyor can correct it". A reader that cannot be overruled
+ * is a reader you have to trust blindly.
+ *
+ * WHY A DROPDOWN PER ROLE, NOT PER COLUMN
+ *
+ * A table can have forty columns and six roles. Asking "what is this column?"
+ * forty times is forty decisions, most of them "nothing". Asking "which column
+ * is the easting?" is six decisions, each of which the user already knows the
+ * answer to — and it makes the important constraint expressible: a role can be
+ * filled at most once, which a per-column list cannot enforce without
+ * validation after the fact.
+ */
 export function columnMappingPanel(item: QueueItem): HTMLElement {
   const table = item.dataset.table;
   const wrap = element('div');
+  const active: ColumnMapping | null = item.columnMapping ?? table.mapping ?? null;
+  const userSet = Boolean(item.columnMapping);
 
-  if (table.mapping) {
-    const roles = Object.entries(table.mapping.roles)
+  if (active) {
+    const roles = Object.entries(active.roles)
+      .filter(([, index]) => index !== undefined)
       .map(([role, index]) => `${role} → column ${Number(index) + 1} (${table.columns[Number(index)]?.name ?? '?'})`)
       .join('\n');
     wrap.append(
       messageBlock(
-        item.status === 'blocked' ? 'warn' : 'info',
-        `Schema: ${table.detectedSchema ?? 'user-defined'} · coordinate order ${table.mapping.coordinateOrder}`,
+        userSet ? 'info' : item.status === 'blocked' ? 'warn' : 'info',
+        userSet
+          ? `Mapping set by you · coordinate order ${active.coordinateOrder}`
+          : `Schema: ${table.detectedSchema ?? 'user-defined'} · coordinate order ${active.coordinateOrder}`,
         roles,
-        item.dataset.metadata?.schemaRationale
+        userSet ? 'Detection is overridden for this file. Reset below to go back to it.' : item.dataset.metadata?.schemaRationale
       )
     );
   } else {
     wrap.append(messageBlock('error', 'No coordinate columns identified.', 'Geometry cannot be built until easting/northing or longitude/latitude are named.', 'Pick the columns below.'));
   }
+
+  wrap.append(mappingEditor(item, table, active));
 
   const preview = element('table', { class: 'table' });
   preview.append(
@@ -422,4 +479,137 @@ export function columnMappingPanel(item: QueueItem): HTMLElement {
   wrap.append(element('div', { class: 'scroll-x' }, [preview]));
   wrap.append(element('p', { class: 'small faint', style: 'padding:0 12px 12px', text: `${table.rowCount.toLocaleString()} rows total; first ${Math.min(12, table.previewRows.length)} shown.` }));
   return wrap;
+}
+
+/**
+ * One dropdown per role, plus the sanity check that makes the panel worth
+ * having.
+ *
+ * The check is the point. A mapping the user sets is applied without argument —
+ * it is their data and their grid — but a pair of columns whose values cannot
+ * be what the role says they are is worth saying out loud BEFORE the conversion
+ * runs, because that is the mistake that produces a file which opens cleanly in
+ * the wrong hemisphere.
+ */
+function mappingEditor(item: QueueItem, table: any, active: ColumnMapping | null): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Column mapping' }));
+  section.append(
+    element('p', {
+      class: 'small faint',
+      text: 'Detected automatically. Change any row to overrule it for this file — other files in the queue keep their own mapping.',
+    })
+  );
+
+  const roles: ColumnMapping['roles'] = { ...(active?.roles ?? {}) };
+
+  const commit = (): void => {
+    const next: ColumnMapping = { roles, coordinateOrder: orderFor(roles), schemaId: 'user' };
+    store.updateItem(item.id, { columnMapping: next });
+    store.log('info', `${item.fileName}: column mapping set by hand (${next.coordinateOrder}).`);
+    void inspectItem(item.id);
+  };
+
+  for (const { role, label, hint } of MAPPABLE_ROLES) {
+    const field = element('div', { class: 'field' });
+    const caption = element('label', { class: 'field__label', text: label });
+    caption.append(element('span', { class: 'hint', text: '?', title: hint }));
+    field.append(caption);
+
+    const select = element('select', { class: 'select' }) as HTMLSelectElement;
+    select.append(element('option', { value: '', text: '— not in this file —' }));
+    table.columns.forEach((column: any, index: number) => {
+      const sample = table.previewRows[0]?.[index];
+      const shown = sample === null || sample === undefined ? '' : ` · e.g. ${String(sample).slice(0, 14)}`;
+      select.append(element('option', { value: String(index), text: `${index + 1}. ${column.name}${shown}` }));
+    });
+    select.value = roles[role] === undefined ? '' : String(roles[role]);
+    select.addEventListener('change', () => {
+      const chosen = select.value === '' ? undefined : Number(select.value);
+      // A column can only carry one role. Claiming one that another role holds
+      // takes it, rather than leaving the table describing itself two ways.
+      if (chosen !== undefined) {
+        for (const key of Object.keys(roles) as (keyof typeof roles)[]) {
+          if (roles[key] === chosen) delete roles[key];
+        }
+        roles[role] = chosen;
+      } else {
+        delete roles[role];
+      }
+      commit();
+    });
+    field.append(select);
+    section.append(field);
+  }
+
+  const complaint = magnitudeComplaint(table, roles);
+  if (complaint) section.append(messageBlock('warn', complaint.what, complaint.why, complaint.action));
+
+  if (item.columnMapping) {
+    section.append(
+      ghostButton('Reset to the detected mapping', () => {
+        store.updateItem(item.id, { columnMapping: undefined });
+        store.log('info', `${item.fileName}: column mapping reset to detection.`);
+        void inspectItem(item.id);
+      })
+    );
+  }
+  return section;
+}
+
+/**
+ * Reads the numbers under the chosen columns and says when they contradict the
+ * role they have been given.
+ *
+ * Deliberately a WARNING and not a refusal. The user may know something the
+ * numbers do not show — a local grid with small coordinates, a file in feet.
+ * But "every value in your longitude column is above 180" is the single check
+ * that would have caught the swap in the trial, and it costs one pass over
+ * twelve preview rows.
+ */
+function magnitudeComplaint(
+  table: any,
+  roles: ColumnMapping['roles']
+): { what: string; why: string; action: string } | null {
+  const column = (index: number | undefined): number[] => {
+    if (index === undefined) return [];
+    return table.previewRows
+      .map((row: any[]) => Number(row[index]))
+      .filter((value: number) => Number.isFinite(value));
+  };
+
+  const lon = column(roles.longitude);
+  const lat = column(roles.latitude);
+  if (lon.length && lon.some((v) => Math.abs(v) > 180)) {
+    return {
+      what: 'The longitude column holds values outside ±180°.',
+      why: `Largest seen: ${Math.max(...lon.map(Math.abs)).toLocaleString()}. Degrees cannot exceed 180, so this column is probably a projected easting.`,
+      action: 'Map it to Easting / X instead, and set the grid on the CRS panel.',
+    };
+  }
+  if (lat.length && lat.some((v) => Math.abs(v) > 90)) {
+    return {
+      what: 'The latitude column holds values outside ±90°.',
+      why: `Largest seen: ${Math.max(...lat.map(Math.abs)).toLocaleString()}. This column is probably a projected northing.`,
+      action: 'Map it to Northing / Y instead, and set the grid on the CRS panel.',
+    };
+  }
+
+  // The trial's own failure, stated as a rule: on a UTM grid the northing is
+  // the larger number by roughly a factor of ten. Swapped, it still converts,
+  // and the result is a file nobody can tell is wrong by looking at it.
+  const east = column(roles.easting);
+  const north = column(roles.northing);
+  if (east.length && north.length) {
+    const e = Math.abs(east[0]);
+    const n = Math.abs(north[0]);
+    if (e > 1_000_000 && n < 1_000_000 && e > n) {
+      return {
+        what: 'Easting and northing may be the wrong way round.',
+        why: `The first row reads easting ${e.toLocaleString()}, northing ${n.toLocaleString()}. On a UTM grid an easting has six digits and a northing seven, so these look swapped.`,
+        action: 'Check the two rows above against the file. If they are swapped, exchange the two columns here.',
+      };
+    }
+  }
+  return null;
 }

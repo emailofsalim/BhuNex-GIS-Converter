@@ -26,6 +26,7 @@
  * instead, where the exception was found in the first place.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { elementFrom, isCollapsed, setCollapsed } from '../src/workspace/collapse';
 
@@ -75,8 +76,62 @@ describe('the remembered fold state', () => {
     expect(isCollapsed('Control points')).toBe(false);
   });
 
-  it('reports a section nobody has touched as open', () => {
-    expect(isCollapsed('a heading that has never been folded')).toBe(false);
+  it('reports a section nobody has touched as FOLDED', () => {
+    // The default was inverted deliberately. The workspace grew to fourteen
+    // panels and forty-odd sections, and opening them all by default met a new
+    // file with a wall of controls and the drawing squeezed between them. A
+    // section nobody has opened is one nobody has asked to see.
+    expect(isCollapsed('a heading that has never been folded')).toBe(true);
+  });
+
+  it('keeps the frame panes open until the user says otherwise', () => {
+    // Files and the format list are not content, they are the frame: folded on
+    // a first run, the workspace opens as an empty grey column with no way to
+    // tell it is working. They are seeded open, and a user who folds one has
+    // that remembered like any other.
+    expect(isCollapsed('files')).toBe(false);
+    expect(isCollapsed('output formats')).toBe(false);
+    expect(isCollapsed('section')).toBe(false);
+    setCollapsed('files', true);
+    expect(isCollapsed('files')).toBe(true);
+    setCollapsed('files', false);
+  });
+
+  it('keeps the RIBBON open, which inverting the default had quietly stopped', () => {
+    // Measured, not assumed: with the ribbon off the seed list a first run
+    // opened at a 32-pixel strip — eight tab labels, a chevron, and not one
+    // tool. Fit, undo, the draw and measure families and the whole Convert
+    // flow were all behind a fold nobody had asked for.
+    //
+    // It lands here because the ribbon folds through THIS store rather than a
+    // private boolean, so that it cannot forget its state on reload. That
+    // coupling is worth keeping and is exactly what made the default apply to
+    // it by surprise.
+    expect(isCollapsed('ribbon')).toBe(false);
+  });
+
+  it('still uses the key the ribbon actually folds under', () => {
+    // The test above is only as good as the string matching. `RIBBON_FOLD` is
+    // private to the toolbar and cannot be imported here — that module needs a
+    // DOM — so the constant is read from the source instead. Rename it without
+    // updating the seed list and the ribbon silently starts folded again,
+    // which is the precise failure this pair exists to prevent.
+    const source = readFileSync(new URL('../src/workspace/panels/toolbar.ts', import.meta.url), 'utf8');
+    const declared = /const RIBBON_FOLD = '([^']+)'/.exec(source);
+    expect(declared, 'RIBBON_FOLD has been renamed or restyled').not.toBeNull();
+    expect(isCollapsed(declared![1])).toBe(false);
+  });
+
+  it('folds the layer list by default, and remembers it once opened', () => {
+    // The layer list was the one fold in the workspace that went nowhere near
+    // this store: it toggled a class straight onto the rail, so a reload
+    // unfolded it again and the folded-by-default rule could not reach it at
+    // all. Both halves are asserted — the default, and that a choice sticks.
+    expect(isCollapsed('layers')).toBe(true);
+    setCollapsed('layers', false);
+    expect(isCollapsed('layers')).toBe(false);
+    setCollapsed('layers', true);
+    expect(isCollapsed('layers')).toBe(true);
   });
 
   it('works with no localStorage at all', () => {

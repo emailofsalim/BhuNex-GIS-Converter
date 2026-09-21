@@ -29,6 +29,7 @@ import { nextId, type QueueItem, rememberCrs, rememberFormat, store } from '../s
 import { configurePool, expand, inspect, preflight, runConversion } from '../workers/client';
 import { element, formatBytes } from './dom';
 import { host } from './host';
+import { LAYER_COLORS } from '../ui/preview';
 import { protectedFor } from './panels/dataset';
 
 /** Reads a File into the shape the grouper and the pipeline expect. */
@@ -320,23 +321,36 @@ export function boundaryRings(itemId: string): number[][][][] {
  * file converts to exactly the bytes it always did.
  */
 export function layerStyleCommands(item: QueueItem): EditCommand[] {
+  const layers = (item.dataset?.layers ?? []) as any[];
+  if (layers.length === 0) return [];
   const view = item.layerView;
-  if (!view) return [];
 
   const commands: EditCommand[] = [];
-  for (const layer of (item.dataset?.layers ?? []) as any[]) {
-    const colour = colourOf(view, layer.name);
-    const entry = view.entries[layer.name];
+  layers.forEach((layer: any, index: number) => {
+    const chosen = view ? colourOf(view, layer.name) : null;
+    const entry = view?.entries[layer.name];
     const width = entry?.lineWidth;
     const type = entry?.lineType;
-    if (!colour && width === undefined && type === undefined) continue;
 
-    const style: StyleHint = {};
-    if (colour) style.color = colour;
-    if (width !== undefined) style.lineWidth = lineWidthOf(view, layer.name);
-    if (type !== undefined) style.linetype = lineTypeOf(view, layer.name);
+    // EVERY LAYER LEAVES WITH A COLOUR, not only the ones somebody coloured in.
+    //
+    // This used to skip any layer the user had not styled by hand, so an
+    // untouched file exported with no styling at all: a mining DXF with ML
+    // Boundary, Mined Out Area, Reclaimed and Plantation opened in Google Earth
+    // as four layers in one indistinguishable default, and the generated legend
+    // described colours the file did not carry.
+    //
+    // The fallback is the SAME palette, indexed the same way, that the canvas
+    // uses — so what the surveyor saw on screen is what the recipient opens,
+    // and the legend cannot disagree with either. A colour the user did pick
+    // still wins.
+    const colour = chosen ?? LAYER_COLORS[index % LAYER_COLORS.length];
+
+    const style: StyleHint = { color: colour };
+    if (width !== undefined) style.lineWidth = lineWidthOf(view!, layer.name);
+    if (type !== undefined) style.linetype = lineTypeOf(view!, layer.name);
     commands.push({ kind: 'layer-style', layer: layer.name, style });
-  }
+  });
   return commands;
 }
 
@@ -421,6 +435,9 @@ export async function convertItem(id: string, withQa: boolean): Promise<void> {
       // merged — the style command names the layer as it will be by then.
       edits: [...(item.edits ?? []), ...layerStyleCommands(item)],
       protectedLayers: protectedFor(item),
+      // The user's own column mapping, when they set one. Per file, because
+      // two surveys in a batch can name their columns differently.
+      table: item.columnMapping ? { mapping: item.columnMapping } : undefined,
     };
     const result = await runConversion(
       {

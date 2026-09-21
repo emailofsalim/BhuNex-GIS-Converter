@@ -1,8 +1,8 @@
 {
   "name": "bhunex-gis-converter",
-  "version": "1.11.15",
+  "version": "1.11.16",
   "private": true,
-  "description": "BhuNex GIS Converter — GIS / Geomatics / Survey / CAD / Mining conversion suite as a Chrome MV3 extension.",
+  "description": "BhuNex GIS Converter \u2014 GIS / Geomatics / Survey / CAD / Mining conversion suite as a Chrome MV3 extension.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -23,6 +23,7 @@
     "store:check": "node scripts/assert-store-ready.mjs",
     "store:package": "npm run build:store && node scripts/assert-store-ready.mjs && node scripts/package-extension.mjs && node scripts/verify-package.mjs",
     "assets": "node scripts/make-store-assets.mjs",
+    "assets:ui": "node scripts/capture-ui-shots.mjs",
     "package:check": "node scripts/verify-package.mjs",
     "bench": "vitest bench --run",
     "build:check": "node scripts/assert-build-committed.mjs",
