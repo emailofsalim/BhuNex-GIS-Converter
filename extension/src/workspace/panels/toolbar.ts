@@ -30,6 +30,7 @@
  * prevent — so neither is written twice.
  */
 
+import { canRedo, canUndo, nextRedoLabel, nextUndoLabel } from '../../core/history';
 import { isCollapsed, setCollapsed } from '../collapse';
 import { element } from '../dom';
 import { host } from '../host';
@@ -435,13 +436,41 @@ export function renderToolbar(into: HTMLElement, enabled: boolean): void {
           ui.toolCanvas?.setOrtho(ui.orthoOn);
           host.render();
         });
+      // THE HISTORY DECIDES, and it names what it would take back.
+      //
+      // These read `item.history` rather than `edits` and `redoStack`, which
+      // is the same state the History panel's own buttons read, so the two can
+      // no longer disagree about whether there is anything to undo. It also
+      // widens what the button covers: assigning a CRS, reprojecting or
+      // repairing are history entries too, and were previously unreachable
+      // from here however many of them the user had just done.
+      //
+      // The tooltip carries the entry's label — "Take back Move 2 vertices"
+      // rather than "Take back the last edit" — because the one question a
+      // user has before pressing Undo is what exactly is about to go.
       case 'undo': {
-        const node = button('Undo', 'Take back the last edit (Ctrl+Z)', false, () => ui.undo?.(), (item?.edits?.length ?? 0) === 0);
+        const history = item?.history;
+        const label = history ? nextUndoLabel(history) : null;
+        const node = button(
+          'Undo',
+          label ? `Take back “${label}” (Ctrl+Z)` : 'Nothing to take back (Ctrl+Z)',
+          false,
+          () => ui.undo?.(),
+          !history || !canUndo(history)
+        );
         node.id = 'undoBtn';
         return node;
       }
       case 'redo': {
-        const node = button('Redo', 'Reapply the edit that was taken back (Ctrl+Shift+Z)', false, () => ui.redo?.(), (state.redoStack?.length ?? 0) === 0);
+        const history = item?.history;
+        const label = history ? nextRedoLabel(history) : null;
+        const node = button(
+          'Redo',
+          label ? `Put “${label}” back (Ctrl+Shift+Z)` : 'Nothing to put back (Ctrl+Shift+Z)',
+          false,
+          () => ui.redo?.(),
+          !history || !canRedo(history)
+        );
         node.id = 'redoBtn';
         return node;
       }

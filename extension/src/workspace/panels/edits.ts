@@ -12,7 +12,7 @@ import { type QueueItem, store } from '../../state/store';
 import { element, ghostButton } from '../dom';
 import { host } from '../host';
 import { datasetForTools, protectedFor, truncationOf } from './dataset';
-import { historyOf } from './history';
+import { historyOf, stepHistory } from './history';
 import { ui } from '../ui-state';
 
 /**
@@ -63,7 +63,10 @@ export function queueEdit(item: QueueItem, command: EditCommand, plan: Refusable
   store.updateItem(item.id, {
     dataset: preview,
     edits: [...(item.edits ?? []), command],
-    history: recordOperation(historyOf(item), before, preview, { kind: 'edit', label }),
+    // The command rides its own history entry, so undoing that entry takes the
+    // command out of `edits` with it. Before this, the two lists moved
+    // independently and an undone edit still reached the exported file.
+    history: recordOperation(historyOf(item), before, preview, { kind: 'edit', label, command }),
   });
 
   const truncated = truncationOf(item, layerOfCommand(command) ?? '');
@@ -147,18 +150,26 @@ export function pendingEditsPanel(item: QueueItem, commands: EditCommand[]): HTM
   panel.append(list);
 
   const foot = element('div', { class: 'edits__foot' });
+  // THIS IS THE SAME UNDO AS THE TOOLBAR'S, not a third one.
+  //
+  // It used to call `rebuildPreviewFrom` directly, which sets `edits` and
+  // leaves `history.position` where it was. Once the history became the thing
+  // that derives `edits`, that combination was actively dangerous: discarding
+  // every edit here and then pressing Ctrl+Z once would set `edits` back from
+  // the history and RESURRECT every edit just discarded.
   foot.append(
     ghostButton('Undo the last edit', () => {
-      const all = item.edits ?? [];
-      if (all.length === 0) return;
-      // The preview is rebuilt from the remaining commands rather than reversed
-      // in place: replaying N-1 commands cannot drift from replaying N.
-      const remaining = all.slice(0, -1);
-      rebuildPreviewFrom(item, remaining);
+      const history = historyOf(item);
+      if (history.position === 0) return;
+      stepHistory(item.id, history.position - 1);
     })
   );
   foot.append(
-    ghostButton('Discard every edit', () => rebuildPreviewFrom(item, []))
+    ghostButton('Discard every edit', () => {
+      // All the way back to the file as imported — which is what "every edit"
+      // has to mean for the history and the command list to still agree.
+      stepHistory(item.id, 0);
+    })
   );
   panel.append(foot);
   return panel;

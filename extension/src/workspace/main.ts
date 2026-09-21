@@ -44,14 +44,13 @@ import { editTab, renderEdit } from './panels/edit-tab';
 import { renderFormats } from './panels/formats';
 import { renderMeasure, setMeasureMode, stopMeasuring, updateMeasureBar, wireMeasureBar } from './panels/measure';
 import { healthPanel } from './panels/health';
-import { historyPanel } from './panels/history';
+import { historyPanel, stepHistory } from './panels/history';
 import { crsTab, geometryTab, overviewTab } from './panels/inspector';
 import { layersTab } from './panels/layers';
 import { renderQueue } from './panels/queue';
 import { type CanvasToolId, engineOf, ownerOfGroup, ownerOfSection, PANEL_TABS, renderToolbar, RIBBON_TABS, ribbonIsFolded, setCanvasTool, toggleRibbonFold, toolForKey } from './panels/toolbar';
 import { GeorefCanvas } from '../ui/georef-canvas';
 import { centreOf, georefPanel, pickToLocal, replaceFromOriginal } from './panels/georef';
-import { rebuildPreviewFrom } from './panels/edits';
 import { renderSelect, selectTab } from './panels/select-tab';
 import { closeCanvasMenu, installCanvasGestures } from './panels/canvas-menu';
 import { openAboutDialog, openHelpDialog, openSettingsDialog } from './panels/settings';
@@ -148,43 +147,46 @@ function render(): void {
 }
 
 /**
- * Takes the last edit back, keeping it for Redo.
+ * ONE UNDO, OVER EVERYTHING, ONE STEP AT A TIME.
  *
- * The rebuild replays the commands that REMAIN rather than inverting the one
- * removed: an inverse that drifts from its forward operation is the classic way
- * an undo leaves the data subtly different from where it started.
+ * These used to walk `item.edits` with a private `redoStack` beside it, which
+ * made the toolbar's Undo a different mechanism from the History panel's Undo
+ * sitting two tabs away. Three things were wrong with that, and they compound:
+ *
+ * IT COULD ONLY UNDO EDITS. `item.edits` holds canvas commands. Assigning a
+ *   CRS, reprojecting, repairing, building polygons, burning text in — every
+ *   one of them was recorded in the history and none of them could be reached
+ *   by Ctrl+Z, which is the key a user reaches for after any of them.
+ *
+ * EACH STEP REPLAYED EVERYTHING. `rebuildPreviewFrom` starts from the pristine
+ *   dataset and re-applies every command that remains, so undoing one of forty
+ *   edits re-ran thirty-nine, and walking the whole stack back ran about eight
+ *   hundred. The patch history reverses one entry by touching only the
+ *   features that entry changed — which is what makes a long run of undos snap
+ *   instead of grind.
+ *
+ * THE TWO STACKS DISAGREED. Undoing here left `history.position` untouched, so
+ *   the History panel went on listing the edit as applied; undoing there left
+ *   `item.edits` untouched, so the conversion shipped it. Whichever one the
+ *   user pressed, the other was lying.
+ *
+ * Both buttons now move the same position, and `edits` is derived from it.
  */
 function undoEdit(): void {
   const item = store.selected();
-  const all = item?.edits ?? [];
-  if (!item || all.length === 0) return;
-  const undone = all[all.length - 1];
-  store.set({ redoStack: [...(store.get().redoStack ?? []), undone] });
-  rebuildPreviewFrom(item, all.slice(0, -1));
+  if (!item?.history) return;
+  stepHistory(item.id, item.history.position - 1);
 }
 
-/** Puts back the edit Undo took, if no new edit has been made since. */
 function redoEdit(): void {
   const item = store.selected();
-  const stack = store.get().redoStack ?? [];
-  if (!item || stack.length === 0) return;
-  const command = stack[stack.length - 1];
-  store.set({ redoStack: stack.slice(0, -1) });
-  rebuildPreviewFrom(item, [...(item.edits ?? []), command]);
+  if (!item?.history) return;
+  stepHistory(item.id, item.history.position + 1);
 }
 
-/**
- * Undo and redo, on the canvas where the edits are made.
- *
- * The queue of edits already supported taking the last one back; what was
- * missing was a forward stack, so an accidental undo could not be walked back.
- * `store.redoStack` holds the commands popped off the end, and any NEW edit
- * clears it — the standard rule, and the only one that cannot produce a redo
- * that reapplies a command to geometry it was never planned against.
- */
-// Undo and redo are built by `renderToolbar`, which sets their disabled state
-// from the same `edits` and `redoStack` this used to read. Two places deciding
-// whether Undo is available is one place too many.
+// Undo and redo are built by `renderToolbar`, which reads the same history for
+// their labels and disabled state. Two places deciding whether Undo is
+// available is one place too many.
 
 /**
  * Keeps the "Local only" badge honest.
@@ -737,7 +739,11 @@ function wire(): void {
     // handles the canvas, the selection and the pre-edit ghost; the layer rail
     // is emptied by `renderInspector`. What is left is the state those two do
     // not own, and it is cleared here.
-    store.set({ items: [], selectedId: null, manifestCsv: undefined, redoStack: [] });
+    // The undo history needs no clearing here: it lives on the item, so
+    // emptying `items` takes every file's history with it. That is the point
+    // of moving it off the app state — a session-wide redo stack outlived the
+    // drawing whose layers and feature indices it addressed.
+    store.set({ items: [], selectedId: null, manifestCsv: undefined });
     ui.editTarget = null;
     ui.editSelection = [];
     ui.editCanvas?.setTarget(null);

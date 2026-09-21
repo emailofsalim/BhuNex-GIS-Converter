@@ -437,14 +437,19 @@ export interface AppState {
    */
   canvasTool: string;
   /**
-   * Edits taken back with Undo, newest last, ready for Redo.
+   * There is no separate redo stack any more, and that is the point.
    *
-   * Any NEW edit clears it — the standard rule, and the only one that cannot
-   * produce a redo that reapplies a command to geometry it was never planned
-   * against. It lives on the app state rather than the item because it is a
-   * property of the current editing session, not of the file.
+   * It used to live here: commands popped off `item.edits`, held on the app
+   * state, cleared by any new edit. That made redo a session-wide property of
+   * the workspace while the history it was shadowing was a property of the
+   * FILE — so selecting another file left a redo stack addressing layers and
+   * feature indices in a drawing that was no longer on screen.
+   *
+   * `HistoryState.position` is the redo stack: entries past it are the undone
+   * future, they travel with the item they belong to, and `recordOperation`
+   * already discards them when new work lands on top. One mechanism, per file,
+   * with the branch-discard rule in one place instead of two.
    */
-  redoStack: any[];
   formatSearch: string;
   formatCategory: string | null;
   busy: boolean;
@@ -484,7 +489,6 @@ class Store {
     // Pan, not select: opening a file should not arm anything that can move a
     // parcel on the first drag.
     canvasTool: 'pan',
-    redoStack: [],
     formatSearch: '',
     formatCategory: null,
     busy: false,
