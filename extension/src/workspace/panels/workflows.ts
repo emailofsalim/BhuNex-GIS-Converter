@@ -1,6 +1,7 @@
 /** Workflows (spec §31.2) and the project file (spec §31.4). */
 
 import { ENGINE_VERSION } from '../../core/cir';
+import { editsAt, restoreHistory, snapshotHistory } from '../../core/history';
 import {
   buildProject,
   matchSources,
@@ -199,7 +200,18 @@ export async function saveProject(): Promise<void> {
     crsOrigin: item.dataset?.crsOrigin ?? 'unknown',
     targetFormatId: item.targetFormatId,
     carriage: 'reference',
-    history: item.history ? { entries: item.history.entries, position: item.history.position, dropped: item.history.dropped } : undefined,
+    // `snapshotHistory`, NOT a hand-rolled copy of its fields.
+    //
+    // This line used to spell out `{ entries, position, dropped }` itself,
+    // which worked exactly until the snapshot grew a fourth field. `baseEdits`
+    // was added in 1.11.17 to hold the commands whose history entries have
+    // scrolled out of the undo window — no longer reversible, still APPLIED —
+    // and a hand-rolled copy silently left it behind. A project saved after a
+    // long editing session would have reopened missing those edits outright,
+    // because `editsAt` rebuilds the command list from `baseEdits` plus the
+    // applied entries. That is the data loss `baseEdits` exists to prevent,
+    // reintroduced by the one call site that did not go through the function.
+    history: item.history ? snapshotHistory(item.history) : undefined,
     qa: item.qa ? { passed: item.qa.verdict === 'PASS', summary: item.qa.summary, checkedAt: Date.now() } : undefined,
     diff: item.diff ? { passed: item.diff.passed, summary: item.diff.summary } : undefined,
   }));
@@ -251,6 +263,33 @@ export async function openProject(file: File): Promise<void> {
     store.get().items.map((item) => ({ fileName: item.fileName, path: item.path, size: item.size, sha256: item.provenance?.sha256 }))
   );
   store.log('ok', `Project “${project.name}” opened. ${summariseMatches(matches)}`);
+
+  // THE SAVED HISTORY IS READ BACK, which it never was.
+  //
+  // `ProjectSource.history` has been declared, typed and WRITTEN since the
+  // project file was built, and `openProject` restored the settings, the
+  // workflows and the name and then stopped. Nothing ever read the field. So a
+  // project saved mid-job and reopened came back with an empty undo stack and
+  // no pending edits — the exact outcome `core/history.ts` names in its own
+  // comment as "R19 broken by a save".
+  //
+  // Only a source matched as `same` is restored. A file whose bytes have
+  // changed since the project was written is a different file: its saved
+  // patches address features by (layer, index), and replaying them against
+  // re-surveyed geometry would move the wrong vertices while reporting
+  // success. Those keep the warning below and start clean, which is the
+  // refusal rather than the silent guess.
+  for (const match of matches) {
+    if (match.state !== 'same' || !match.source.history) continue;
+    const item = store.get().items.find((entry) => entry.fileName === (match.suppliedName ?? match.source.fileName));
+    if (!item) continue;
+    const history = restoreHistory(match.source.history);
+    store.updateItem(item.id, { history, edits: editsAt(history) });
+    store.log(
+      'ok',
+      `${item.fileName}: ${history.entries.length} operation(s) restored — Undo reaches back to where you saved.`
+    );
+  }
 
   for (const match of matches) {
     if (match.state === 'same' || match.state === 'missing') continue;

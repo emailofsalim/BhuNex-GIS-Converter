@@ -50,13 +50,13 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 3 | Survey/engineering: LandXML, Surpac STR, MIF/MID, GML, OSM, ASCII Grid, world files, QGIS GCP, XLSX | ✅ done |
 | 4 | Raster: GeoTIFF codec ✅ (read + write), contours ✅, clip ✅, resampling + reprojection ✅ (`warp.ts`), vectorize ✅, rasterize ✅ | ✅ done |
 | 5 | Point cloud: LAS ✅, LAZ codec ⛔, PLY ✅, PTS ✅, XYZ ✅, decimation ✅ | 🟡 partial |
-| 6 | Native/advanced: DWG via native host ✅, **FlatGeobuf full read+write ✅** (task #68, `vector/flatgeobuf.ts`); DGN/E57/GeoPackage adapter contracts ⛔, Parquet not in the registry at all | 🟡 partial |
+| 6 | Native/advanced: DWG via native host ✅, **FlatGeobuf full read+write ✅** (task #68, `vector/flatgeobuf.ts`); DGN/E57/GeoPackage/GeoParquet all registered with honest adapter refusals ⛔ for conversion | 🟡 partial |
 | 7 | UI: workspace, side panel, popup, preview, QA report, batch | ✅ done |
 | 8 | Structure preservation: layer paths, layout engine, delivery tree UI | ✅ done |
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅ **and reachable**, spatial index ✅, 18 operations — the cross-feature three ✅, self-intersection repair ✅, slivers ✅, extend/trim ✅. **§24.2 complete** (§23, §24) | ✅ done |
 | 11 | Measurement ✅ **with a canvas tool**, snapping ✅, vertex editor ✅, attribute table ✅, layer manager ✅, geometry ops ✅ **wired and reaching the exported file** (§25, §26) | ✅ done |
-| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅; KML overlays/icons ⛔ (§27, §28) | 🟡 partial |
+| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅, KML `IconStyle` ✅; KML ground/screen overlays ⛔ (§27, §28) | 🟡 partial |
 | 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
@@ -330,6 +330,55 @@ make/explode multipart as §26.2 geometry operations.
    because a conversion is a synchronous parse inside a worker and the only
    thing that stops one mid-file is terminating it — which is Cancel, and it
    throws the work away.
+
+### What the 1.11.18 sweep found, and what it corrected
+
+A whole-extension audit for pending work, run by sweeping every export in
+`core/`, `engines/`, `qa/` and `crs/` for symbols no production file imports —
+the signature of this codebase's house defect, now on its seventh instance.
+
+**THE ONE REAL DEFECT: the project file's undo history was write-only.**
+`ProjectSource.history` has been declared, typed and written since the project
+file was built. `openProject` restored the settings, the workflows and the
+project name, and never read it back — so a project saved mid-job reopened with
+an empty undo stack and no pending edits. `core/history.ts` names that outcome
+in its own comment: "reopening a project and finding the undo stack empty would
+mean the edits are no longer reversible, which is R19 broken by a save." Both
+`snapshotHistory` and `restoreHistory` were complete, tested, and called by
+nothing.
+
+The save side was worse, because it was present and WRONG. It spelled out
+`{ entries, position, dropped }` by hand instead of calling `snapshotHistory`,
+which held until the snapshot grew a fourth field — `baseEdits`, added in
+1.11.17 to carry commands whose entries have scrolled out of the undo window.
+Those are no longer undoable but are still APPLIED, and `editsAt` rebuilds the
+command list from them, so a project saved after a long session reopened with
+those edits gone from the file it would produce. A hand-rolled copy passes
+every test written against the fields it happens to name.
+
+Both fixed: the save goes through `snapshotHistory`, and the open restores the
+history for every source matched as `same` and derives `edits` from it. Only
+`same` — a file whose bytes have changed is a different file, and replaying
+patches addressed by (layer, index) against re-surveyed geometry would move the
+wrong vertices while reporting success. `history-project.test.ts` pins the round
+trip rather than either half, including a key-set assertion so a fifth field
+fails there instead of vanishing from someone's saved project.
+
+**TWO STALE BOARD CLAIMS, both understating the product** — the same direction
+as the Phase 4 correction in 1.11.9:
+
+  - "Parquet not in the registry at all" was false. `geoparquet` is registered
+    with `PAR1` magic, full capability flags and an honest adapter refusal,
+    exactly like GeoPackage and DGN.
+  - "KML overlays/icons ⛔" conflated a done thing with an undone one. KML
+    `IconStyle` is written; ground and screen overlays are not.
+
+**Swept and found healthy:** the remaining 80-odd single-file exports are
+internal helpers or unused alternative renderers (`legendHtml` beside the
+`legendSvg` the pipeline actually calls), not unreachable features. The nine
+`skipIf` fixture guards all RUN — the trial fixtures are committed, so CI
+executes the same suite as a local run rather than silently reporting green on
+a reduced one.
 
 ### Not on this list, and why
 
