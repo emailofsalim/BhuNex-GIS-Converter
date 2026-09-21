@@ -633,6 +633,19 @@ export async function readGeoTiff(bytes: Uint8Array, source: SourceInfo, options
  * Exports the raster footprint as a vector polygon — the one genuinely useful
  * product available without a pixel codec.
  */
+/**
+ * The layer path `rasterFootprint` puts its rectangle on.
+ *
+ * Exported because a second module needs to RECOGNISE it: `writeKmz` drapes
+ * the pixels as a `<GroundOverlay>`, whose LatLonBox already states the same
+ * extent, so emitting the footprint placemark beside it would put two
+ * identical rectangles in one file — and a raster converted to KMZ and back
+ * would come out with twice the geometry it went in with. One definition, both
+ * users, rather than the string 'footprint' typed out in two places where only
+ * one of them would get renamed.
+ */
+export const RASTER_FOOTPRINT_LAYER = 'footprint';
+
 export function rasterFootprint(dataset: CirDataset): CirDataset {
   const raster = dataset.raster;
   if (!raster?.extent) {
@@ -650,12 +663,12 @@ export function rasterFootprint(dataset: CirDataset): CirDataset {
     layers: [
       {
         name: `${dataset.name} footprint`,
-        path: ['footprint'],
+        path: [RASTER_FOOTPRINT_LAYER],
         fields: [],
         geometryTypes: ['Polygon'],
         features: [
           {
-            id: 'footprint',
+            id: RASTER_FOOTPRINT_LAYER,
             geometry: {
               type: 'Polygon',
               coordinates: [[[minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY], [minX, minY]]],

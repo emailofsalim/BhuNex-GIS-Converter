@@ -56,7 +56,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅ **and reachable**, spatial index ✅, 18 operations — the cross-feature three ✅, self-intersection repair ✅, slivers ✅, extend/trim ✅. **§24.2 complete** (§23, §24) | ✅ done |
 | 11 | Measurement ✅ **with a canvas tool**, snapping ✅, vertex editor ✅, attribute table ✅, layer manager ✅, geometry ops ✅ **wired and reaching the exported file** (§25, §26) | ✅ done |
-| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅, KML `IconStyle` ✅; KML ground/screen overlays ⛔ (§27, §28) | 🟡 partial |
+| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅, KML `IconStyle` ✅, **ground overlays read + written ✅, screen overlays read and reported ✅** (§27, §28) | ✅ done |
 | 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
@@ -379,6 +379,60 @@ internal helpers or unused alternative renderers (`legendHtml` beside the
 `skipIf` fixture guards all RUN — the trial fixtures are committed, so CI
 executes the same suite as a local run rather than silently reporting green on
 a reduced one.
+
+### KML overlays, closed in 1.11.19
+
+The last ⛔ on the phase board, and it was two defects rather than one missing
+feature.
+
+**READING was a total silent loss.** `readKml` walked the tree looking for
+`<Placemark>` and recursed past everything else, so a KMZ whose whole content
+is a scanned plan or an orthophoto draped on the terrain — which is how a great
+many survey deliverables arrive — read as a document with ZERO features and no
+warning saying why. A `<GroundOverlay>` now imports as its footprint polygon
+carrying the image's name, its draw order and, where present, its rotation.
+`<gx:LatLonQuad>` is read as the four corners it already is. The pixels are
+deliberately NOT decoded: the image sits beside the doc.kml in the KMZ the user
+already has, and re-encoding someone's scan into a vector target is not a
+conversion anyone asked for.
+
+A rotated `<LatLonBox>` is REPORTED rather than rotated. Turning the corners by
+the stated angle is easy arithmetic and the wrong answer: KML rotates about the
+box centre at draw time, so the ground footprint of a rotated overlay is not the
+rotated rectangle.
+
+`<ScreenOverlay>` is counted and named in a warning, never imported. It is
+pinned to the viewport — its position is a fraction of the window, not a
+coordinate — so giving a company logo a location would put it on the survey as
+if it had been surveyed.
+
+**WRITING threw the pixels away.** The pipeline reduces a raster to its
+footprint polygon for every vector target, which is right for all of them except
+this one: KML has carried `<GroundOverlay>` since 2.0 and a KMZ is a ZIP that
+can hold the image beside the doc. An orthophoto converted to KMZ came out as an
+empty rectangle. `writeKmz` now encodes the bands as a PNG, packs it, and writes
+a LatLonBox from the geotransform — under the vectors, so a photo cannot cover
+the boundaries the user converted.
+
+Three refusals rather than approximations, each by name with the operation that
+fixes it: a **rotated or skewed geotransform** (LatLonBox is four numbers and
+therefore axis-aligned — squaring it up would place the image at the wrong angle
+while looking entirely converted), a **projected grid**, and **georeference with
+no pixels behind it**.
+
+No-data becomes transparent rather than black, because a DEM's void filled with
+black reads as a pit in the terrain.
+
+**Two things this turned up.** The PNG encoder was already here, complete and
+correct, private inside `pdf-image.ts` where it had been written to
+re-container a scanned page — the house defect in its quietest form, since the
+next caller cannot see it. It moved to `engines/raster/png.ts` and both use it.
+And `cross-kind.test.ts` caught a round-trip inflation the moment the overlay
+landed: the footprint placemark and the overlay's LatLonBox are the same
+rectangle, so a raster converted to KMZ and back came out with twice the
+geometry it went in with. `writeKmz` drops the footprint when it drapes, and
+keeps it when it refuses — then it is the only thing standing between the user
+and an empty KMZ.
 
 ### Not on this list, and why
 

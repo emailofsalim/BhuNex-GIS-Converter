@@ -282,6 +282,24 @@ log with any unlogged gap or overlapping record flagged beside it. Every value i
 escaped, and anything credential-shaped is withheld and reported: a KMZ gets
 emailed around.
 
+**It drapes imagery on the terrain, and reads it back.** A raster converted to
+KMZ travels as a `GroundOverlay` — the image packed into the archive, placed
+from its own geotransform, drawn under the vectors so a photo cannot cover the
+boundaries you converted. No-data becomes transparent rather than black,
+because a void filled with black reads as a pit in the ground.
+
+A raster whose grid is rotated is refused by name rather than squared up:
+KML's box is four numbers and cannot describe an angle, and an image placed
+square when it is not looks entirely converted. Reproject it north-up first and
+it goes through.
+
+The other direction used to lose everything. A KMZ whose content is a scanned
+plan read as a document with no features and no explanation; the overlay is now
+imported as its footprint, carrying the image's name, so it arrives in your
+GeoJSON or DXF as a rectangle on the right ground labelled with the file that
+belongs in it. Screen overlays — a logo, a north arrow — are counted and named
+rather than given a coordinate they never had.
+
 **It edits, and the edits reach the file.** An attribute table with a field
 calculator, a layer manager, a vertex editor on the canvas, and sixteen geometry
 operations — buffer, offset, union, intersection, difference, symmetric

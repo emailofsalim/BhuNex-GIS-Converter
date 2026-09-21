@@ -1118,11 +1118,36 @@ function prepare(dataset: CirDataset, target: FormatDef, settings: ConversionSet
     working.layers.every((layer) => layer.features.length === 0)
   ) {
     working = rasterFootprint(working);
+    // KMZ IS THE EXCEPTION, so it must not be told the general story.
+    //
+    // "A vector format stores geometry, not pixels" is true of every target
+    // here but one: KML has carried `<GroundOverlay>` since 2.0 and a KMZ is a
+    // ZIP that can hold the image beside the doc, so `writeKmz` drapes the
+    // pixels and the footprint is an extent outline drawn over them rather
+    // than a substitute for them. Repeating the general warning would tell a
+    // user their imagery had been thrown away while it sat in the file they
+    // just downloaded — and send them to GeoTIFF to recover something they
+    // already had.
+    //
+    // `writeKmz` still warns, by name, in the cases where it genuinely cannot
+    // drape: a rotated geotransform, a projected grid, or georeference with no
+    // pixels behind it.
+    const drapes = target.id === 'kmz';
     warnings.push(
-      warn('RASTER_FOOTPRINT_ONLY', 'The raster was written as its footprint polygon.', {
-        reason: 'A vector format stores geometry, not pixels.',
-        action: 'To keep the pixels choose GeoTIFF or ASCII Grid; to turn the values into shapes, enable Vectorise.',
-      })
+      warn(
+        'RASTER_FOOTPRINT_ONLY',
+        drapes
+          ? 'The raster was written as a ground overlay, with its footprint outlined.'
+          : 'The raster was written as its footprint polygon.',
+        {
+          reason: drapes
+            ? 'KMZ can carry the image itself, so the pixels travel inside the archive and the footprint marks their extent.'
+            : 'A vector format stores geometry, not pixels.',
+          action: drapes
+            ? 'Open the KMZ in Google Earth to see the image draped on the terrain.'
+            : 'To keep the pixels choose GeoTIFF or ASCII Grid; to turn the values into shapes, enable Vectorise.',
+        }
+      )
     );
   }
 

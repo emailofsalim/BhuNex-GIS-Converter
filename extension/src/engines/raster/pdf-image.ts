@@ -41,6 +41,7 @@
 
 import { ConversionError } from '../../core/errors';
 import { inflate } from './tiff-codec';
+import { buildPng } from './png';
 
 export interface PdfPageImage {
   /** 1-based page number this image was found on, or the image's order when unknown. */
@@ -300,97 +301,4 @@ async function flateImageToPng(
   return buildPng(raw, width, height, channels === 3 ? 2 : 0);
 }
 
-// --------------------------------------------------------------------- PNG
 
-function buildPng(raw: Uint8Array, width: number, height: number, colorType: number): Uint8Array {
-  const header = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-
-  const ihdr = new Uint8Array(13);
-  const view = new DataView(ihdr.buffer);
-  view.setUint32(0, width);
-  view.setUint32(4, height);
-  ihdr[8] = 8;
-  ihdr[9] = colorType;
-
-  const chunks = [header, chunk('IHDR', ihdr), chunk('IDAT', zlibStored(raw)), chunk('IEND', new Uint8Array(0))];
-  const total = chunks.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const part of chunks) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-function chunk(type: string, data: Uint8Array): Uint8Array {
-  const out = new Uint8Array(12 + data.length);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, data.length);
-  for (let index = 0; index < 4; index++) out[4 + index] = type.charCodeAt(index);
-  out.set(data, 8);
-  view.setUint32(8 + data.length, crc32(out.subarray(4, 8 + data.length)));
-  return out;
-}
-
-/**
- * A zlib stream of stored (uncompressed) deflate blocks.
- *
- * No compressor needed, and a decoder cannot tell the difference. The 65,535
- * byte block limit is deflate's, not a choice.
- */
-function zlibStored(data: Uint8Array): Uint8Array {
-  const blocks = Math.max(1, Math.ceil(data.length / 65535));
-  const out = new Uint8Array(2 + blocks * 5 + data.length + 4);
-  out[0] = 0x78;
-  out[1] = 0x01;
-
-  let read = 0;
-  let write = 2;
-  while (read < data.length || read === 0) {
-    const size = Math.min(65535, data.length - read);
-    const last = read + size >= data.length ? 1 : 0;
-    out[write++] = last;
-    out[write++] = size & 0xff;
-    out[write++] = (size >> 8) & 0xff;
-    out[write++] = ~size & 0xff;
-    out[write++] = (~size >> 8) & 0xff;
-    out.set(data.subarray(read, read + size), write);
-    write += size;
-    read += size;
-    if (last) break;
-  }
-
-  const adler = adler32(data);
-  out[write++] = (adler >>> 24) & 0xff;
-  out[write++] = (adler >>> 16) & 0xff;
-  out[write++] = (adler >>> 8) & 0xff;
-  out[write++] = adler & 0xff;
-  return out.subarray(0, write);
-}
-
-function adler32(data: Uint8Array): number {
-  let a = 1;
-  let b = 0;
-  for (const byte of data) {
-    a = (a + byte) % 65521;
-    b = (b + a) % 65521;
-  }
-  return ((b << 16) | a) >>> 0;
-}
-
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let index = 0; index < 256; index++) {
-    let value = index;
-    for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-    table[index] = value >>> 0;
-  }
-  return table;
-})();
-
-function crc32(data: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of data) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
-}
