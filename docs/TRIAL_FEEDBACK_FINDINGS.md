@@ -11,7 +11,9 @@ on this branch · `PINNED` a regression test now holds it · `NEEDS FIELD CHECK`
 fixed and unit-tested, but the last mile cannot be observed from this sandbox ·
 `UX` works but reads as broken · `NOTE` observation, no change proposed.
 
-**Every row in this register is now closed** — nothing says `OPEN`. One row, F3,
+**Every row in this register is now closed** — nothing says `OPEN`. Rows F11 and
+F12 were added by a second pass that opened the delivered files the first pass
+had not: 68 files across the four folders, every one accounted for. One row, F3,
 carries `NEEDS FIELD CHECK`: the fix and its rule are tested, but the basemap
 tiles it restores cannot be seen from a sandbox with no route to a tile server,
 and a control case that fails for the same reason cannot stand in for the test.
@@ -297,6 +299,61 @@ dialog shows four groups and ten controls; with GeoJSON chosen, the
 
 ---
 
+## F11 — GML declared a metre grid over degrees `FIXED` `PINNED`
+
+Found by auditing the delivered files the register had not opened. F6 named
+GeoJSON because that is the file someone had looked at; the same defect was
+sitting in the GML beside it:
+
+```
+srsName="EPSG:32645"
+<gml:posList srsDimension="3">84.594 23.544 0.000 …
+```
+
+A metre grid declared over degrees. Current code writes `srsName="EPSG:4326"`
+with the same degrees — the label and the numbers agree.
+
+---
+
+## F12 — KML and GeoJSON Sequence put the site on the equator `FIXED` `PINNED`
+
+The worst of the delivered files, and nobody had opened it. Folder 2's
+`..._converted_to_kml.kml` holds:
+
+```
+<coordinates>82.51201422,0.00021242,0.000 …
+```
+
+This is not a labelling problem. The degrees were fed through a UTM 45N
+**inverse** as though they were metres: 84.594 m east and 23.544 m north of the
+zone origin come back as a point on the **equator**, about 2,600 km south of the
+site and 200 km west of it. The cadastral map opens in Google Earth in open
+ocean. The GeoJSON Sequence beside it carries the same numbers.
+
+Folder 3 shows the same machinery amplifying F1's swap: its KML holds
+`105.59634894,2.19719737` — the swapped UTM pair reprojected, putting 188
+boundary pillars in the **South China Sea**.
+
+Current code gives `84.62, 23.55` for the cadastral map and `84.613, 23.539` for
+the pillars. Both on site.
+
+**How these were missed.** The register was built one defect per folder, from
+the files that had been opened. Five formats carried this defect class — GeoJSON,
+DXF, GML, KML, GeoJSON Sequence — and the register named two. The pin is now
+shaped to match: rather than a per-format assertion, one sentence covers all of
+them — **the site is in Jharkhand**. Whatever units a format stores and
+whichever axis it puts first, the first point must be on the site. A per-format
+test would have been five tests that each pass while the next format ships
+wrong.
+
+**Deliberately not defects.** Two delivered outputs write northing first and are
+correct: CSV round-trips the source table's own `NORTHING,EASTING` column names,
+and every LandXML point list is `north east [elev]` by specification — see
+`engines/vector/landxml.ts`, which swaps back on import and says so with
+`LANDXML_AXIS_SWAPPED`. Both are pinned so the next reader does not "fix" them.
+
+---
+
 ## What the trial confirms is working
 
 From the screenshots, on real 1,025-feature and 76-feature files:
@@ -398,3 +455,4 @@ read as broken, then the tests that stop any of it coming back.
 | 6 | **F5 / U3** — credit band vs the bottom-left cluster | the overlay lifts clear while a credit is drawn |
 | 7 | **F6/F7/F8** — pin what was already fixed | label-and-magnitude checks on the operator's KMZ and DXF, plus a check that the checks still bite |
 | 8 | **F9/F10** — UX confirmations | Download says it already delivered; Settings fills without a format chosen |
+| 9 | **F11/F12** — found by auditing the files nobody had opened | GML labelled degrees as a metre grid; KML and GeoJSON Sequence put the site on the equator. Both already fixed, both now pinned by one site check across every delivered format |
