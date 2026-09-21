@@ -357,6 +357,129 @@ describe.skipIf(!existsSync(CADASTRAL_KMZ))('F6/F7 — the delivered cadastral K
 });
 
 /**
+ * F11 and F12 — every delivered format has to land on the same hill.
+ *
+ * The register named GeoJSON and DXF because those were the two files anyone
+ * had opened. Auditing the rest of the delivered batch found the same defect
+ * class in three more formats, and nothing was pinning any of them:
+ *
+ *   F11. `..._converted_to_gml.gml` carries `srsName="EPSG:32645"` — a metre
+ *        grid — around `<posList>84.594 23.544</posList>`. Exactly F6, in GML.
+ *
+ *   F12. `..._converted_to_kml.kml` and the GeoJSON Sequence beside it hold
+ *        `82.51201422,0.00021242`. That is not a label problem, it is the wrong
+ *        place: the degrees were fed through a UTM 45N INVERSE as though they
+ *        were metres, so 84.594 m east and 23.544 m north of the zone origin
+ *        came back as a point on the equator, about 2,600 km south of the site
+ *        and 200 km west of it. The cadastral map opens in Google Earth in the
+ *        Gulf of Guinea's latitude band off Sumatra.
+ *
+ *        Folder 3 shows the same machinery amplifying F1's swap: its KML holds
+ *        `105.59634894,2.19719737`, which is the swapped UTM pair reprojected —
+ *        the boundary pillars land in the South China Sea.
+ *
+ * WHY THIS TEST IS SHAPED THIS WAY. Five defects, five formats, one sentence:
+ * the site is in Jharkhand. Whatever units a format stores, and whichever axis
+ * it puts first, the first point has to be ON THE SITE — so that is what is
+ * asserted, once, for every text format in the delivered batch. A per-format
+ * assertion would have been five tests that each pass while the next format
+ * ships wrong; this one cannot be satisfied by a file that is merely
+ * well-formed.
+ */
+describe.skipIf(!existsSync(CADASTRAL_KMZ) || !existsSync(PILLARS))('F11/F12 — every delivered format lands on the site', () => {
+  /** The first coordinate pair in any text format, whatever its punctuation. */
+  const firstPair = (text: string): [number, number] | null => {
+    const match = text.match(/(-?\d+\.\d+)[ ,](-?\d+\.\d+)/);
+    return match ? [Number(match[1]), Number(match[2])] : null;
+  };
+
+  /** Pakhar, Jharkhand: about 84.6°E, 23.5°N, or 256 km E / 2,605 km N on 45N. */
+  const onSiteDegrees = ([a, b]: [number, number]) => {
+    // Either axis order is allowed here — LandXML writes north first by
+    // convention — so the pair is checked as a set, not as x then y.
+    const [lon, lat] = Math.abs(a) > Math.abs(b) ? [a, b] : [b, a];
+    return lon > 84 && lon < 85 && lat > 23 && lat < 24;
+  };
+  const onSiteGrid = ([a, b]: [number, number]) => {
+    const [east, north] = a < b ? [a, b] : [b, a];
+    return east > 250_000 && east < 260_000 && north > 2_600_000 && north < 2_610_000;
+  };
+
+  it('writes the cadastral KMZ into every format somewhere in Jharkhand', async () => {
+    // THE DEFECT. Before the fix, kml and geojsonseq put this on the equator.
+    for (const target of ['kml', 'gml', 'geojsonseq', 'topojson', 'landxml']) {
+      const { text } = await convertCadastral(target, null);
+      const pair = firstPair(text);
+      expect(pair, `${target} produced no coordinate pair`).not.toBeNull();
+      expect(onSiteDegrees(pair!), `${target} wrote ${JSON.stringify(pair)}`).toBe(true);
+    }
+  }, 300_000);
+
+  it('never labels a WGS 84 export as a metre grid', async () => {
+    // F11 exactly. The delivered GML declared EPSG:32645 over degrees; any CRS
+    // a format states has to be the one its numbers are actually in.
+    //
+    // Only `srsName` counts. "EPSG:32645" also appears 360 times in the parcel
+    // balloons, where each attribute table states the source's projected CRS —
+    // that is data the file is carrying, not a claim about its own geometry,
+    // and a test that could not tell the two apart would fail on a correct file.
+    const { text } = await convertCadastral('gml', null);
+    const declared = [...new Set(text.match(/srsName="[^"]*"/g) ?? [])];
+    expect(declared).toEqual(['srsName="EPSG:4326"']);
+  }, 120_000);
+
+  it('writes the boundary pillars into every format somewhere in Jharkhand', async () => {
+    // Folder 3's KML held 105.6°E, 2.2°N — the South China Sea — because F1's
+    // swap was reprojected rather than caught. Grid formats keep metres,
+    // geographic ones get degrees, and both have to be the same hill.
+    const pillars = readFileSync(PILLARS);
+    const run = async (target: string) => {
+      const result: never = (await convert({
+        input: { fileName: 'pillars.csv', bytes: new Uint8Array(pillars) },
+        targetFormatId: target,
+        settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N, runQa: false },
+      } as never)) as never;
+      return decoder.decode((result as unknown as { outputs: { bytes: Uint8Array }[] }).outputs[0].bytes);
+    };
+
+    for (const target of ['gml', 'topojson', 'wkt', 'landxml']) {
+      const pair = firstPair(await run(target));
+      expect(pair, `${target} produced no coordinate pair`).not.toBeNull();
+      expect(onSiteGrid(pair!), `${target} wrote ${JSON.stringify(pair)}`).toBe(true);
+    }
+    for (const target of ['kml', 'geojsonseq']) {
+      const pair = firstPair(await run(target));
+      expect(pair, `${target} produced no coordinate pair`).not.toBeNull();
+      expect(onSiteDegrees(pair!), `${target} wrote ${JSON.stringify(pair)}`).toBe(true);
+    }
+  }, 300_000);
+
+  it('keeps the two north-first formats north-first, on purpose', async () => {
+    // Both of these look like the F1 swap and are not, so they are pinned
+    // rather than left for the next reader to "fix". CSV round-trips the
+    // source table's own column names, and every LandXML point list is
+    // "north east [elev]" — see engines/vector/landxml.ts, which swaps back on
+    // import and says so with LANDXML_AXIS_SWAPPED.
+    const pillars = new Uint8Array(readFileSync(PILLARS));
+    const run = async (target: string) => {
+      const result: never = (await convert({
+        input: { fileName: 'pillars.csv', bytes: pillars },
+        targetFormatId: target,
+        settings: { precision: SURVEY_DEFAULT_PRECISION, sourceCrs: UTM45N, runQa: false },
+      } as never)) as never;
+      return decoder.decode((result as unknown as { outputs: { bytes: Uint8Array }[] }).outputs[0].bytes);
+    };
+
+    const csv = await run('csv');
+    expect(csv.split('\n')[0]).toBe('Sl No,NORTHING,EASTING,Code');
+    // The value under NORTHING is a northing. That is the whole point.
+    expect(csv.split('\n')[1]).toBe('1,2605201.531,256320.247,BP1');
+
+    expect(firstPair(await run('landxml'))).toEqual([2605201.531, 256320.247]);
+  }, 300_000);
+});
+
+/**
  * The checks above, run against the files that were actually delivered.
  *
  * A regression test that passes proves the code is right today. It does not
