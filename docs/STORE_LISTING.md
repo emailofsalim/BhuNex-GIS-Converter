@@ -143,11 +143,20 @@ Full source: https://github.com/emailofsalim/BhuNex-GIS-Converter
 
 ### Privacy policy URL
 ```
-https://emailofsalim.github.io/BhuNex-GIS-Converter/PRIVACY.html
+https://emailofsalim.github.io/BhuNex-GIS-Converter/docs/PRIVACY.html
 ```
-Publish it by enabling **GitHub Pages** on the repository (Settings → Pages →
-Deploy from a branch → `main` → `/docs`). Until Pages is enabled, this also
-works and both stores accept it:
+**Checked live — this URL returns 200 and serves the policy.**
+
+Note the `/docs/` segment. GitHub Pages is enabled on this repository and
+deploys from the repository **root**, not from `/docs`, so the site's index is
+the README and everything under `docs/` is served one level down. An earlier
+version of this file documented
+`…/BhuNex-GIS-Converter/PRIVACY.html` without the segment, which **404s** —
+and a privacy policy URL that 404s is a rejection, because the reviewer opens
+it. If you ever switch the Pages source to `/docs`, the shorter URL becomes the
+correct one and this one breaks; check whichever you paste before submitting.
+
+This also works and both stores accept it:
 ```
 https://github.com/emailofsalim/BhuNex-GIS-Converter/blob/main/docs/PRIVACY.md
 ```
