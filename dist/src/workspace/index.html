@@ -236,8 +236,22 @@
             <span class="pane__title" id="inspectorTitle">Details</span>
             <div class="topbar__spacer"></div>
           </div>
-          <div class="dock__body" id="inspectorBody" role="tabpanel"></div>
-          <div class="dock__body hidden" id="bottomBody" role="tabpanel"></div>
+          <!-- ONE FOLD OVER BOTH BODIES.
+
+               Data and Export render into `inspectorBody`; Results renders into
+               `bottomBody`, and exactly one of the two is ever visible. The
+               chevron above used to fold only the first of them, so pressing it
+               while Results was showing folded a body that was already hidden
+               and left the visible one exactly where it was — a control that
+               did nothing, on the one tab the user had asked to be able to fold.
+
+               Wrapping them makes the fold about the BOX rather than about
+               whichever body happens to be filling it, which is also how the
+               user describes it: one box, at the bottom of the right dock. -->
+          <div class="dock__stack" id="sectionBox">
+            <div class="dock__body" id="inspectorBody" role="tabpanel"></div>
+            <div class="dock__body hidden" id="bottomBody" role="tabpanel"></div>
+          </div>
 
           <!-- Convert is the point of the tool, so it is pinned and never
                scrolls out of reach. -->

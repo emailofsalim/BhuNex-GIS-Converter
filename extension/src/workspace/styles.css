@@ -969,6 +969,18 @@ textarea {
   overflow: auto;
 }
 
+/* The two bodies under one fold. Data and Export fill the first, Results the
+   second, and exactly one is ever visible — so this takes the flex growth the
+   bodies used to take from the dock, and passes it back down to whichever of
+   them is showing. Without `display: flex` here the visible body would size to
+   its content and the dock would lose its scroll. */
+.dock__stack {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .dock__settings {
   flex: 0 0 auto;
   max-height: 30%;

@@ -51,21 +51,30 @@ const STORAGE_KEY = 'bhunex.opened';
  * one. Titles are short, stable and unique within a panel.
  */
 /**
- * The two that start open, because without them the workspace looks broken.
+ * The four that start open, because without them the workspace looks broken.
  *
  * Everything else — every `.section` in every panel, the layer rail, the
  * settings groups — starts folded. These do not, and the distinction is not
  * arbitrary: they are not content, they are the frame. The file queue is how
  * you see what is loaded; the format list is the choice every conversion turns
- * on; and the dock's section box is what a ribbon tab fills, so folding it by
- * default would mean clicking "Data › CRS" and being shown a closed bar. Asking
- * for a section IS asking to see it. Its contents still start folded, which is
- * where the decluttering actually belongs.
+ * on; the ribbon is every tool the workspace has; and the dock's section box is
+ * what a ribbon tab fills, so folding it by default would mean clicking
+ * "Data › CRS" and being shown a closed bar. Asking for a section IS asking to
+ * see it. Their CONTENTS still start folded, which is where the decluttering
+ * actually belongs.
  *
- * A user who folds either still gets their preference remembered — this decides
- * only what happens before anyone has expressed one.
+ * THE RIBBON IS ON THIS LIST BECAUSE IT WAS MEASURED OFF IT. It folds through
+ * this same store rather than a private boolean of its own — deliberately, so
+ * it cannot forget its state on reload — which meant inverting the default
+ * silently folded it too. A first run opened at a 32-pixel strip: eight tab
+ * labels, a chevron, and not one tool. Fit, undo, the draw and measure
+ * families and the whole Convert flow were all behind a fold nobody had asked
+ * for. That is the opposite of decluttering; it is hiding the application.
+ *
+ * A user who folds any of them still gets their preference remembered — this
+ * decides only what happens before anyone has expressed one.
  */
-const DEFAULT_OPEN = ['files', 'output formats', 'section'];
+const DEFAULT_OPEN = ['files', 'output formats', 'section', 'ribbon'];
 
 /**
  * Seeded ONLY on a first run, never merged on every load.
@@ -219,9 +228,15 @@ export function installCollapse(root: ParentNode = document): void {
 /**
  * Makes a pane fold: a head, the body it owns, and a key to remember it by.
  *
- * Used for the three that are not `.section` blocks — Files, Layers and Output
- * — so those fold with the same click, the same arrow and the same memory as
- * everything else rather than by three different means.
+ * Used for the panes that are not `.section` blocks — Files, Output formats and
+ * the dock's section box — so those fold with the same click, the same arrow
+ * and the same memory as everything else rather than by three different means.
+ *
+ * The layer list is the exception, and only in its button: it keeps the toggle
+ * that sits beside its search box rather than taking the arrow this adds, but
+ * it reads and writes `isCollapsed`/`setCollapsed` like everything else. It did
+ * not always — it toggled a class straight onto the rail, which made it the one
+ * fold in the workspace that a reload forgot.
  */
 export function makeCollapsible(head: HTMLElement | null, body: HTMLElement | null, key: string): void {
   if (!head || !body) return;
