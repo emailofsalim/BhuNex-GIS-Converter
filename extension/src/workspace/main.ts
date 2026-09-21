@@ -32,6 +32,7 @@ import {
 import { $, badge, element, formatValue, keyValues, messageBlock } from './dom';
 import { installCollapse, makeCollapsible } from './collapse';
 import { host, installHost } from './host';
+import { remedyFor } from './remedies';
 import { attributesTab } from './panels/attributes';
 import { backdropTab } from './panels/backdrop-tab';
 import { clearPreview, ensureBackdrop, renderCompare, renderPreview, updateLinkButton, watchConnectivity } from './panels/canvas';
@@ -92,7 +93,18 @@ function render(): void {
   const canConvert = Boolean(selected && (selected.status === 'ready' || selected.status === 'done') && (selected.targetFormatId ?? state.settings.globalTargetFormatId));
   ($('convertBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;
   ($('convertQaBtn') as HTMLButtonElement).disabled = !canConvert || state.busy;
-  ($('downloadBtn') as HTMLButtonElement).disabled = !selected?.outputs?.length;
+  // THE BUTTON SAYS WHETHER IT HAS ALREADY DELIVERED. A browser download is
+  // silent — no dialog, no toast, just a file appearing in a folder nobody is
+  // looking at — and the trial ended with twelve byte-identical copies of one
+  // GeoJSON because there was nothing on screen to say the first click worked.
+  const download = $('downloadBtn') as HTMLButtonElement;
+  download.disabled = !selected?.outputs?.length;
+  const delivered = selected?.downloadedAt;
+  download.textContent = delivered ? 'Download again' : 'Download';
+  download.title = delivered
+    ? `Already saved at ${new Date(delivered).toLocaleTimeString()}. These are the same bytes, so your browser will number the new copy.`
+    : 'Save this file’s outputs to your downloads folder.';
+  download.classList.toggle('btn--done', Boolean(delivered));
   ($('batchZipBtn') as HTMLButtonElement).disabled = !state.items.some((item) => item.status === 'done');
 
   // Pause is only meaningful while a batch is running, and Retry only once
@@ -342,7 +354,11 @@ function renderInspector(): void {
   }
 
   if (item.error) {
-    body.append(messageBlock('error', item.error.what, item.error.why, item.error.action));
+    // The remedy is offered alongside the sentence, not instead of it: a
+    // refusal has to say what happened whether or not the tool can undo it.
+    body.append(
+      messageBlock('error', item.error.what, item.error.why, item.error.action, remedyFor(item.id, item.error))
+    );
   }
 
   // Only once there is a dataset to describe. Rendering during inspection is

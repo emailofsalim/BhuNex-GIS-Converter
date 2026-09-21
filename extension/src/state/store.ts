@@ -69,6 +69,16 @@ export interface QueueItem {
   warnings: Warning[];
   error?: { code: string; what: string; why: string; action: string };
   outputs?: OutputBlobFile[];
+  /**
+   * When THESE outputs were last saved to disk, if they have been.
+   *
+   * Cleared by every conversion, so it never describes a delivery of bytes that
+   * no longer exist. The trial ended with twelve byte-identical copies of one
+   * GeoJSON in the download folder — the button said nothing after a click, a
+   * browser download is silent, and the only confirmation was a line in a log
+   * dock that may be folded shut. This is what lets the button say so.
+   */
+  downloadedAt?: number;
   /** Every path inside the delivery, for the structure preview. */
   tree?: string[];
   /** What the pre-flight said this conversion would cost. */

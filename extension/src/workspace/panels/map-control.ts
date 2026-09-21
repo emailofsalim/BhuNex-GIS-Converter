@@ -54,7 +54,34 @@ import { TERRAIN_SOURCE } from '../../ui/terrain';
 /** The popover, when one is up. Only ever one. */
 let open: HTMLElement | null = null;
 
+/**
+ * How the open popover is taken down, INCLUDING its window listeners.
+ *
+ * THE DEFECT THIS EXISTS TO FIX. `closeMapMenu` used to remove the element and
+ * null the handle, and nothing else. The `pointerdown` and `keydown` capture
+ * listeners were removed only inside `dismiss` itself — which never runs when
+ * the popover is closed any other way, and the commonest way is the button
+ * toggling it shut.
+ *
+ * Measured over five open/close cycles: `pointerdown` on window went 0 → 5 and
+ * `keydown` 3 → 8. Unbounded over a working session, and every stale closure
+ * pins a detached DOM node.
+ *
+ * The leak was the smaller half. Each stale `dismiss` still closed over the OLD
+ * menu element, so on the next open a click INSIDE the new popover was not
+ * inside the old one — and the stale handler called `closeMapMenu()` and took
+ * the new popover down. After one use the control shut itself the moment you
+ * touched it: measured `openedOk: true, stillOpen: false` on a click on its own
+ * title.
+ *
+ * So teardown belongs to the thing that owns the popover, and every close goes
+ * through it.
+ */
+let teardown: (() => void) | null = null;
+
 export function closeMapMenu(): void {
+  teardown?.();
+  teardown = null;
   open?.remove();
   open = null;
 }
@@ -319,18 +346,27 @@ function place(menu: HTMLElement, anchor: HTMLElement): void {
   menu.style.top = `${top}px`;
 }
 
-/** One-shot dismissal: Escape, or a pointer down anywhere outside. */
+/**
+ * Dismissal: Escape, or a pointer down anywhere outside.
+ *
+ * Registers its own removal as `teardown` rather than unhooking inside the
+ * handler, so a close by ANY route — the button, Escape, a click outside, a
+ * re-render — takes the listeners with it. See `teardown` above for what the
+ * old arrangement cost.
+ */
 function watchForDismissal(menu: HTMLElement, anchor: HTMLElement): void {
   const dismiss = (event: Event) => {
     if (event instanceof KeyboardEvent && event.key !== 'Escape') return;
     if (event.type === 'pointerdown' && menu.contains(event.target as Node)) return;
     if (event.type === 'pointerdown' && anchor.contains(event.target as Node)) return;
     closeMapMenu();
-    window.removeEventListener('pointerdown', dismiss, true);
-    window.removeEventListener('keydown', dismiss, true);
   };
   window.addEventListener('pointerdown', dismiss, true);
   window.addEventListener('keydown', dismiss, true);
+  teardown = () => {
+    window.removeEventListener('pointerdown', dismiss, true);
+    window.removeEventListener('keydown', dismiss, true);
+  };
 }
 
 // ------------------------------------------------------------ the credits
@@ -382,6 +418,18 @@ export function renderMapSources(): void {
   // Clears the one-line credit the canvas draws in the same corner. Without
   // this the two boxes sit on top of each other whenever tiles are up.
   mount.classList.toggle('mapsources--credited', drawing);
+
+  // AND THE BOTTOM-LEFT CLUSTER CLEARS IT TOO.
+  //
+  // The credit is right-aligned but a long one — "Imagery © Esri, Maxar,
+  // Earthstar Geographics and the GIS User Community" — reaches most of the way
+  // across a narrow canvas and passes BEHIND the basemap button, the coordinate
+  // readout and the terrain box. Measured at 1600px with both docks open: the
+  // overlay occupied y 913–940 against a credit band of 912–928, a 15px
+  // overlap. Stacking only the right-hand corner, which is what v1.11.12 did,
+  // fixed the half of the problem that was visible in the screenshot I was
+  // looking at. A clipped attribution is a licence problem, not a cosmetic one.
+  document.querySelector('.preview__overlay')?.classList.toggle('preview__overlay--credited', drawing);
 
   const toggle = element('button', {
     class: 'mapsources__btn',

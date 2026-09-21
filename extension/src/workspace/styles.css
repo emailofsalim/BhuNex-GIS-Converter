@@ -672,6 +672,14 @@ textarea {
   max-width: calc(100% - 20px);
 }
 
+/* Lifted clear of the credit band while one is drawn. The credit is
+   right-aligned, but a long attribution reaches across a narrow canvas and
+   would otherwise pass behind this cluster. 22 (the band's offset) + 16 (its
+   height) + 2. Matches `.mapsources--credited`. */
+.preview__overlay--credited {
+  bottom: 40px;
+}
+
 .preview__readout {
   font: 11px var(--mono);
   color: var(--text-muted);
@@ -1837,6 +1845,39 @@ details.adv > div {
   color: var(--accent);
 }
 
+/* The button form of `msg__action`, for remedies that need no judgement.
+   These blocks are rendered in a dock about 290 px wide, and a remedy has to
+   NAME the setting it is going to change — "Clear the target CRS (EPSG:32645)"
+   — or it is a button asking to be trusted blind. `.btn` is `nowrap` because
+   most buttons are two words; here the label wraps and the button grows to fit
+   it, rather than running off the edge of the panel. */
+.msg__remedy {
+  margin-top: 8px;
+}
+
+.msg__remedy .btn {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  /* A ghost button inside a tinted message block is indistinguishable from the
+     prose above it — muted text on a coloured panel — and a remedy nobody
+     recognises as a button is the same as no remedy at all. It gets a surface
+     and a border back. */
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.msg__remedy .btn:hover:not(:disabled) {
+  background: var(--surface-raised);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* A note that costs one line until opened. `.msg` is a flex row, which would
    put the summary marker beside the text instead of before it, so the details
    element goes back to block and the summary carries the row layout. */
@@ -2492,6 +2533,15 @@ details.adv > div {
 .btn--on {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* A button whose work is already done — Download, once these bytes have been
+   saved. Quieter than `--on`, because it marks a completed action rather than
+   an armed mode, and it must still read as pressable: downloading the same
+   outputs twice is legitimate, it just should not look like the first time. */
+.btn--done {
+  border-color: var(--ok);
+  color: var(--text-muted);
 }
 
 /* ------------------------------------------- project health (spec §29.2) */

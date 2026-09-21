@@ -288,6 +288,66 @@ export function detectSchema(
 }
 
 /** True when the first row looks like labels rather than measurements. */
+/** How many cells in a row actually carry something. */
+function filledCells(row: (string | number | null)[]): number {
+  let n = 0;
+  for (const cell of row) if (String(cell ?? '').trim() !== '') n++;
+  return n;
+}
+
+/**
+ * Which row is the header, when the file opens with a title banner.
+ *
+ * THE DEFECT THIS EXISTS TO FIX, found in a real survey deliverable:
+ *
+ *     Pakhar-A 115.13 Ha Boundary Pillars,,,
+ *     Sl No,NORTHING,EASTING,Code
+ *     1,2605201.531,256320.247,BP1
+ *
+ * The old test looked at row 0 and nothing else. A title row is one text cell
+ * and no numbers, which is exactly what a header looks like to
+ * `looksLikeHeader`, so the banner was taken as the header. The real names were
+ * never seen, the NORTHING and EASTING columns could not be matched by name,
+ * and the mapping fell through to POSITION — column 2 to X, column 3 to Y.
+ *
+ * That put the northing in the X slot of every one of seventeen exported
+ * formats. 188 boundary pillars landed about 2,600 km east of the site, and
+ * nothing in the output looked wrong enough to catch the eye.
+ *
+ * WHAT SEPARATES A BANNER FROM A HEADER is not how textual it is — both are
+ * text — but how WIDE it is. A title fills one or two cells of a four-column
+ * table; the header fills all four, because it names every column that follows.
+ * So the table's width is taken from the rows that carry data, and any row
+ * above it that is markedly narrower is a banner to be skipped.
+ *
+ * The scan is bounded at `MAX_PREAMBLE` rows. Past that it is likelier that the
+ * file genuinely has no header than that it has ten lines of letterhead, and
+ * guessing further would risk eating real data.
+ */
+const MAX_PREAMBLE = 8;
+
+export function findHeaderRow(grid: (string | number | null)[][]): number | null {
+  if (grid.length === 0) return null;
+
+  // The table's true width, from the rows most likely to be data: the widest
+  // common filling in the first few dozen rows. `max` rather than a mode,
+  // because a header naming every column is at least as wide as any data row.
+  const sample = grid.slice(0, 40);
+  const width = Math.max(...sample.map(filledCells), 0);
+  if (width === 0) return null;
+
+  const limit = Math.min(grid.length, MAX_PREAMBLE);
+  for (let index = 0; index < limit; index++) {
+    const row = grid[index];
+    // A banner: text, but nowhere near wide enough to be naming the columns.
+    // Half the width is the line — "Sl No, NORTHING, EASTING, Code" is 4 of 4,
+    // the title is 1 of 4.
+    if (filledCells(row) * 2 < width) continue;
+    return looksLikeHeader(row) ? index : null;
+  }
+  return null;
+}
+
 export function looksLikeHeader(row: (string | number | null)[]): boolean {
   let textCells = 0;
   let numericCells = 0;

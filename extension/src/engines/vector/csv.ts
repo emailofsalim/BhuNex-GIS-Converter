@@ -21,7 +21,7 @@ import {
 } from '../../core/cir';
 import { ConversionError } from '../../core/errors';
 import { coordinateFormatter, formatFixed, type PrecisionPolicy } from '../../core/precision';
-import { coordinateFromRow, detectSchema, looksLikeHeader } from '../survey/schema';
+import { coordinateFromRow, detectSchema, findHeaderRow } from '../survey/schema';
 import { deriveFields } from '../shared';
 
 export type Delimiter = ',' | '\t' | ';' | '|' | ' ';
@@ -145,9 +145,28 @@ export function readCsvTable(text: string, source: SourceInfo, options: ReadCsvO
   }
 
   const warnings: Warning[] = [];
-  const hasHeader = options.hasHeader ?? looksLikeHeader(grid[0]);
-  const headers = hasHeader ? grid[0].map((cell) => cell.trim()) : null;
-  const bodyRows = hasHeader ? grid.slice(1) : grid;
+  // THE HEADER IS FOUND, NOT ASSUMED TO BE ROW 0.
+  //
+  // A survey CSV routinely opens with a title banner above the real header.
+  // Testing only row 0 took the banner as the header, which lost the column
+  // names, which dropped the axis mapping through to POSITION — and wrote the
+  // northing into X in every exported format. See `findHeaderRow`.
+  const headerIndex = options.hasHeader === false ? null : options.hasHeader === true ? 0 : findHeaderRow(grid);
+  const hasHeader = headerIndex !== null;
+  const headers = hasHeader ? grid[headerIndex].map((cell) => cell.trim()) : null;
+  const bodyRows = hasHeader ? grid.slice(headerIndex + 1) : grid;
+
+  if (hasHeader && headerIndex > 0) {
+    warnings.push(
+      warn('CSV_PREAMBLE_SKIPPED', `${headerIndex} row(s) above the header were skipped as a title block.`, {
+        count: headerIndex,
+        reason:
+          `Row ${headerIndex + 1} names every column and the row(s) above it fill only part of the width, ` +
+          'which is what a title banner looks like rather than a header.',
+        action: 'If those rows were data, set the header explicitly in the mapping and convert again.',
+      })
+    );
+  }
 
   const columnCount = Math.max(...grid.map((row) => row.length));
   const ragged = grid.filter((row) => row.length !== columnCount).length;
