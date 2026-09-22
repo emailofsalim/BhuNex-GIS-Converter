@@ -56,7 +56,7 @@ were coupled to Geo-Studio's `GeoFeature` type and its `(zone, south)` CRS model
 | 9 | Fidelity prediction ✅, "what will be lost" ✅, conversion report ✅, project health ✅ (§22, §29) | ✅ done |
 | 10 | QA catalogue ✅, topology rules ✅, preview/apply/undo repair ✅ **and reachable**, spatial index ✅, 18 operations — the cross-feature three ✅, self-intersection repair ✅, slivers ✅, extend/trim ✅. **§24.2 complete** (§23, §24) | ✅ done |
 | 11 | Measurement ✅ **with a canvas tool**, snapping ✅, vertex editor ✅, attribute table ✅, layer manager ✅, geometry ops ✅ **wired and reaching the exported file** (§25, §26) | ✅ done |
-| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅, KML `IconStyle` ✅, **ground overlays read + written ✅, screen overlays read and reported ✅** (§27, §28) | ✅ done |
+| 12 | Burn-in ✅, label placement ✅, CAD polygonisation ✅, borehole model + core-log balloon ✅, KML `IconStyle` ✅, ground overlays read + written ✅, screen overlays read and reported ✅, **PDF/image georeferencing saved as world file + .prj + .points ✅** (§27, §28) | ✅ done |
 | 13 | Measured visual diff ✅, command palette ✅, presets ✅, dual canvas + geometry overlay ✅, operation history ✅, workflows ✅, project file ✅ (§30, §31) | ✅ done |
 
 Legend: ✅ done · 🟡 partial · ⛔ not started
@@ -434,14 +434,62 @@ geometry it went in with. `writeKmz` drops the footprint when it drapes, and
 keeps it when it refuses — then it is the only thing standing between the user
 and an empty KMZ.
 
+### The georeference you could make but not keep, closed in 1.11.20
+
+**§28.3, and the house defect in its most expensive form yet.** The backdrop
+panel already did the hard half: load a scanned sheet or a PDF page, place
+ground control points on it, fit an affine or a similarity, and report the
+ground residual at every point. Then the panel's own opening sentence said what
+happened next — *"it is never converted, never exported"* — and meant it. A
+surveyor who georeferenced a cadastral sheet against four known corners could
+look at the result, trace from it, and had **no way to keep it**. Close the tab
+and the fit was gone.
+
+Every engine it needed was in the tree, complete and tested, and reachable only
+from the conversion pipeline — which handles rasters that ARRIVED georeferenced.
+`buildWorldFile`, `worldFileExtensionFor`, `writeGcpPoints`, `buildPrj`: the one
+place in the product where a georeference is CREATED called none of them. The
+eighth recorded instance, and the one where the gap was widest, because the
+missing piece was not an engine but six lines of glue.
+
+`core/georeference-save.ts` is that glue, and the panel now writes three
+sidecars: **the world file** that positions the image, **a `.prj`** naming the
+grid, and **a `.points` file** in QGIS's own georeferencer format so the control
+points can be reopened and corrected somewhere else instead of placed again from
+scratch. The image is not touched — no resampling and no re-encoding, so the
+scan handed on is bit-for-bit the scan that was given.
+
+**Two refusals, both R2.** A **two-point placement cannot be saved at all**: it
+fixes scale and rotation and knows nothing about absolute position, and a world
+file IS the claim "this image is at these coordinates" to every GIS that opens
+one, with no way for the reader to know the position was never established. And
+**no `.prj` is invented** when the file states no CRS — the transform is real,
+but nothing records which grid the numbers are on, so the panel says so rather
+than picking one.
+
+**What the sabotage pass caught in my own tests.** The round-trip assertion was
+written specifically to catch a transposed pair, since a world file is six
+unlabelled numbers and a swapped pair still parses, still loads, and puts the
+sheet somewhere wrong with no error anywhere. A deliberately transposed
+`geotransformFromAffine` then **passed all ten tests**. Both fixtures were a
+rotation with the image row flip, and that form gives `b === d` exactly — so
+transposing the two skew terms was a no-op on them. The fixture is now a sheared
+affine with all six coefficients distinct, which is also the realistic case:
+paper and scanner feeds stretch unevenly along one axis, which is shear, and is
+the whole reason the three-point affine fit exists beside the two-point
+similarity. Four transpositions and a skew flatten each now fail.
+
 ### Not on this list, and why
 
 - **Datum shifts beyond the WGS 84 family, and geoid separation.** No engine, so
   no UI. Offering a control that silently does nothing would be worse than the
   refusal `crs/transform.ts` gives now.
-- **PDF / image map georeferencing (§28.3).** Not started. It needs a raster
-  georeferencing UI (§28.4 is also only partly built) before the PDF part is
-  worth anything.
+- **Rubber-sheeting and polynomial warps of a scanned sheet (§28.3, the
+  remainder).** A world file holds an affine and nothing else, so a sheet whose
+  paper has shrunk unevenly cannot be corrected by one — the fix is resampling
+  the pixels into a new raster, which is the generation loss the sidecar exists
+  to avoid. The residual at each control point is reported instead, so a fit too
+  poor for an affine says so rather than being quietly warped into looking good.
 
 ---
 

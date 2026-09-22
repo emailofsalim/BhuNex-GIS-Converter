@@ -28,7 +28,10 @@ import {
   type GeoreferenceFit,
   type ScaleFit,
 } from '../../core/georeference';
+import { georeferenceFiles } from '../../core/georeference-save';
+import { encodeText } from '../../engines/shared';
 import { readPdfImages, type PdfPageImage } from '../../engines/raster/pdf-image';
+import { downloadBytes } from '../conversion';
 import { type QueueItem, store } from '../../state/store';
 import { element, ghostButton, keyValues, messageBlock } from '../dom';
 import { host } from '../host';
@@ -76,7 +79,7 @@ export function backdropTab(item: QueueItem): HTMLElement[] {
   wrap.append(
     element('p', {
       class: 'small faint',
-      text: 'A local image or a scanned PDF page, drawn under your data. It is a reference to trace from — it is never converted, never exported, and never leaves this machine.',
+      text: 'A local image or a scanned PDF page, drawn under your data to trace from. The image itself is never converted or re-encoded, and never leaves this machine. Once you have placed it on ground control points you can save the georeference — a world file beside the image, with the original pixels untouched.',
     })
   );
 
@@ -168,8 +171,103 @@ export function backdropTab(item: QueueItem): HTMLElement[] {
   wrap.append(state.mode === 'gcp' ? gcpSection(item) : twoPointSection(item));
 
   if (state.lastFit) wrap.append(fitReport(state.lastFit));
+  if (state.lastFit) wrap.append(saveSection(item));
 
   return [wrap];
+}
+
+/**
+ * Saving the georeference that was just made.
+ *
+ * THE HALF THAT WAS MISSING. Everything above this computes a real transform
+ * from real control points and reports the residual at each one — and until
+ * now the only thing a user could do with it was look at it. The panel's own
+ * opening line said so: "never converted, never exported". Close the tab and
+ * the work was gone.
+ *
+ * What comes out is a sidecar set, not a new image. The scan is not touched,
+ * so a JPEG is not re-encoded and a surveyor hands on the record they were
+ * given rather than a generation-lossy copy of it.
+ */
+function saveSection(item: QueueItem): HTMLElement {
+  const section = element('div', { class: 'section' });
+  section.append(element('h3', { class: 'section__title', text: 'Save the georeference' }));
+
+  const placement = ui.backdrop?.getPlacement();
+  if (!placement) {
+    section.append(element('p', { class: 'small faint', text: 'Place the image first — there is no transform to save yet.' }));
+    return section;
+  }
+
+  // NOTHING TO BIND TO. Today `backdropTab` returns before this whole placement
+  // UI when no image is loaded, so this cannot fire — it is here because the
+  // consequence of that gate being relaxed is silent and ugly rather than
+  // noisy. `georeferenceFiles('')` yields a bare `.wld`: a dotfile, invisible
+  // in the folder on macOS and Linux, which the user then swears never
+  // downloaded. The check is one line and the failure it prevents is not
+  // one anybody would think to look for.
+  if (!ui.backdrop?.getSource() || !state.fileName) {
+    section.append(
+      element('p', {
+        class: 'small faint',
+        text: 'Load the image or PDF page first. A world file is named for the image it belongs to, so there is nothing to bind this transform to yet.',
+      })
+    );
+    return section;
+  }
+
+  // THE REFUSAL THIS WHOLE PANEL IS BUILT AROUND.
+  //
+  // A two-point placement fixes scale and rotation and knows NOTHING about
+  // absolute position — the module header says so, `ui/backdrop.ts` draws it
+  // with a dashed border to say so, and writing a world file for it would
+  // undo both in one click. A world file IS the claim "this image is at these
+  // coordinates", and a GIS that reads one has no way to know the position was
+  // never established. R2.
+  if (!placement.georeferenced) {
+    section.append(
+      messageBlock(
+        'warn',
+        'This placement cannot be saved as a georeference.',
+        'Two points and a distance fix the scale and the rotation of the sheet, but nothing about where it sits on the ground — so the position on screen is a tracing aid, not a measurement. A world file would state those coordinates as fact to every GIS that opened it.',
+        'Switch to ground control points and give at least two points whose real coordinates you know.'
+      )
+    );
+    return section;
+  }
+
+  const affine = placement.affine;
+  const crs = item.dataset?.crs ?? null;
+  const files = georeferenceFiles({ imageName: state.fileName, affine, crs, gcps: state.gcps });
+
+  section.append(
+    element('p', {
+      class: 'small',
+      text: `Writes ${files.map((file) => file.name).join(', ')} beside your image. A world file binds to its image BY FILENAME, so keep these next to ${state.fileName} under that exact name and QGIS or ArcGIS will open it in place.`,
+    })
+  );
+
+  if (!crs) {
+    // R2: the transform is real, but without a stated CRS the numbers have no
+    // frame, and saying "georeferenced" would be claiming more than is known.
+    section.append(
+      messageBlock(
+        'warn',
+        'No .prj is written, because this file states no coordinate system.',
+        'The world file still places the image on the ground coordinates you typed, but nothing records WHICH grid those are on — so the layer will load with an unknown CRS and sit wherever the project default puts it.',
+        'Assign a source CRS under Data › CRS first, then save again.'
+      )
+    );
+  }
+
+  const save = element('button', { class: 'btn btn--primary btn--sm', type: 'button', text: 'Save georeference' });
+  save.addEventListener('click', () => {
+    for (const file of files) downloadBytes(encodeText(file.text), file.name, 'text/plain');
+    store.log('ok', `Georeference saved: ${files.map((file) => file.name).join(', ')}.`);
+    host.render();
+  });
+  section.append(save);
+  return section;
 }
 
 // --------------------------------------------------------------------- GCPs

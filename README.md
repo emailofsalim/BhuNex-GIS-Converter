@@ -434,6 +434,22 @@ PDF pages that are scans are supported. A *vector* PDF is refused by name, with
 the better alternative: if it came from CAD or GIS, convert the source instead —
 a vector backdrop traced by hand is worse than the vectors you already have.
 
+**And you can keep the georeference.** Once a sheet is placed on control points,
+**Save georeference** writes the sidecars that make it open in place in QGIS or
+ArcGIS: the **world file** that positions it, a **`.prj`** naming the grid, and a
+**`.points`** file in QGIS's own georeferencer format, so the control points can
+be reopened and corrected rather than placed again from scratch. The image
+itself is never touched — no resampling, no re-encoding — so the scan you hand
+on is bit for bit the scan you were given, and a world file written for a `.jpg`
+is named `.jgw` for that jpg exactly, because the filename is the only thing
+binding the two.
+
+A two-point placement is **refused** here rather than saved. It fixes size and
+rotation and nothing about position, and a world file states coordinates as fact
+to every GIS that reads one. Nor is a `.prj` invented for a file that declares
+no coordinate system: the transform is real, but nothing records which grid the
+numbers are on, and the panel says so instead of choosing for you.
+
 **Layer control and a legend that is true.** Colour, line width, line type,
 rename, reorder, lock, hide and opacity, per layer, on the row. The colours
 reach the *output* where the format can carry them, and the optional SVG legend

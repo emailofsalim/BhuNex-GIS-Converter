@@ -165,4 +165,37 @@ describe('the README matches the workspace it describes', () => {
       expect(README, `the README still describes "${stale}"`).not.toContain(stale);
     }
   });
+
+  it('documents that a georeference made on the canvas can be saved', () => {
+    // The feature is invisible until someone is told it exists: the button
+    // appears only after a fit, inside a panel most readers open for tracing.
+    expect(README).toMatch(/Save georeference/);
+    expect(README).toMatch(/\.points/);
+  });
+});
+
+describe('a feature that shipped does not leave the opposite claim on screen', () => {
+  // §28.3 shipped in 1.11.20. Until then the backdrop panel opened by telling
+  // the user, in so many words, that the thing they can now do was impossible.
+  // A sentence like that is not merely stale — it stops people looking for the
+  // button, so the feature is absent for exactly the users it was built for.
+  const BACKDROP = readFileSync(join(ROOT, 'panels', 'backdrop-tab.ts'), 'utf8');
+
+  it('no longer tells the user a backdrop is never exported', () => {
+    expect(BACKDROP).not.toContain(
+      'It is a reference to trace from — it is never converted, never exported, and never leaves this machine.'
+    );
+  });
+
+  it('keeps the part of that promise which is still true', () => {
+    // The IMAGE is still never converted, re-encoded or uploaded — that is the
+    // whole argument for a sidecar over a rewritten GeoTIFF, and dropping the
+    // sentence entirely would lose it.
+    expect(BACKDROP).toMatch(/never leaves this machine/);
+  });
+
+  it('explains the save and its refusal in Help, not only in the panel', () => {
+    expect(SETTINGS).toContain('A georeference you make can be kept, and only when it means something');
+    expect(SETTINGS).toMatch(/world file/);
+  });
 });

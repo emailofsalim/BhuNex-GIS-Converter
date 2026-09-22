@@ -81,6 +81,22 @@ export class Backdrop {
     return this.source;
   }
 
+  /**
+   * The placement, for anything that needs the transform rather than the draw.
+   *
+   * Exposed so the georeference can be SAVED. The placement was private
+   * because nothing outside the draw loop had ever wanted it — which is
+   * precisely why a user could fit control points, read the residuals, and
+   * then have no way to keep the result.
+   *
+   * It returns the whole placement rather than the bare affine on purpose:
+   * `georeferenced` travels with it, and a caller that writes a world file
+   * needs to know whether the position means anything before it claims one.
+   */
+  getPlacement(): BackdropPlacement | null {
+    return this.placement;
+  }
+
   get usable(): boolean {
     return this.source !== null && this.placement !== null;
   }
