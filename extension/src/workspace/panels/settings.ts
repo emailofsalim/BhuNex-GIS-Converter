@@ -929,6 +929,10 @@ export function openHelpDialog(): void {
       'A scanned plan or PDF placed behind your data with a world file or three or more control points is georeferenced, and the fit residual is reported. Placed by scaling between two points it is not: it is drawn with a dashed border, and digitising from it produces coordinates no better than that placement.',
     ],
     [
+      'A georeference you make can be kept, and only when it means something',
+      'Once a scan is placed on control points, Data › Backdrop writes the sidecars that make it open in place in QGIS or ArcGIS: the world file that positions it, a .prj naming the grid, and a .points file holding your control points so the work can be reopened and corrected rather than redone. The image itself is not touched — no resampling and no re-encoding, so the scan you hand on is the scan you were given. A placement made by scaling between two points is refused instead: it fixes size and rotation and nothing about position, and a world file would state coordinates as fact to every GIS that read it.',
+    ],
+    [
       'A digitised point is the coordinate you snapped to',
       'When a drawing tool snaps to an existing vertex, the vertex is copied exactly rather than re-derived from the pixel you clicked. Snapping to a surveyed corner gives back that corner, bit for bit, not a value rounded through the screen.',
     ],
